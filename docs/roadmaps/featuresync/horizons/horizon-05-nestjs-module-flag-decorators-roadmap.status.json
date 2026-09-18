@@ -1,0 +1,170 @@
+{
+  "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-05-nestjs-module-flag-decorators-roadmap.json",
+  "roadmapTask": "Plan horizon 5 of FeatureSync (docs/roadmaps/featuresync): the @featuresync/nestjs integration package \u2014 FeatureSyncModule (forRoot/forRootAsync) providing core's in-memory flag client over a SnapshotSource, tied to the Nest lifecycle, plus @Feature + FeatureFlagGuard and the @FeatureFlag method decorator. Production-ready, 100% coverage.",
+  "roadmapRevision": 0,
+  "createdAt": "2026-09-18T11:37:54Z",
+  "updatedAt": "2026-09-18T12:40:00Z",
+  "phases": [
+    {
+      "phaseId": "nestjs-module-for-root",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-18T11:37:54Z",
+      "baseRef": "54228b6e63ca271fe9dd4d05da1819976a0d7cdf",
+      "baseDirty": true,
+      "notes": "Already dirty at start (horizon-05 planning memory, staged): docs/roadmaps/featuresync/{decisions,discoveries,state}.md, horizons/horizon-05-*-roadmap.{json,md} | Changed: package.json (verify builds nestjs after core), pnpm-lock.yaml, packages/nestjs/{package.json,tsconfig.json,tsconfig.build.json,src/index.ts,src/tokens.ts,src/feature-sync.module.ts,test/feature-sync.module.test.ts,test/fixtures.ts}. FeatureSyncModule.forRoot provides a ready core client under a Symbol FEATURE_FLAGS token (global by default, isGlobal:false honoured), closes it in onApplicationShutdown, and also closes it when ready() rejects so a failed bootstrap does not leak the source subscription. Tests use TestingModule.init/close (createNestApplication needs @nestjs/platform-express, not installed). zod added as a nestjs devDependency for a typed defineFeature fixture. pnpm verify passed during implementation (295 tests, 100% coverage). | VERIFY: compensation known (delete packages/nestjs, revert verify line + lockfile). Grader non-10 notes: isGlobal:false test matches /BillingService/ not the Nest error type; isGlobal key passed through to createFeatureFlags; direct client in parity test not closed.",
+      "unplannedFiles": [],
+      "completedAt": "2026-09-18T12:05:41Z",
+      "gateRun": "pnpm verify: pass (builds core+nestjs+aws+cli, typecheck, lint, vitest 100% coverage); node ESM import of packages/nestjs/dist/index.js: pass",
+      "gradeResult": {
+        "phaseId": "nestjs-module-for-root",
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "lifecycle-binding-correctness",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "di-token-and-global-scope",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "package-build-and-verify-integration",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "core-api-fidelity",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "phaseId": "nestjs-module-for-root-async",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-18T12:10:23Z",
+      "baseRef": "54228b6e63ca271fe9dd4d05da1819976a0d7cdf",
+      "baseDirty": true,
+      "notes": "Already dirty at start: horizon-05 memory/roadmap docs, package.json, pnpm-lock.yaml, all of packages/nestjs (phase nestjs-module-for-root, uncommitted). | Changed: packages/nestjs/src/feature-sync.module.ts, packages/nestjs/src/index.ts, packages/nestjs/test/feature-sync.module-async.test.ts (new). forRoot and forRootAsync both register a FEATURE_SYNC_OPTIONS provider (useValue / useFactory+inject) plus one shared featureFlagsProvider (createFeatureFlags + await ready(), close on failure) via a private register(); forRootAsync forwards imports. forRoot now strips isGlobal before passing options to core. FeatureSyncAsyncOptions exported. File list recalled (phase-1 work is untracked, so git cannot separate it). pnpm verify passed during implementation. | VERIFY: compensation null. Grader: factory-injection 10, shared-provider 9 (no side-by-side forRoot/forRootAsync parity test), async-failure 10; 10s carried concrete above-bar evidence.",
+      "unplannedFiles": [],
+      "completedAt": "2026-09-18T12:16:11Z",
+      "gateRun": "pnpm verify: pass (build, typecheck, lint, vitest 100% coverage)",
+      "gradeResult": {
+        "phaseId": "nestjs-module-for-root-async",
+        "overallPass": true,
+        "dimensionScores": [
+          {
+            "dimensionId": "factory-injection-resolution",
+            "score": 10,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "Exact provider instance asserted via toHaveBeenCalledExactlyOnceWith(app.get(SnapshotConfig)); async and no-inject factories tested."
+          },
+          {
+            "dimensionId": "shared-client-provider-no-duplication",
+            "score": 9,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "Single featureFlagsProvider via private register(); close-once and isGlobal:false tested; no explicit side-by-side parity test."
+          },
+          {
+            "dimensionId": "async-failure-propagation",
+            "score": 10,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "toBe(configError) identity; StartupError test also asserts unsubscribe called once."
+          }
+        ]
+      }
+    },
+    {
+      "phaseId": "nestjs-feature-guard",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-18T12:17:01Z",
+      "baseRef": "54228b6e63ca271fe9dd4d05da1819976a0d7cdf",
+      "baseDirty": true,
+      "notes": "Already dirty at start: horizon-05 docs, package.json, pnpm-lock.yaml, all of packages/nestjs (phases 1-2, uncommitted). | Changed: packages/nestjs/src/{feature.decorator.ts (new), feature-flag.guard.ts (new), tokens.ts, feature-sync.module.ts, index.ts}, packages/nestjs/test/feature-flag.guard.test.ts (new). @Feature(key) = SetMetadata; FeatureFlagGuard reads getAllAndOverride over [handler, class], returns true or throws guardException(key) ?? NotFoundException; contextFrom/guardException are top-level options on forRoot and forRootAsync, provided under FEATURE_GUARD_OPTIONS; the module provides and exports FeatureFlagGuard. tokens.ts gained FEATURE_GUARD_OPTIONS (not in filesAffected). File list recalled (packages/nestjs is untracked). pnpm verify passed during implementation (314 tests, 100% coverage). | VERIFY: compensation null. Grader: guard-decision-branches 10 (handler-overrides-class test), configurable-exception-and-context 9 (forRoot module test checks only the default exception), guard-di-resolution 9 (no real HTTP route gated end to end). Unplanned tokens.ts change accepted as small and justified.",
+      "unplannedFiles": [
+        "packages/nestjs/src/tokens.ts"
+      ],
+      "completedAt": "2026-09-18T12:21:54Z",
+      "gateRun": "pnpm verify: pass (build, typecheck, lint, vitest 100% coverage)",
+      "gradeResult": {
+        "phaseId": "nestjs-feature-guard",
+        "overallPass": true,
+        "dimensionScores": [
+          {
+            "dimensionId": "guard-decision-branches",
+            "score": 10,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "Explicit handler-overrides-class test plus all four canActivate branches; the guard never returns false."
+          },
+          {
+            "dimensionId": "configurable-exception-and-context",
+            "score": 9,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "Unit and forRootAsync module tests; the forRoot module test checks only the default exception."
+          },
+          {
+            "dimensionId": "guard-di-resolution",
+            "score": 9,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "Explicit @Inject tokens; resolved via forRoot, forRootAsync and a feature module; no real HTTP route test."
+          }
+        ]
+      }
+    },
+    {
+      "phaseId": "nestjs-feature-flag-method-decorator",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-18T12:23:55Z",
+      "baseRef": "54228b6e63ca271fe9dd4d05da1819976a0d7cdf",
+      "baseDirty": true,
+      "notes": "Already dirty at start: horizon-05 docs, package.json, pnpm-lock.yaml, all of packages/nestjs (phases 1-3, uncommitted). | Changed: packages/nestjs/src/{feature-flag.decorator.ts (new), feature-sync.module.ts, index.ts}, packages/nestjs/test/feature-flag.decorator.test.ts (new), packages/nestjs/README.md (new), docs/roadmaps/featuresync/{decisions,discoveries}.md. @FeatureFlag(key,{fallback}) wraps the method: flag on -> original.apply(this,args); off/unknown -> undefined or fallback.apply(this,args), wrapped in Promise.resolve for async methods; keeps name and copies own Reflect metadata. Client reference bound in FeatureSyncModule.onModuleInit, cleared in onApplicationShutdown only if it still points at that module's client; unbound calls throw 'FeatureSyncModule has not been initialised'. Evaluates without context (documented). Skip-vs-throw recorded in decisions.md. File list recalled (packages/nestjs is untracked). pnpm verify passed during implementation (324 tests, 100% coverage). | VERIFY: compensation null. Grader 9/10/9; the 10 carried concrete above-bar evidence.",
+      "unplannedFiles": [],
+      "completedAt": "2026-09-18T12:40:00Z",
+      "gateRun": "pnpm verify: pass (build, typecheck, lint, vitest 100% coverage); node ESM import of dist/index.js: pass (exports FeatureFlag)",
+      "gradeResult": {
+        "phaseId": "nestjs-feature-flag-method-decorator",
+        "overallPass": true,
+        "dimensionScores": [
+          {
+            "dimensionId": "skip-and-fallback-semantics",
+            "score": 9,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "All on/off/fallback cases, this binding, awaited async-off; the async flag-on-with-fallback path is not asserted."
+          },
+          {
+            "dimensionId": "client-reference-lifecycle",
+            "score": 10,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "Beyond 9: a test closes the older app while a newer one runs and shows the newer app stays bound."
+          },
+          {
+            "dimensionId": "documented-contract",
+            "score": 9,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "All sections, skip-not-throw and newest-client stated; decision in decisions.md:18; snippet identifiers exported."
+          }
+        ]
+      }
+    }
+  ]
+}

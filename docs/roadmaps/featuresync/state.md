@@ -7,3 +7,5 @@
 - 2026-09-18 | horizon 3 | completed | 4 phases; 1 amendment
 - 2026-09-18 | horizon 4 | planned | 5 phases (snapshot publisher in @featuresync/aws + thin @featuresync/cli: validate/publish/rollback, LocalStack proof); gate passed, 1 major healed, 9 minor debt
 - 2026-09-18 horizon 4 completed: 5 phases done, 1 amendment, 0 overrides.
+- 2026-09-18 | horizon 5 | planned | 4 phases (@featuresync/nestjs: forRoot, forRootAsync, @Feature guard, @FeatureFlag decorator); gate passed, 0 healed, 10 minor debt
+- 2026-09-18 horizon 5 completed: 4 phases done, 0 amendments, 0 overrides.

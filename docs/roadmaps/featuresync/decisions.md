@@ -13,3 +13,6 @@
 - 2026-09-18 | horizon 4 | The CLI-driven publisher is the single writer of the S3 layout; no Lambda or UI writes snapshots — because the user chose a CLI-owned write.
 - 2026-09-18 | horizon 4 | The S3 publisher lives in @featuresync/aws next to the pointer contract; @featuresync/cli stays thin with no business logic — because the user confirmed it at preview.
 - 2026-09-18 | horizon 4 | A snapshot orphaned by a failed pointer write makes the next publish fail with VERSION_EXISTS and is fixed by hand — because automatic skip-ahead was deferred (user choice).
+- 2026-09-18 | horizon 5 | The Nest client is injected only via an exported FEATURE_FLAGS token with explicit @Inject, never by type metadata — because FeatureFlags is an interface and vitest emits no metadata.
+- 2026-09-18 | horizon 5 | @nestjs/common, @nestjs/core, reflect-metadata and rxjs are peer (and dev) deps of @featuresync/nestjs; decorator tsconfig flags stay local to that package — because apps own one Nest copy.
+- 2026-09-18 | horizon 5 | @FeatureFlag skips a disabled method and returns undefined or its fallback's result, never throwing; it evaluates without context against the newest initialised module's client — because route-level rejection is the guard's job and services need a silent no-op.
