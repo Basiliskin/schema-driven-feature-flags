@@ -1,0 +1,33 @@
+{
+  "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-06-cli-pull-pinned-snapshots-roadmap.json",
+  "roadmapTask": "Horizon 6 of FeatureSync: reproducible CI via pinned snapshots — add a CLI `pull` command to @featuresync/cli, backed by a snapshot fetcher in @featuresync/aws, that downloads a chosen (pinned) Snapshot Version from the S3 layout to a local file consumed via FEATURESYNC_FILE. Production bar: 100% coverage, ESLint layer zones, LocalStack integration proof.",
+  "roadmapRevision": 0,
+  "createdAt": "2026-09-18T12:51:18Z",
+  "updatedAt": "2026-09-18T12:51:18Z",
+  "phases": [
+    {
+      "phaseId": "extract-shared-s3-read-helpers",
+      "status": "in-progress",
+      "attempts": 1,
+      "startedAt": "2026-09-18T12:51:18Z",
+      "baseRef": "7975e33e19c518cdd8b1789edf47f0fd48c7e674",
+      "baseDirty": true,
+      "notes": "Already dirty at start (horizon-06 planning memory): docs/roadmaps/featuresync/{decisions,discoveries,state}.md, horizons/horizon-06-*-roadmap.{json,md}"
+    },
+    {
+      "phaseId": "add-s3-snapshot-fetcher",
+      "status": "not-started",
+      "attempts": 0
+    },
+    {
+      "phaseId": "test-fetcher-against-localstack",
+      "status": "not-started",
+      "attempts": 0
+    },
+    {
+      "phaseId": "add-cli-pull-command",
+      "status": "not-started",
+      "attempts": 0
+    }
+  ]
+}

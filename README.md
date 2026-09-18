@@ -11,6 +11,20 @@ entirely in memory — no network call per flag check. Everything runs in your o
 |---|---|
 | `@featuresync/core` | Domain model, rule evaluation and the in-memory flag client |
 
+## Reproducible CI with a pinned snapshot
+
+`featuresync pull` downloads one published snapshot version, validates it, and writes it
+atomically. It never reads the current pointer, so every run loads the same bytes:
+
+```sh
+featuresync pull --env production --version 42 --out ./featuresync.json
+export FEATURESYNC_FILE=./featuresync.json
+```
+
+The bucket comes from `--bucket <bucket>` or `FEATURESYNC_BUCKET`. `pull` exits 0 on success,
+1 if the snapshot is invalid, and 3 for usage, access, missing-version or I/O errors. It needs only
+`s3:GetObject` on `<env>/snapshots/*` (see [docs/spec/s3-layout.md](docs/spec/s3-layout.md#read-access)).
+
 ## Development
 
 Requires Node 22 (see `.nvmrc`) and pnpm.

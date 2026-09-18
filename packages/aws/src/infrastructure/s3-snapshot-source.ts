@@ -1,7 +1,8 @@
-import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { S3Client } from '@aws-sdk/client-s3';
 import type { Logger, SnapshotSource, Unsubscribe } from '@featuresync/core';
 import { parseCurrentPointer, snapshotKeyFor, type CurrentPointer } from '../domain/current-pointer.js';
 import { errorShape } from './s3-errors.js';
+import { isMissing, readObjectText, type S3Text } from './s3-read.js';
 import { S3SnapshotError } from './s3-snapshot-error.js';
 
 /** Options for {@link createS3SnapshotSource}. */
@@ -27,11 +28,6 @@ interface LoadedSnapshot {
   readonly snapshot: unknown;
 }
 
-interface S3Text {
-  readonly text: string | undefined;
-  readonly etag: string | undefined;
-}
-
 const DEFAULT_POLL_INTERVAL_MS = 30_000;
 const DEFAULT_RECONCILE_INTERVAL_MS = 600_000;
 
@@ -39,12 +35,6 @@ const consoleLogger: Logger = {
   error: (message, error) => {
     console.error(`[featuresync] ${message}`, error);
   },
-};
-
-// With GetObject-only permissions S3 answers 403 rather than 404 for a missing key.
-const isMissing = (error: unknown): boolean => {
-  const { name, status } = errorShape(error);
-  return name === 'NoSuchKey' || name === 'AccessDenied' || status === 404 || status === 403;
 };
 
 // The SDK has no NotModified exception class; a 304 surfaces as a thrown service error.
@@ -71,15 +61,8 @@ export function createS3SnapshotSource(options: S3SnapshotSourceOptions): Snapsh
   const pointerKey = `${environment}/current.json`;
   let loaded: LoadedSnapshot | undefined;
 
-  const fetchText = async (key: string, ifNoneMatch?: string): Promise<S3Text> => {
-    const command = new GetObjectCommand({
-      Bucket: bucket,
-      Key: key,
-      ...(ifNoneMatch === undefined ? {} : { IfNoneMatch: ifNoneMatch }),
-    });
-    const response = await client.send(command);
-    return { text: await response.Body?.transformToString(), etag: response.ETag };
-  };
+  const fetchText = (key: string, ifNoneMatch?: string): Promise<S3Text> =>
+    readObjectText(client, bucket, key, ifNoneMatch);
 
   const toS3Error = (error: unknown, key: string, notFound: 'POINTER_NOT_FOUND' | 'SNAPSHOT_NOT_FOUND') =>
     new S3SnapshotError(isMissing(error) ? notFound : 'REQUEST_FAILED', key, error);

@@ -1,0 +1,206 @@
+{
+  "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-06-cli-pull-pinned-snapshots-roadmap.json",
+  "roadmapTask": "Horizon 6 of FeatureSync: reproducible CI via pinned snapshots \u2014 add a CLI `pull` command to @featuresync/cli, backed by a snapshot fetcher in @featuresync/aws, that downloads a chosen (pinned) Snapshot Version from the S3 layout to a local file consumed via FEATURESYNC_FILE. Production bar: 100% coverage, ESLint layer zones, LocalStack integration proof.",
+  "roadmapRevision": 0,
+  "createdAt": "2026-09-18T12:51:18Z",
+  "updatedAt": "2026-09-18T15:55:00Z",
+  "phases": [
+    {
+      "phaseId": "extract-shared-s3-read-helpers",
+      "status": "done",
+      "attempts": 2,
+      "startedAt": "2026-09-18T13:40:00Z",
+      "baseRef": "7975e33e19c518cdd8b1789edf47f0fd48c7e674",
+      "baseDirty": true,
+      "notes": "Already dirty at start (horizon-06 planning memory): docs/roadmaps/featuresync/{decisions,discoveries,state}.md, horizons/horizon-06-*-roadmap.{json,md} | Changed: packages/aws/src/infrastructure/{s3-read.ts (new), s3-snapshot-source.ts}, packages/aws/test/infrastructure/s3-read.test.ts (new). readObjectText and isMissing moved verbatim into s3-read.ts (not exported from index); isNotModified stays private to the source. Existing source tests untouched. pnpm verify passed during implementation. | VERIFY 2026-09-18: gates green; grade failed single-copy-no-drift only; healer not applied (hint mismatched, fix would change publisher behaviour). | REPLAN 2026-09-18 (amend): contract widened to the publisher; attempt 1 was blocked on single-copy-no-drift 7/9; previous gradeResult/blockedReason cleared here, see the VERIFY note above. | Attempt 2 (amended contract): s3-read.ts adds isNotFound (NoSuchKey/404) and isMissing now builds on it; s3-snapshot-publisher.ts uses readObjectText and isNotFound, its private GetObject reader and isAbsent are deleted, 403 is still REQUEST_FAILED; s3-read.test.ts adds isNotFound cases. Publisher/source tests unedited. Changed: s3-read.ts, s3-snapshot-source.ts, s3-snapshot-publisher.ts, s3-read.test.ts. | VERIFY attempt 2: pass. Compensation: none.",
+      "unplannedFiles": [],
+      "amendments": [
+        {
+          "phaseId": "extract-shared-s3-read-helpers",
+          "at": "2026-09-18T12:52:08Z",
+          "reason": "The source reader also sends IfNoneMatch and needs the ETag back, so a text-only readObjectText(client,bucket,key) could not replace it. Same goal: one shared reader.",
+          "changes": {
+            "before": "readObjectText(client, bucket, key) (GetObject plus Body.transformToString)",
+            "after": "readObjectText(client, bucket, key, ifNoneMatch?) returning {text, etag} (GetObject plus Body.transformToString)"
+          }
+        },
+        {
+          "phaseId": "extract-shared-s3-read-helpers",
+          "at": "2026-09-18T13:30:00Z",
+          "reason": "REPLAN: single-copy-no-drift grep also matched the pre-existing publisher reader (getObject; isAbsent = NoSuchKey/404, no 403 on purpose), which filesAffected left out. Rubric unchanged.",
+          "changes": {
+            "filesAffected": {
+              "before": "s3-read.ts, s3-snapshot-source.ts, s3-read.test.ts",
+              "after": "+ packages/aws/src/infrastructure/s3-snapshot-publisher.ts (publisher tests stay untouched)"
+            },
+            "changes": {
+              "before": "s3-read.ts exports readObjectText and isMissing; the source uses them",
+              "after": "s3-read.ts also exports isNotFound (NoSuchKey/404), and isMissing = isNotFound || AccessDenied/403. The publisher uses readObjectText instead of getObject and isNotFound instead of isAbsent, deletes both, and behaves the same (403 stays REQUEST_FAILED). Tests: direct isNotFound cases."
+            },
+            "expectedResult": {
+              "before": "s3-read.ts used by the source; source tests unchanged at 100%",
+              "after": "s3-read.ts used by the source and the publisher; the transformToString|NoSuchKey grep matches only s3-read.ts; source and publisher tests unedited; 100% coverage"
+            },
+            "healerHint": {
+              "before": "(as planned)",
+              "after": "+ the publisher must use isNotFound, never isMissing; keep the NoSuchKey literal only in isNotFound"
+            }
+          }
+        }
+      ],
+      "completedAt": "2026-09-18T14:05:00Z",
+      "gateRun": "pnpm verify (build core/nestjs/aws/cli, typecheck, lint --max-warnings=0, vitest --coverage): pass",
+      "gradeResult": {
+        "phaseId": "extract-shared-s3-read-helpers",
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "behaviour-preserved",
+            "score": 9,
+            "minScore": 9,
+            "pass": true,
+            "evidence": "Source/publisher tests and index.ts unedited; isMissing logically identical; publisher isNotFound equals old isAbsent, 403 stays REQUEST_FAILED; 348 tests pass."
+          },
+          {
+            "dimensionId": "single-copy-no-drift",
+            "score": 9,
+            "minScore": 9,
+            "pass": true,
+            "evidence": "grep matches only s3-read.ts; source and publisher import from ./s3-read.js; private copies removed."
+          },
+          {
+            "dimensionId": "internal-not-public",
+            "score": 9,
+            "minScore": 9,
+            "pass": true,
+            "evidence": "index.ts unchanged; s3-read.ts imports only @aws-sdk/client-s3 and ./s3-errors.js; lint green."
+          },
+          {
+            "dimensionId": "helper-unit-coverage",
+            "score": 9,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "fake-s3.ts; direct cases for every readObjectText/isMissing/isNotFound branch incl. 403 not-found distinction; 100% thresholds pass."
+          }
+        ]
+      }
+    },
+    {
+      "phaseId": "add-s3-snapshot-fetcher",
+      "status": "done",
+      "attempts": 1,
+      "amendments": [
+        {
+          "phaseId": "add-s3-snapshot-fetcher",
+          "at": "2026-09-18T13:30:00Z",
+          "reason": "REPLAN: the fetcher must report 403 as ACCESS_DENIED (horizon-6 decision) without adding another NoSuchKey copy.",
+          "changes": {
+            "changes": {
+              "before": "read with readObjectText from s3-read.ts",
+              "after": "+ classify with isNotFound -> SNAPSHOT_NOT_FOUND, AccessDenied/403 -> ACCESS_DENIED; never isMissing; no new NoSuchKey/transformToString literal in the fetcher"
+            }
+          }
+        }
+      ],
+      "startedAt": "2026-09-18T14:15:00Z",
+      "baseRef": "7975e33e19c518cdd8b1789edf47f0fd48c7e674",
+      "baseDirty": true,
+      "notes": "Already dirty at start: horizon-06 docs/ledger, s3-read.ts, s3-snapshot-source.ts, s3-snapshot-publisher.ts, s3-read.test.ts (phase 1, uncommitted). | Changed: packages/aws/src/infrastructure/s3-snapshot-fetcher.ts (new), packages/aws/src/index.ts, packages/aws/test/infrastructure/s3-snapshot-fetcher.test.ts (new), s3-snapshot-source.load.test.ts (unplanned: its entry-point test pins the export list; it now also lists S3FetchError and createS3SnapshotFetcher, and nothing else changed). The fetcher validates with environmentSchema/versionSchema before any I/O, reads snapshotKeyFor via readObjectText, and maps errors with isNotFound -> SNAPSHOT_NOT_FOUND, AccessDenied/403 -> ACCESS_DENIED, empty or missing body -> EMPTY_SNAPSHOT, anything else -> REQUEST_FAILED. It returns the raw text unvalidated. | VERIFY: pass on attempt 1. Compensation: none.",
+      "unplannedFiles": [
+        "packages/aws/test/infrastructure/s3-snapshot-source.load.test.ts"
+      ],
+      "completedAt": "2026-09-18T14:45:00Z",
+      "gateRun": "pnpm verify (build core/nestjs/aws/cli, typecheck, lint --max-warnings=0, vitest --coverage 100% thresholds): pass",
+      "gradeResult": {
+        "phaseId": "add-s3-snapshot-fetcher",
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "input-validated-before-io",
+            "score": 9,
+            "minScore": 9,
+            "pass": true,
+            "evidence": "Shared schemas, safeParse before I/O; bad env/version cases assert reason and send not called."
+          },
+          {
+            "dimensionId": "exact-immutable-key",
+            "score": 9,
+            "minScore": 9,
+            "pass": true,
+            "evidence": "snapshotKeyFor; one GetObject with Bucket+Key asserted; non-canonical body returned byte-identical; no pointer read."
+          },
+          {
+            "dimensionId": "error-reason-mapping",
+            "score": 9,
+            "minScore": 9,
+            "pass": true,
+            "evidence": "isNotFound then AccessDenied/403 then REQUEST_FAILED; separate ACCESS_DENIED tests; instanceof, reason, key, cause checked; ''/undefined body -> EMPTY_SNAPSHOT."
+          },
+          {
+            "dimensionId": "layer-and-public-surface",
+            "score": 9,
+            "minScore": 9,
+            "pass": true,
+            "evidence": "Exactly the 5 planned exports; no core/CLI import; domain untouched; lint green; unplanned export-list test edit justified and minimal."
+          },
+          {
+            "dimensionId": "fetcher-full-coverage",
+            "score": 9,
+            "minScore": 9,
+            "pass": true,
+            "evidence": "Default-client branch tested; every branch exercised; 100% global thresholds green (per-file table not printed)."
+          }
+        ]
+      }
+    },
+    {
+      "phaseId": "test-fetcher-against-localstack",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-18T14:55:00Z",
+      "baseRef": "7975e33e19c518cdd8b1789edf47f0fd48c7e674",
+      "baseDirty": true,
+      "notes": "Already dirty at start: horizon-06 docs/ledger and phase 1-2 changes under packages/aws (uncommitted). | Changed: packages/aws/integration/s3-snapshot-fetcher.localstack.test.ts (new). Uses a per-test randomUUID bucket and throws if AWS_ENDPOINT_URL_S3 is unset. It publishes v1 and v2 (different bodies), fetches v1 and compares its text strictly to the raw stored v1 object, and checks version, environment and key. A version-99 fetch rejects with an S3FetchError of reason SNAPSHOT_NOT_FOUND from real S3. Local run: test:integration 3 files / 9 tests passed against the running localstack-pro:latest container, not the pinned 2026.08.3 image. | VERIFY: pass on attempt 1. Compensation: none.",
+      "unplannedFiles": [],
+      "completedAt": "2026-09-18T15:20:00Z",
+      "gateRun": "pnpm verify: pass; pnpm --filter @featuresync/aws test:integration (LocalStack, localstack-pro:latest locally): pass, 3 files / 9 tests",
+      "gradeResult": {
+        "phaseId": "test-fetcher-against-localstack",
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "pinned-roundtrip-after-newer",
+            "score": 9,
+            "minScore": 9,
+            "pass": true,
+            "evidence": "Publishes v1/v2 with different bodies, asserts they differ, strict text match to stored v1, version 1 and key /snapshots/1.json."
+          },
+          {
+            "dimensionId": "real-not-found-code",
+            "score": 9,
+            "minScore": 9,
+            "pass": true,
+            "evidence": "Version 99 rejects as instanceof S3FetchError with reason SNAPSHOT_NOT_FOUND; real S3Client via AWS_ENDPOINT_URL_S3; guard throws."
+          },
+          {
+            "dimensionId": "isolation-and-ci-pickup",
+            "score": 8,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "randomUUID bucket per test, emptied and deleted; throws on missing endpoint; CI workflow unchanged; passed locally on a non-pinned LocalStack image."
+          }
+        ]
+      }
+    },
+    {
+      "phaseId": "add-cli-pull-command",
+      "status": "awaiting-verification",
+      "attempts": 1,
+      "startedAt": "2026-09-18T15:30:00Z",
+      "baseRef": "7975e33e19c518cdd8b1789edf47f0fd48c7e674",
+      "baseDirty": true,
+      "notes": "Already dirty at start: horizon-06 docs/ledger and phase 1-3 changes under packages/aws (uncommitted). | Changed: packages/cli/src/main.ts, packages/cli/test/main.test.ts, README.md, docs/spec/s3-layout.md. `pull --env --version --out [--bucket]`: the bucket falls back to FEATURESYNC_BUCKET. CliIo gains createFetcher, writeFile, rename and rm. The fetched text is JSON-parsed and run through parseSnapshot; invalid text writes nothing and exits 1. The original bytes are written to <out>.tmp-<uuid> and renamed; a try/finally removes the temp file if the write or rename fails. S3FetchError reasons map to distinct messages, all exit 3. The round-trip test loads the output via createFeatureFlagsFromEnv. The README has the CI recipe, and s3-layout.md has a GetObject policy scoped to <env>/snapshots/* plus a note on 403 without ListBucket.",
+      "unplannedFiles": []
+    }
+  ]
+}

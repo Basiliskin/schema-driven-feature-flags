@@ -1,4 +1,4 @@
-import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { parseCurrentPointer, snapshotKeyFor, type CurrentPointer } from '../domain/current-pointer.js';
 import {
   buildCurrentPointer,
@@ -7,6 +7,7 @@ import {
   validateEnvironmentName,
 } from '../domain/publishing.js';
 import { errorShape } from './s3-errors.js';
+import { isNotFound, readObjectText } from './s3-read.js';
 
 /** Why a publish or rollback wrote nothing, or stopped before moving the pointer. */
 export type S3PublishErrorReason =
@@ -54,11 +55,6 @@ interface ReadPointer {
   readonly etag: string;
 }
 
-const isAbsent = (error: unknown): boolean => {
-  const { name, status } = errorShape(error);
-  return name === 'NoSuchKey' || status === 404;
-};
-
 // S3 answers a lost conditional-write race with 412, or 409 while a competing write is in flight.
 const isPreconditionFailed = (error: unknown): boolean => {
   const { name, status } = errorShape(error);
@@ -83,10 +79,7 @@ export function createS3SnapshotPublisher(options: S3SnapshotPublisherOptions): 
     if (!verdict.ok) throw new S3PublishError('INVALID_SNAPSHOT', key, verdict.error);
   };
 
-  const getObject = async (key: string) => {
-    const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
-    return { text: await response.Body?.transformToString(), etag: response.ETag };
-  };
+  const getObject = (key: string) => readObjectText(client, bucket, key);
 
   const readPointer = async (environment: string): Promise<ReadPointer | undefined> => {
     const key = `${environment}/current.json`;
@@ -94,7 +87,7 @@ export function createS3SnapshotPublisher(options: S3SnapshotPublisherOptions): 
     try {
       object = await getObject(key);
     } catch (error) {
-      if (isAbsent(error)) return undefined;
+      if (isNotFound(error)) return undefined;
       throw new S3PublishError('REQUEST_FAILED', key, error);
     }
     if (object.etag === undefined) {
@@ -156,7 +149,7 @@ export function createS3SnapshotPublisher(options: S3SnapshotPublisherOptions): 
     try {
       ({ text } = await getObject(key));
     } catch (error) {
-      throw new S3PublishError(isAbsent(error) ? 'INVALID_ROLLBACK_TARGET' : 'REQUEST_FAILED', key, error);
+      throw new S3PublishError(isNotFound(error) ? 'INVALID_ROLLBACK_TARGET' : 'REQUEST_FAILED', key, error);
     }
     try {
       return parseJson(text);

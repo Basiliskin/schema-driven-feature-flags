@@ -1,8 +1,8 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { S3PublishError, type S3PublishErrorReason } from '@featuresync/aws';
-import { parseSnapshot, type SnapshotValidationError } from '@featuresync/core';
+import { S3FetchError, S3PublishError, type S3FetchErrorReason, type S3PublishErrorReason } from '@featuresync/aws';
+import { createFeatureFlagsFromEnv, parseSnapshot, type SnapshotValidationError } from '@featuresync/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   EXIT_CONFLICT,
@@ -33,11 +33,22 @@ const files: Record<string, string> = {
   'broken.json': '{ not json',
 };
 
+const PULLED_TEXT = `${JSON.stringify(validSnapshot(), null, 2)}\n`;
+
 const harness = (env: Record<string, string | undefined> = { FEATURESYNC_BUCKET: 'env-bucket' }) => {
   const out: string[] = [];
   const err: string[] = [];
   const publisher = { publish: vi.fn(() => Promise.resolve(7)), rollback: vi.fn(() => Promise.resolve(3)) };
   const createPublisher = vi.fn<CliIo['createPublisher']>(() => publisher);
+  const fetcher = {
+    fetch: vi.fn((environment: string, version: number) =>
+      Promise.resolve({ environment, version, key: `stored/${String(version)}`, text: PULLED_TEXT }),
+    ),
+  };
+  const createFetcher = vi.fn<CliIo['createFetcher']>(() => fetcher);
+  const writeFileHook = vi.fn<CliIo['writeFile']>(() => Promise.resolve());
+  const renameHook = vi.fn<CliIo['rename']>(() => Promise.resolve());
+  const rmHook = vi.fn<CliIo['rm']>(() => Promise.resolve());
   const io: CliIo = {
     env,
     out: (line) => out.push(line),
@@ -47,8 +58,23 @@ const harness = (env: Record<string, string | undefined> = { FEATURESYNC_BUCKET:
       return text === undefined ? Promise.reject(new Error(`ENOENT: no such file ${path}`)) : Promise.resolve(text);
     },
     createPublisher,
+    createFetcher,
+    writeFile: writeFileHook,
+    rename: renameHook,
+    rm: rmHook,
   };
-  return { io, out, err, publisher, createPublisher };
+  return {
+    io,
+    out,
+    err,
+    publisher,
+    createPublisher,
+    fetcher,
+    createFetcher,
+    writeFile: writeFileHook,
+    rename: renameHook,
+    rm: rmHook,
+  };
 };
 
 const typeIssue = (): SnapshotValidationError => {
@@ -236,6 +262,123 @@ describe('command line errors', () => {
   });
 });
 
+describe('featuresync pull', () => {
+  const pull = ['pull', '--env', 'production', '--version', '2', '--out', 'flags.json'];
+
+  it('writes the fetched bytes through a temp file and prints the pulled version', async () => {
+    const h = harness();
+
+    expect(await main([...pull, '--bucket', 'flag-bucket'], h.io)).toBe(EXIT_OK);
+    expect(h.createFetcher).toHaveBeenCalledWith('flag-bucket');
+    expect(h.fetcher.fetch).toHaveBeenCalledWith('production', 2);
+    const [temp, text] = h.writeFile.mock.calls[0] ?? [];
+    expect(temp).toMatch(/^flags\.json\.tmp-/);
+    expect(text).toBe(PULLED_TEXT);
+    expect(h.rename).toHaveBeenCalledWith(temp, 'flags.json');
+    expect(h.writeFile.mock.invocationCallOrder[0]).toBeLessThan(h.rename.mock.invocationCallOrder[0] ?? 0);
+    expect(h.rm).not.toHaveBeenCalled();
+    expect(h.out).toEqual(['pulled production v2 -> flags.json']);
+  });
+
+  it('falls back to FEATURESYNC_BUCKET', async () => {
+    const h = harness({ FEATURESYNC_BUCKET: 'env-bucket' });
+
+    expect(await main(pull, h.io)).toBe(EXIT_OK);
+    expect(h.createFetcher).toHaveBeenCalledWith('env-bucket');
+  });
+
+  it.each([
+    ['--env', ['pull', '--version', '2', '--out', 'flags.json']],
+    ['--version', ['pull', '--env', 'production', '--out', 'flags.json']],
+    ['--out', ['pull', '--env', 'production', '--version', '2']],
+    ['--bucket or FEATURESYNC_BUCKET', pull],
+  ])('requires %s', async (name, argv) => {
+    const h = harness({});
+
+    expect(await main(argv, h.io)).toBe(EXIT_USAGE_OR_IO);
+    expect(h.err[0]).toBe(`Missing ${name}`);
+    expect(h.err[1]).toContain('featuresync pull --env <env> --version <version> --out <file> [--bucket <bucket>]');
+    expect(h.createFetcher).not.toHaveBeenCalled();
+  });
+
+  it('passes a non-integer --version to the fetcher, which rejects it', async () => {
+    const h = harness();
+    h.fetcher.fetch.mockRejectedValue(new S3FetchError('INVALID_VERSION', '1.5', undefined));
+
+    expect(await main(['pull', '--env', 'production', '--version', '1.5', '--out', 'flags.json'], h.io)).toBe(
+      EXIT_USAGE_OR_IO,
+    );
+    expect(h.fetcher.fetch).toHaveBeenCalledWith('production', 1.5);
+    expect(h.err).toEqual(['--version must be a positive integer (1.5)']);
+  });
+
+  it.each<[S3FetchErrorReason, string]>([
+    ['SNAPSHOT_NOT_FOUND', 'Snapshot version not found; was it published to this environment? (k)'],
+    ['ACCESS_DENIED', 'Access denied; check the credentials and their s3:GetObject permission (k)'],
+    ['REQUEST_FAILED', 'S3 request failed (k)'],
+    ['INVALID_ENVIRONMENT', 'Invalid --env (k)'],
+    ['INVALID_VERSION', '--version must be a positive integer (k)'],
+    ['EMPTY_SNAPSHOT', 'Snapshot object is empty (k)'],
+  ])('reports %s with its own message and exit 3', async (reason, message) => {
+    const h = harness();
+    h.fetcher.fetch.mockRejectedValue(new S3FetchError(reason, 'k', undefined));
+
+    expect(await main(pull, h.io)).toBe(EXIT_USAGE_OR_IO);
+    expect(h.err).toEqual([message]);
+    expect(h.writeFile).not.toHaveBeenCalled();
+  });
+
+  it('writes nothing when the fetched snapshot is invalid', async () => {
+    const h = harness();
+    h.fetcher.fetch.mockResolvedValue({
+      environment: 'production',
+      version: 2,
+      key: 'k',
+      text: JSON.stringify(invalidSnapshot()),
+    });
+
+    expect(await main(pull, h.io)).toBe(EXIT_INVALID_SNAPSHOT);
+    expect(h.err.some((line) => line.startsWith('features.x.type: '))).toBe(true);
+    expect(h.writeFile).not.toHaveBeenCalled();
+  });
+
+  it('writes nothing when the fetched text is not JSON', async () => {
+    const h = harness();
+    h.fetcher.fetch.mockResolvedValue({ environment: 'production', version: 2, key: 'k', text: '{ not json' });
+
+    expect(await main(pull, h.io)).toBe(EXIT_INVALID_SNAPSHOT);
+    expect(h.err[0]).toMatch(/^k: not valid JSON/);
+    expect(h.writeFile).not.toHaveBeenCalled();
+  });
+
+  it.each(['writeFile', 'rename'] as const)('removes the temp file when %s fails', async (step) => {
+    const h = harness();
+    h[step].mockRejectedValue(new Error(`${step} failed`));
+
+    expect(await main(pull, h.io)).toBe(EXIT_USAGE_OR_IO);
+    const temp = h.writeFile.mock.calls[0]?.[0];
+    expect(temp).toMatch(/^flags\.json\.tmp-/);
+    expect(h.rm).toHaveBeenCalledWith(temp);
+    expect(h.err).toEqual([`${step} failed`]);
+    expect(h.out).toEqual([]);
+  });
+
+  it('writes a file that FEATURESYNC_FILE loads unchanged', async () => {
+    const h = harness();
+    const dir = await mkdtemp(join(tmpdir(), 'featuresync-pull-'));
+    const out = join(dir, 'flags.json');
+    const io: CliIo = { ...h.io, writeFile: nodeIo.writeFile, rename: nodeIo.rename, rm: nodeIo.rm };
+
+    expect(await main(['pull', '--env', 'production', '--version', '2', '--out', out], io)).toBe(EXIT_OK);
+    expect(await readFile(out, 'utf8')).toBe(PULLED_TEXT);
+    expect(await readdir(dir)).toEqual(['flags.json']);
+    const flags = createFeatureFlagsFromEnv({ env: { FEATURESYNC_FILE: out } });
+    await flags.ready();
+
+    expect(flags.version()).toBe(2);
+  });
+});
+
 describe('nodeIo', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -254,6 +397,20 @@ describe('nodeIo', () => {
     expect(stdout).toHaveBeenCalledWith('hello\n');
     expect(stderr).toHaveBeenCalledWith('oops\n');
     expect(nodeIo.createPublisher({ bucket: 'b', validate: () => ({ ok: true }) })).toHaveProperty('publish');
+    expect(nodeIo.createFetcher('b')).toHaveProperty('fetch');
+  });
+
+  it('writes, renames and force-removes files', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'featuresync-cli-'));
+    const temp = join(dir, 'a.tmp');
+    const final = join(dir, 'a.json');
+
+    await nodeIo.writeFile(temp, 'x');
+    await nodeIo.rename(temp, final);
+    await nodeIo.rm(temp);
+    await nodeIo.rm(final);
+
+    expect(await readdir(dir)).toEqual([]);
   });
 
   it('is the default io', async () => {

@@ -8,3 +8,10 @@ export {
   type S3SnapshotPublisherOptions,
   type SnapshotValidation,
 } from './infrastructure/s3-snapshot-publisher.js';
+export {
+  createS3SnapshotFetcher,
+  S3FetchError,
+  type FetchedSnapshot,
+  type S3FetchErrorReason,
+  type S3SnapshotFetcherOptions,
+} from './infrastructure/s3-snapshot-fetcher.js';

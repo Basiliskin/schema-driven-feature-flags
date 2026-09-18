@@ -93,6 +93,21 @@ Without `s3:ListBucket`, S3 answers a request for a missing key with `403 Access
 `404 NoSuchKey`. The reader therefore treats both as "not found", while keeping the original error
 as the cause so a genuine permission problem stays visible in logs.
 
+`featuresync pull` reads one immutable snapshot and never `current.json`, so a CI role that only
+pulls pinned versions can be scoped to the snapshot keys of one environment:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": "s3:GetObject",
+  "Resource": "arn:aws:s3:::<bucket>/<env>/snapshots/*"
+}
+```
+
+Under this policy a missing version also answers `403`. `pull` reports that as access denied
+rather than as a missing version, so grant `s3:ListBucket` (with an `<env>/snapshots/` prefix
+condition) if CI should distinguish the two.
+
 ## Publishing / write access
 
 A publisher needs `s3:GetObject` and `s3:PutObject` on the bucket's keys. It never deletes or
