@@ -1,0 +1,188 @@
+{
+  "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-07-sns-sqs-push-notifications-roadmap.json",
+  "roadmapTask": "Horizon 7 of FeatureSync: push change notifications — the publisher announces each new live Snapshot version on SNS and apps read their own SQS Notification Queue, alongside existing current.json polling. Production-ready, 100% coverage.",
+  "createdAt": "2026-09-18T13:48:28Z",
+  "updatedAt": "2026-09-18T15:32:15Z",
+  "roadmapRevision": 0,
+  "phases": [
+    {
+      "phaseId": "change-notification-contract",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-18T13:48:28Z",
+      "baseRef": "0e04b9c0380502f8846d53f48ec059889c9b674f",
+      "baseDirty": true,
+      "notes": "Pre-dirty paths: docs/roadmaps/featuresync/{blockers,decisions,discoveries,state}.md, next-horizon-brief.md, horizons/horizon-07-* roadmap files. Changed: packages/aws/src/domain/change-notification.ts (new), packages/aws/test/domain/change-notification.test.ts (new), docs/spec/change-notification.md (new), docs/notes.md. Adds buildChangeNotification/parseChangeNotification (raw + SNS Notification envelope; rejects bad JSON, other envelope types, non-string Message, mismatched snapshotKey) plus the spec and a notes.md pointer that the CLI publisher sends the notification.",
+      "amendments": [
+        {
+          "phaseId": "change-notification-contract",
+          "at": "2026-09-18T13:48:28Z",
+          "reason": "packages/aws keeps unit tests under test/domain/, not beside sources in src/domain/.",
+          "changes": [
+            {
+              "field": "filesAffected",
+              "before": "packages/aws/src/domain/change-notification.test.ts (new)",
+              "after": "packages/aws/test/domain/change-notification.test.ts (new)"
+            }
+          ]
+        }
+      ],
+      "unplannedFiles": [],
+      "completedAt": "2026-09-18T13:51:59Z",
+      "gateRun": "pnpm typecheck: pass; pnpm lint: pass; pnpm test (100% coverage thresholds): pass; pnpm --filter @featuresync/aws build: pass",
+      "gradeResult": {
+        "phaseId": "change-notification-contract",
+        "dimensionScores": [
+          {
+            "dimensionId": "envelope-and-raw-parsing",
+            "score": 10,
+            "minScore": 7,
+            "passed": true
+          },
+          {
+            "dimensionId": "rejects-malformed-and-foreign",
+            "score": 8,
+            "minScore": 7,
+            "passed": true
+          },
+          {
+            "dimensionId": "domain-purity-and-reuse",
+            "score": 10,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "contract-doc-semantics",
+            "score": 9,
+            "minScore": 7,
+            "passed": true
+          }
+        ],
+        "overallPass": true,
+        "summary": "Pure, reuses current-pointer schemas, both delivery shapes tested; minor gaps: no parser test for negative/non-integer version, doc rejection rules spread across prose."
+      }
+    },
+    {
+      "phaseId": "publisher-sns-notify",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-18T13:53:45Z",
+      "baseRef": "0e04b9c0380502f8846d53f48ec059889c9b674f",
+      "baseDirty": true,
+      "notes": "Pre-dirty paths: phase change-notification-contract files (docs/notes.md, docs/spec/change-notification.md, packages/aws/src/domain/change-notification.ts, packages/aws/test/domain/change-notification.test.ts) and docs/roadmaps/featuresync/* memory/roadmap files. Changed: packages/aws/package.json (client-sns optional peer + dev dep), pnpm-lock.yaml, packages/aws/src/infrastructure/sns-change-notifier.ts (new), packages/aws/src/infrastructure/s3-snapshot-publisher.ts, packages/aws/src/index.ts, packages/aws/test/infrastructure/sns-change-notifier.test.ts (new), packages/aws/test/infrastructure/s3-snapshot-publisher.test.ts. Publisher gains topicArn/snsClient/onNotifyError; after a successful pointer write publish/rollback send one Change Notification; SNS errors go to onNotifyError (or console.warn, also if the handler throws) and never fail the call. client-sns is imported lazily so it stays optional. Compensation (if needed): remove topicArn/snsClient/onNotifyError options, sns-change-notifier.ts and the client-sns peer/dev dependency.",
+      "amendments": [
+        {
+          "phaseId": "publisher-sns-notify",
+          "at": "2026-09-18T13:53:45Z",
+          "reason": "packages/aws keeps unit tests under test/infrastructure/, not beside sources.",
+          "changes": [
+            {
+              "field": "filesAffected",
+              "before": "packages/aws/src/infrastructure/*.test.ts",
+              "after": "packages/aws/test/infrastructure/*.test.ts"
+            }
+          ]
+        }
+      ],
+      "unplannedFiles": [
+        "pnpm-lock.yaml"
+      ],
+      "completedAt": "2026-09-18T13:59:31Z",
+      "gateRun": "pnpm typecheck: pass; pnpm lint: pass; pnpm test (100% coverage thresholds): pass; pnpm --filter @featuresync/aws build: pass",
+      "gradeResult": {
+        "phaseId": "publisher-sns-notify",
+        "dimensionScores": [
+          {
+            "dimensionId": "notify-after-pointer-only",
+            "score": 8,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "notify-failure-isolation",
+            "score": 10,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "opt-in-and-backward-compat",
+            "score": 9,
+            "minScore": 7,
+            "passed": true
+          },
+          {
+            "dimensionId": "peer-dependency-shape",
+            "score": 10,
+            "minScore": 8,
+            "passed": true
+          }
+        ],
+        "overallPass": true,
+        "summary": "Notify only after pointer write, SNS/handler failures isolated, opt-in, optional peer; gaps: no explicit call-order test, no rollback pointer-failure test, no publisher-level no-SNSClient-without-topic test."
+      }
+    },
+    {
+      "phaseId": "sqs-notification-queue",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-18T14:01:12Z",
+      "baseRef": "0e04b9c0380502f8846d53f48ec059889c9b674f",
+      "baseDirty": true,
+      "notes": "Pre-dirty paths: phases change-notification-contract and publisher-sns-notify files (uncommitted) and docs/roadmaps/featuresync/* memory/roadmap files. Changed: packages/aws/package.json (client-sqs optional peer + dev dep), pnpm-lock.yaml, packages/aws/src/infrastructure/sqs-notification-queue.ts (new), packages/aws/src/index.ts (exports createSqsNotificationQueue, NotificationQueue, NotificationHandler, SqsNotificationQueueOptions, ChangeNotification type), packages/aws/test/infrastructure/sqs-notification-queue.test.ts (new), packages/aws/test/infrastructure/s3-snapshot-source.load.test.ts (entry-point export list gains createSqsNotificationQueue). createSqsNotificationQueue({queueUrl, client?, waitTimeSeconds?=20, logger?}).start(handler) long-polls, parses raw/SNS bodies, deletes after handling; poison messages logged+deleted; handler failure left for redelivery; receive errors logged with 1s abortable backoff; stop() aborts the in-flight receive. client-sqs imported lazily like client-sns.",
+      "amendments": [
+        {
+          "phaseId": "sqs-notification-queue",
+          "at": "2026-09-18T14:01:12Z",
+          "reason": "packages/aws keeps unit tests under test/infrastructure/, not beside sources (horizon amendment 3/3).",
+          "changes": [
+            {
+              "field": "filesAffected",
+              "before": "packages/aws/src/infrastructure/sqs-notification-queue.test.ts (new)",
+              "after": "packages/aws/test/infrastructure/sqs-notification-queue.test.ts (new)"
+            }
+          ]
+        }
+      ],
+      "unplannedFiles": [
+        "pnpm-lock.yaml",
+        "packages/aws/test/infrastructure/s3-snapshot-source.load.test.ts"
+      ],
+      "completedAt": "2026-09-18T15:32:15Z",
+      "gateRun": "pnpm typecheck: pass; pnpm lint: pass; pnpm test (100% coverage thresholds): pass; pnpm --filter @featuresync/aws build: pass",
+      "gradeResult": {
+        "phaseId": "sqs-notification-queue",
+        "dimensionScores": [
+          {
+            "dimensionId": "delete-semantics",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "stop-and-abort",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "error-resilience-backoff",
+            "score": 10,
+            "minScore": 7,
+            "passed": true
+          },
+          {
+            "dimensionId": "scope-and-isolation",
+            "score": 9,
+            "minScore": 7,
+            "passed": true
+          }
+        ],
+        "overallPass": true,
+        "summary": "SQS reader delivers all planned behaviour; gaps: no single mixed-case delete test, loop settlement not directly observed, thin TSDoc on public types."
+      }
+    }
+  ]
+}

@@ -3,6 +3,8 @@ export { createS3SnapshotSource, type S3SnapshotSourceOptions } from './infrastr
 export {
   createS3SnapshotPublisher,
   S3PublishError,
+  type NotifyErrorHandler,
+  type NotifyFailure,
   type S3PublishErrorReason,
   type S3SnapshotPublisher,
   type S3SnapshotPublisherOptions,
@@ -15,3 +17,10 @@ export {
   type S3FetchErrorReason,
   type S3SnapshotFetcherOptions,
 } from './infrastructure/s3-snapshot-fetcher.js';
+export {
+  createSqsNotificationQueue,
+  type NotificationHandler,
+  type NotificationQueue,
+  type SqsNotificationQueueOptions,
+} from './infrastructure/sqs-notification-queue.js';
+export type { ChangeNotification } from './domain/change-notification.js';

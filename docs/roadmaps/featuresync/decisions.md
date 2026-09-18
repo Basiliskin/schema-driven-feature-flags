@@ -18,3 +18,5 @@
 - 2026-09-18 | horizon 5 | @FeatureFlag skips a disabled method and returns undefined or its fallback's result, never throwing; it evaluates without context against the newest initialised module's client — — see horizon-05 roadmap.md
 - 2026-09-18 | horizon 6 | featuresync pull requires an explicit --version and never resolves the Current Pointer; the fetcher reports 403 as ACCESS_DENIED, distinct from not-found — because CI pins must be reproducible and diagnosable.
 - 2026-09-18 | horizon 6 | s3-read.ts owns every NoSuchKey/transformToString: isNotFound (NoSuchKey/404) for the publisher and fetcher, isMissing (+403) only for the source — because the publisher must fail on 403.
+- 2026-09-18 | horizon 7 | Apps receive Change Notifications only from their own SQS queue subscribed to the SNS topic, never a public HTTP endpoint — because apps must not expose an attack surface.
+- 2026-09-18 | horizon 7 | A failed SNS notify never fails or undoes a publish/rollback; it goes to onNotifyError or a console.warn default and publish keeps returning Promise<number> — because S3 stays the source of truth.

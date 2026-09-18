@@ -1,4 +1,5 @@
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import type { SNSClient } from '@aws-sdk/client-sns';
 import { parseCurrentPointer, snapshotKeyFor, type CurrentPointer } from '../domain/current-pointer.js';
 import {
   buildCurrentPointer,
@@ -8,6 +9,7 @@ import {
 } from '../domain/publishing.js';
 import { errorShape } from './s3-errors.js';
 import { isNotFound, readObjectText } from './s3-read.js';
+import { createSnsChangeNotifier } from './sns-change-notifier.js';
 
 /** Why a publish or rollback wrote nothing, or stopped before moving the pointer. */
 export type S3PublishErrorReason =
@@ -32,6 +34,14 @@ export class S3PublishError extends Error {
   }
 }
 
+/** The live version whose Change Notification could not be sent. */
+export interface NotifyFailure {
+  readonly environment: string;
+  readonly version: number;
+}
+
+export type NotifyErrorHandler = (error: unknown, failure: NotifyFailure) => void;
+
 export type SnapshotValidation = { readonly ok: true } | { readonly ok: false; readonly error: unknown };
 
 /** Options for {@link createS3SnapshotPublisher}. */
@@ -41,6 +51,12 @@ export interface S3SnapshotPublisherOptions {
   readonly client?: Pick<S3Client, 'send'>;
   /** Decides whether a raw snapshot may be published or restored, e.g. the core package's `parseSnapshot`. */
   readonly validate: (snapshot: unknown) => SnapshotValidation;
+  /** SNS topic that receives a Change Notification after every successful pointer write. Omit to send nothing. */
+  readonly topicArn?: string;
+  /** Defaults to a client configured only from the standard AWS SDK environment and shared config. */
+  readonly snsClient?: Pick<SNSClient, 'send'>;
+  /** Receives a failed notification. The publish still succeeds; defaults to a one-line `console.warn`. */
+  readonly onNotifyError?: NotifyErrorHandler;
 }
 
 export interface S3SnapshotPublisher {
@@ -61,12 +77,35 @@ const isPreconditionFailed = (error: unknown): boolean => {
   return name === 'PreconditionFailed' || name === 'ConditionalRequestConflict' || status === 412 || status === 409;
 };
 
+const warnNotifyFailure: NotifyErrorHandler = (error, { environment, version }) => {
+  const detail = error instanceof Error ? error.message : String(error);
+  console.warn(`featuresync: change notification for ${environment} v${String(version)} failed: ${detail}`);
+};
+
 const parseJson = (text: string | undefined): unknown => JSON.parse(text ?? '');
 
 /** Writes the `<environment>/snapshots/<n>.json` + `<environment>/current.json` layout with S3 conditional writes. */
 export function createS3SnapshotPublisher(options: S3SnapshotPublisherOptions): S3SnapshotPublisher {
   const { bucket, validate } = options;
   const client = options.client ?? new S3Client({});
+  const notifier =
+    options.topicArn === undefined
+      ? undefined
+      : createSnsChangeNotifier({ topicArn: options.topicArn, client: options.snsClient });
+  const onNotifyError = options.onNotifyError ?? warnNotifyFailure;
+
+  const notify = async (environment: string, version: number): Promise<void> => {
+    if (notifier === undefined) return;
+    try {
+      await notifier(environment, version);
+    } catch (error) {
+      try {
+        onNotifyError(error, { environment, version });
+      } catch (handlerError) {
+        warnNotifyFailure(handlerError, { environment, version });
+      }
+    }
+  };
 
   const checkEnvironment = (environment: string): string => {
     const checked = validateEnvironmentName(environment);
@@ -141,6 +180,7 @@ export function createS3SnapshotPublisher(options: S3SnapshotPublisherOptions): 
     const version = nextSnapshotVersion(current?.pointer);
     await put(snapshotKeyFor(env, version), JSON.stringify(snapshot), { IfNoneMatch: '*' }, 'VERSION_EXISTS');
     await writePointer(env, version, current?.etag);
+    await notify(env, version);
     return version;
   };
 
@@ -166,6 +206,7 @@ export function createS3SnapshotPublisher(options: S3SnapshotPublisherOptions): 
     const key = snapshotKeyFor(env, target.value);
     checkSnapshot(key, await readSnapshot(key));
     await writePointer(env, target.value, current?.etag);
+    await notify(env, target.value);
     return target.value;
   };
 

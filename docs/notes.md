@@ -48,6 +48,8 @@
               local memory    local memory    local memory
 ```
 
+> В текущей реализации уведомление в SNS отправляет CLI-publisher после замены `current.json`, а не S3 event → Lambda. Контракт сообщения — [docs/spec/change-notification.md](spec/change-notification.md).
+
 ---
 
 # 1. Главные принципы

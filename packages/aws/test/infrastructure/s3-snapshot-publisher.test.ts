@@ -1,8 +1,10 @@
 import { GetObjectCommand, PutObjectCommand, type S3Client } from '@aws-sdk/client-s3';
+import type { PublishCommand, SNSClient } from '@aws-sdk/client-sns';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createS3SnapshotPublisher,
   S3PublishError,
+  type NotifyErrorHandler,
   type S3PublishErrorReason,
   type SnapshotValidation,
 } from '../../src/infrastructure/s3-snapshot-publisher.js';
@@ -302,5 +304,125 @@ describe('createS3SnapshotPublisher', () => {
       await expectReason(publisher.rollback('', 1), 'INVALID_ENVIRONMENT', '');
       expect(sent).toEqual([]);
     });
+  });
+});
+
+describe('change notifications', () => {
+  const topicArn = 'arn:aws:sns:eu-west-1:123456789012:featuresync-updates';
+
+  const fakeSns = (error?: Error) => {
+    const messages: unknown[] = [];
+    const send = vi.fn((command: PublishCommand) => {
+      if (error !== undefined) return Promise.reject(error);
+      expect(command.input.TopicArn).toBe(topicArn);
+      messages.push(JSON.parse(command.input.Message ?? ''));
+      return Promise.resolve({});
+    });
+    return { snsClient: { send } as unknown as Pick<SNSClient, 'send'>, messages, send };
+  };
+
+  const notifyingPublisher = (
+    objects: Record<string, StoredObject>,
+    sns: ReturnType<typeof fakeSns>,
+    extra: { putErrors?: Record<string, Error>; onNotifyError?: NotifyErrorHandler; topicArn?: string } = { topicArn },
+  ) => {
+    const s3 = fakeWritableS3(objects, extra.putErrors);
+    const publisher = createS3SnapshotPublisher({
+      bucket: 'flags',
+      client: s3.client,
+      validate: accept,
+      snsClient: sns.snsClient,
+      ...(extra.topicArn === undefined ? {} : { topicArn: extra.topicArn }),
+      ...(extra.onNotifyError === undefined ? {} : { onNotifyError: extra.onNotifyError }),
+    });
+    return { ...s3, publisher };
+  };
+
+  const notification = pointer;
+
+  it('sends one notification after a publish moves the pointer', async () => {
+    const sns = fakeSns();
+    const { publisher } = notifyingPublisher({ 'production/current.json': current(4) }, sns);
+
+    await expect(publisher.publish('production', snapshot)).resolves.toBe(5);
+
+    expect(sns.messages).toEqual([notification(5)]);
+  });
+
+  it('sends one notification after a rollback moves the pointer', async () => {
+    const sns = fakeSns();
+    const { publisher } = notifyingPublisher(
+      { 'production/current.json': current(5), 'production/snapshots/3.json': { body: JSON.stringify(snapshot) } },
+      sns,
+    );
+
+    await expect(publisher.rollback('production', 3)).resolves.toBe(3);
+
+    expect(sns.messages).toEqual([notification(3)]);
+  });
+
+  it('sends nothing without a topicArn', async () => {
+    const sns = fakeSns();
+    const { publisher } = notifyingPublisher({}, sns, {});
+
+    await expect(publisher.publish('production', snapshot)).resolves.toBe(1);
+
+    expect(sns.send).not.toHaveBeenCalled();
+  });
+
+  it('sends nothing when the pointer write fails', async () => {
+    const sns = fakeSns();
+    const { publisher } = notifyingPublisher({ 'production/current.json': current(4) }, sns, {
+      topicArn,
+      putErrors: { 'production/current.json': s3Error('PreconditionFailed', 412) },
+    });
+
+    await expectReason(publisher.publish('production', snapshot), 'CONFLICT', 'production/current.json');
+
+    expect(sns.send).not.toHaveBeenCalled();
+  });
+
+  it('routes an SNS failure to onNotifyError and still resolves with the version', async () => {
+    const failure = new Error('sns down');
+    const onNotifyError = vi.fn<NotifyErrorHandler>();
+    const { publisher, puts } = notifyingPublisher({ 'production/current.json': current(4) }, fakeSns(failure), {
+      topicArn,
+      onNotifyError,
+    });
+
+    await expect(publisher.publish('production', snapshot)).resolves.toBe(5);
+
+    expect(onNotifyError).toHaveBeenCalledExactlyOnceWith(failure, { environment: 'production', version: 5 });
+    expect(puts().map(({ key }) => key)).toEqual(['production/snapshots/5.json', 'production/current.json']);
+  });
+
+  it.each([
+    ['an Error', new Error('sns down'), 'sns down'],
+    ['a non-Error value', 'timeout' as unknown as Error, 'timeout'],
+  ])('warns on the console for %s when no onNotifyError is given', async (_label, failure, detail) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { publisher } = notifyingPublisher({}, fakeSns(failure));
+
+    await expect(publisher.publish('production', snapshot)).resolves.toBe(1);
+
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      `featuresync: change notification for production v1 failed: ${detail}`,
+    );
+    warn.mockRestore();
+  });
+
+  it('warns on the console when onNotifyError itself throws, and still resolves', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { publisher } = notifyingPublisher({}, fakeSns(new Error('sns down')), {
+      topicArn,
+      onNotifyError: () => {
+        throw new Error('handler broke');
+      },
+    });
+
+    await expect(publisher.publish('production', snapshot)).resolves.toBe(1);
+
+    expect(warn).toHaveBeenCalledExactlyOnceWith('featuresync: change notification for production v1 failed: handler broke');
+    warn.mockRestore();
   });
 });

@@ -12,3 +12,5 @@
 - 2026-09-18 | horizon 6 | planned | 4 phases (S3 read-helper split, pinned-version fetcher in @featuresync/aws, LocalStack proof, CLI pull + CI recipe); gate passed, 0 healed, 3 minor debt
 - 2026-09-18 | horizon 6 | replanned | amend, 2 phases amended — shared S3 reader now also covers the publisher via isNotFound; rubric unchanged
 - 2026-09-18 | horizon 6 | completed | 4 phases, 3 amendments, 0 overrides
+- 2026-09-18 | horizon 7 | planned | 3 phases (Change Notification contract, SNS notify in publisher, SQS Notification Queue reader); 3 deferred to horizon 8; gate passed, 1 major healed, 4 minor debt
+- 2026-09-18 | horizon 7 | completed | 3 phases, 3 amendments (test paths moved to test/), 0 overrides

@@ -322,7 +322,7 @@ describe('createS3SnapshotSource load', () => {
 });
 
 describe('package entry point', () => {
-  it('exports the S3 snapshot source, the publisher, the fetcher and their errors', async () => {
+  it('exports the S3 snapshot source, the publisher, the fetcher, the notification queue and their errors', async () => {
     const entry = await import('../../src/index.js');
 
     expect(Object.keys(entry).sort()).toEqual([
@@ -332,6 +332,7 @@ describe('package entry point', () => {
       'createS3SnapshotFetcher',
       'createS3SnapshotPublisher',
       'createS3SnapshotSource',
+      'createSqsNotificationQueue',
     ]);
   });
 });
