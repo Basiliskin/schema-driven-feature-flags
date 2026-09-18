@@ -9,6 +9,17 @@ export {
 export { StartupError } from './application/errors.js';
 export type { Logger } from './application/logger.port.js';
 export type { SnapshotSource, Unsubscribe } from './application/snapshot-source.port.js';
+export {
+  ConfigurationError,
+  createFeatureFlagsFromEnv,
+  type FeatureFlagsFromEnvOptions,
+} from './infrastructure/config-from-env.js';
+export {
+  createFileSnapshotSource,
+  SnapshotFileError,
+  type FileSnapshotSourceOptions,
+  type SnapshotFileErrorReason,
+} from './infrastructure/file-snapshot-source.js';
 export { defineFeature, type ConfigOf, type ContextOf, type FeatureDefinition } from './domain/define-feature.js';
 export {
   FeatureDefinitionError,

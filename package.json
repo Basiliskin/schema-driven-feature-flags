@@ -10,7 +10,8 @@
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint . --max-warnings=0",
     "test": "vitest run --coverage",
-    "verify": "pnpm typecheck && pnpm lint && pnpm test"
+    "verify": "pnpm typecheck && pnpm lint && pnpm test",
+    "example:node-local": "pnpm --filter @featuresync/core build && pnpm --filter @featuresync/example-node-local start"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

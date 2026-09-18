@@ -2,7 +2,7 @@
   "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-01-local-first-core-runtime-roadmap.json",
   "roadmapTask": "Build a roadmap for the open-source schema-driven feature flag product (FeatureSync) described in docs/ (notes.md, notes-01.md, notes-02.md, playbooks/). Requirements: production-grade ready; DDD/SOLID/KISS/DRY; fully test-covered; LocalStack used only via environment config through the AWS SDK (no LocalStack-specific code paths).",
   "createdAt": "2026-09-18T06:12:11Z",
-  "updatedAt": "2026-09-18T06:54:58Z",
+  "updatedAt": "2026-09-18T07:13:19Z",
   "roadmapRevision": 0,
   "phases": [
     {
@@ -212,22 +212,63 @@
     },
     {
       "phaseId": "in-memory-flag-client",
-      "status": "awaiting-verification",
+      "status": "done",
       "attempts": 1,
       "startedAt": "2026-09-18T06:52:50Z",
       "baseRef": "b9428b3fee7e4089aa557be4d797e72c4bb931c7",
       "baseDirty": true,
-      "notes": "Already dirty at start: docs/roadmaps/featuresync/discoveries.md (memory compaction). | Changed: packages/core/src/application/{flag-client,snapshot-source.port,snapshot-store,logger.port,errors}.ts, src/index.ts, test/application/{flag-client,public-api}.test.ts; removed src/index.test.ts. createFeatureFlags holds one frozen Snapshot in SnapshotStore, swapped in one assignment after parseSnapshot; ticket ordering makes the latest-started refresh win; failed/invalid refresh keeps old + logs; ready() rejects with StartupError(cause) unless allowStaleStartup+valid fallbackSnapshot; queries sync, typed by definitions, never throw (NOT_FOUND reason for missing keys). Index trimmed to factory, defineFeature, ports, result/error types (parseSnapshot/evaluate no longer public). pnpm verify exit 0 during implementation (not a VERIFY run).",
+      "notes": "Already dirty at start: docs/roadmaps/featuresync/discoveries.md (memory compaction). | Changed: packages/core/src/application/{flag-client,snapshot-source.port,snapshot-store,logger.port,errors}.ts, src/index.ts, test/application/{flag-client,public-api}.test.ts; removed src/index.test.ts. createFeatureFlags holds one frozen Snapshot in SnapshotStore, swapped in one assignment after parseSnapshot; ticket ordering makes the latest-started refresh win; failed/invalid refresh keeps old + logs; ready() rejects with StartupError(cause) unless allowStaleStartup+valid fallbackSnapshot; queries sync, typed by definitions, never throw (NOT_FOUND reason for missing keys). Index trimmed to factory, defineFeature, ports, result/error types (parseSnapshot/evaluate no longer public). pnpm verify exit 0 during implementation (not a VERIFY run). | VERIFY: passed first grade (4×9, small-public-surface 7 at its minScore), no healer retry. Compensation: none.",
       "unplannedFiles": [
         "packages/core/src/application/errors.ts",
         "packages/core/test/application/public-api.test.ts",
         "packages/core/src/index.test.ts (deleted)"
-      ]
+      ],
+      "completedAt": "2026-09-18T06:57:57Z",
+      "gateRun": "pnpm typecheck: pass; pnpm lint: pass; pnpm test (100% coverage): pass",
+      "gradeResult": {
+        "phaseId": "in-memory-flag-client",
+        "dimensionScores": [
+          {
+            "dimensionId": "atomic-swap-proven",
+            "score": 9,
+            "pass": true,
+            "evidence": "snapshot-store.ts:17-21 single assignment after parseSnapshot; tests :104-112 invalid refresh keeps v1 + logger.error; :146-176 concurrent refreshes resolve to latest-started, invalid newer falls back."
+          },
+          {
+            "dimensionId": "zero-io-on-query",
+            "score": 9,
+            "pass": true,
+            "evidence": "Queries read store.current only (flag-client.ts:131-136); test :214-228 1000 queries, load() count unchanged; interface :46-57 non-Promise returns."
+          },
+          {
+            "dimensionId": "dependency-inversion",
+            "score": 9,
+            "pass": true,
+            "evidence": "Application imports domain + own ports only; console default logger, no default source; eslint zone :33-42; tests use in-memory fakes."
+          },
+          {
+            "dimensionId": "startup-failure-modes",
+            "score": 9,
+            "pass": true,
+            "evidence": "ready() rejects with StartupError (flag-client.ts:107-108); tests :41-89 cover load failure, invalid first, stale fallback, source over fallback, invalid fallback; StartupError TSDoc'd + exported."
+          },
+          {
+            "dimensionId": "small-public-surface",
+            "score": 7,
+            "pass": true,
+            "evidence": "No SnapshotStore/consoleLogger export; public-api.test.ts snapshots runtime names only, not types; index.ts:19-22 re-exports extra domain types; has/getAll lack TSDoc."
+          }
+        ],
+        "overallPass": true
+      }
     },
     {
       "phaseId": "local-file-snapshot-source",
-      "status": "not-started",
-      "attempts": 0
+      "status": "in-progress",
+      "attempts": 1,
+      "startedAt": "2026-09-18T07:13:19Z",
+      "baseRef": "39d9b797ff21d2a6c9fc0911ee9b098797969f73",
+      "baseDirty": false
     }
   ]
 }

@@ -21,6 +21,10 @@ export default defineConfig(
     extends: [tseslint.configs.disableTypeChecked],
   },
   {
+    files: ['examples/**/*.js'],
+    languageOptions: { globals: { console: 'readonly' } },
+  },
+  {
     files: ['packages/*/src/**/*.ts'],
     plugins: { 'import-x': importX },
     settings: {

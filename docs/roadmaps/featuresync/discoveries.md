@@ -7,3 +7,4 @@
 - 2026-09-18 | horizon 1 | evaluation | Snapshot `when` values are a scalar (equals) or a one-key operator object built from the operator registry [packages/core/src/domain/rule.ts] → new operators (percentage) — see horizon-01 roadmap.md
 - 2026-09-18 | horizon 1 | evaluation | Snapshot boolean features have no default: an enabled one is on with zero rules, off when rules exist and none match [docs/spec/evaluation-semantics.md] → revisit if an — see horizon-01 roadmap.md
 - 2026-09-18 | horizon 1 | api | Public index no longer exports parseSnapshot/evaluate/SNAPSHOT_SCHEMA_VERSION (small-surface rubric) [packages/core/src/index.ts] → CLI validate must re-export parseSnapshot deliberately.
+- 2026-09-18 | horizon 1 | watch | fs.watch on a file stops after an atomic-save rename; the file source watches the directory and dedupes by content [packages/core/src/infrastructure/file-snapshot-source.ts] → reuse for any file watcher.

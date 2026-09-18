@@ -2,7 +2,7 @@
   "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-01-local-first-core-runtime-roadmap.json",
   "roadmapTask": "Build a roadmap for the open-source schema-driven feature flag product (FeatureSync) described in docs/ (notes.md, notes-01.md, notes-02.md, playbooks/). Requirements: production-grade ready; DDD/SOLID/KISS/DRY; fully test-covered; LocalStack used only via environment config through the AWS SDK (no LocalStack-specific code paths).",
   "createdAt": "2026-09-18T06:12:11Z",
-  "updatedAt": "2026-09-18T06:57:57Z",
+  "updatedAt": "2026-09-18T12:00:00Z",
   "roadmapRevision": 0,
   "phases": [
     {
@@ -60,7 +60,7 @@
         "pnpm-lock.yaml"
       ],
       "completedAt": "2026-09-18T06:15:58Z",
-      "gateRun": "pnpm verify: pass; probes (throwaway, removed): uncovered branch→pnpm test exit 1, domain→infrastructure import→pnpm lint exit 1, type error→pnpm typecheck exit 2",
+      "gateRun": "pnpm verify: pass; probes (throwaway, removed): uncovered branch\u2192pnpm test exit 1, domain\u2192infrastructure import\u2192pnpm lint exit 1, type error\u2192pnpm typecheck exit 2",
       "gradeResult": {
         "phaseId": "monorepo-quality-gates",
         "dimensionScores": [
@@ -217,7 +217,7 @@
       "startedAt": "2026-09-18T06:52:50Z",
       "baseRef": "b9428b3fee7e4089aa557be4d797e72c4bb931c7",
       "baseDirty": true,
-      "notes": "Already dirty at start: docs/roadmaps/featuresync/discoveries.md (memory compaction). | Changed: packages/core/src/application/{flag-client,snapshot-source.port,snapshot-store,logger.port,errors}.ts, src/index.ts, test/application/{flag-client,public-api}.test.ts; removed src/index.test.ts. createFeatureFlags holds one frozen Snapshot in SnapshotStore, swapped in one assignment after parseSnapshot; ticket ordering makes the latest-started refresh win; failed/invalid refresh keeps old + logs; ready() rejects with StartupError(cause) unless allowStaleStartup+valid fallbackSnapshot; queries sync, typed by definitions, never throw (NOT_FOUND reason for missing keys). Index trimmed to factory, defineFeature, ports, result/error types (parseSnapshot/evaluate no longer public). pnpm verify exit 0 during implementation (not a VERIFY run). | VERIFY: passed first grade (4×9, small-public-surface 7 at its minScore), no healer retry. Compensation: none.",
+      "notes": "Already dirty at start: docs/roadmaps/featuresync/discoveries.md (memory compaction). | Changed: packages/core/src/application/{flag-client,snapshot-source.port,snapshot-store,logger.port,errors}.ts, src/index.ts, test/application/{flag-client,public-api}.test.ts; removed src/index.test.ts. createFeatureFlags holds one frozen Snapshot in SnapshotStore, swapped in one assignment after parseSnapshot; ticket ordering makes the latest-started refresh win; failed/invalid refresh keeps old + logs; ready() rejects with StartupError(cause) unless allowStaleStartup+valid fallbackSnapshot; queries sync, typed by definitions, never throw (NOT_FOUND reason for missing keys). Index trimmed to factory, defineFeature, ports, result/error types (parseSnapshot/evaluate no longer public). pnpm verify exit 0 during implementation (not a VERIFY run). | VERIFY: passed first grade (4\u00d79, small-public-surface 7 at its minScore), no healer retry. Compensation: none.",
       "unplannedFiles": [
         "packages/core/src/application/errors.ts",
         "packages/core/test/application/public-api.test.ts",
@@ -264,8 +264,57 @@
     },
     {
       "phaseId": "local-file-snapshot-source",
-      "status": "not-started",
-      "attempts": 0
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-18T07:13:19Z",
+      "baseRef": "39d9b797ff21d2a6c9fc0911ee9b098797969f73",
+      "baseDirty": false,
+      "notes": "Clean tree at start. | Changed: packages/core/src/infrastructure/{file-snapshot-source,config-from-env}.ts, test/infrastructure/{file-snapshot-source,config-from-env}.test.ts, test/e2e/file-to-evaluate.test.ts, src/index.ts + public-api.test.ts (exports), examples/node-local/{package.json,index.js,feature-flags.json}, packages/core/README.md, pnpm-workspace.yaml (examples/*), package.json (example:node-local script), ci.yml (example smoke step), eslint.config.js (console global for examples), pnpm-lock.yaml. createFileSnapshotSource({path,watch,debounceMs,logger}): load() -> SnapshotFileError READ_FAILED|INVALID_JSON; watch mode watches the directory (survives atomic rename), debounces, dedupes by content, logs and skips unreadable/truncated writes, unsubscribe clears timer + closes watcher. createFeatureFlagsFromEnv reads FEATURESYNC_FILE (env option defaults to process.env, the only process.env use), throws ConfigurationError when missing/empty. e2e uses real temp files via src/index.js. pnpm verify exit 0 and pnpm example:node-local exit 0 during implementation (not a VERIFY run); watch tests rerun 3x green. | VERIFY: gates green; graded pass (8/9/8/9). Compensation: revert infrastructure/ folder + env factory exports in index.ts.",
+      "unplannedFiles": [
+        "packages/core/src/index.ts",
+        "packages/core/test/application/public-api.test.ts",
+        "pnpm-workspace.yaml",
+        "package.json",
+        ".github/workflows/ci.yml",
+        "eslint.config.js",
+        "pnpm-lock.yaml"
+      ],
+      "completedAt": "2026-09-18T12:00:00Z",
+      "gateRun": "pnpm verify: pass; pnpm example:node-local: pass",
+      "gradeResult": {
+        "phaseId": "local-file-snapshot-source",
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "real-fs-e2e",
+            "score": 8,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "mkdtemp(tmpdir)+rm cleanup, real writes; imports ../../src/index.js not package name"
+          },
+          {
+            "dimensionId": "env-config-only",
+            "score": 9,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "process.env only config-from-env.ts:28; ConfigurationError on missing FEATURESYNC_FILE"
+          },
+          {
+            "dimensionId": "watch-resilience",
+            "score": 8,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "reload errors routed to logger; dir watch survives rename; truncated JSON keeps version; no explicit open-handle test"
+          },
+          {
+            "dimensionId": "usable-example",
+            "score": 9,
+            "minScore": 7,
+            "pass": true,
+            "evidence": "imports @featuresync/core; README documents command; CI smoke step"
+          }
+        ]
+      }
     }
   ]
 }

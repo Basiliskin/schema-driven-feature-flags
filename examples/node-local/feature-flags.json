@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "environment": "development",
+  "version": 1,
+  "createdAt": "2026-09-18T00:00:00.000Z",
+  "createdBy": "local",
+  "previousVersion": null,
+  "reason": "Local development flags",
+  "features": {
+    "new-dashboard": {
+      "type": "boolean",
+      "enabled": true,
+      "rules": [{ "when": { "isEmployee": true }, "enabled": true }]
+    },
+    "payment-flow": {
+      "type": "config",
+      "enabled": true,
+      "default": { "provider": "stripe", "maxAmount": 1000 },
+      "rules": [{ "when": { "plan": "enterprise" }, "value": { "provider": "adyen", "maxAmount": 10000 } }]
+    }
+  }
+}
