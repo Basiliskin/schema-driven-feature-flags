@@ -1,0 +1,84 @@
+{
+  "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-01-local-first-core-runtime-roadmap.json",
+  "roadmapTask": "Build a roadmap for the open-source schema-driven feature flag product (FeatureSync) described in docs/ (notes.md, notes-01.md, notes-02.md, playbooks/). Requirements: production-grade ready; DDD/SOLID/KISS/DRY; fully test-covered; LocalStack used only via environment config through the AWS SDK (no LocalStack-specific code paths).",
+  "createdAt": "2026-09-18T06:12:11Z",
+  "updatedAt": "2026-09-18T06:14:18Z",
+  "roadmapRevision": 0,
+  "phases": [
+    {
+      "phaseId": "monorepo-quality-gates",
+      "status": "awaiting-verification",
+      "attempts": 1,
+      "startedAt": "2026-09-18T06:12:11Z",
+      "baseRef": "c46fb3a8f31882065d4d6a738aa3732e231c365f",
+      "baseDirty": true,
+      "notes": "Already dirty at start: docs/roadmaps/ (untracked roadmap files). | Changed: package.json, pnpm-workspace.yaml, pnpm-lock.yaml, tsconfig.base.json, eslint.config.js, vitest.config.ts, .nvmrc, .gitignore, LICENSE, README.md, .github/workflows/ci.yml, packages/core/{package.json,tsconfig.json,tsconfig.build.json,src/index.ts,src/index.test.ts}. pnpm monorepo with strict TS 6, typed ESLint + import-x layer zones (domain<-app/infra, app<-infra), Vitest 5 v8 coverage at 100% thresholds, CI running pnpm verify on Node from .nvmrc. `pnpm verify` exits 0 locally; lint zones probed with throwaway violations (3/3 caught, removed). Unplanned files: .gitignore (node_modules/dist/coverage), lockfile, build tsconfig, smoke test so coverage has a target.",
+      "amendments": [
+        {
+          "at": "2026-09-18T06:14:18Z",
+          "by": "execute",
+          "reason": "Contract named vitest.workspace.ts, but the installed Vitest 5 removed workspace files; projects are declared via test.projects in vitest.config.ts. Same goal, same gates.",
+          "grounding": "vitest@5.0.1 installed; workspace file support removed in favour of test.projects.",
+          "before": {
+            "filesAffected": [
+              "package.json",
+              "pnpm-workspace.yaml",
+              "tsconfig.base.json",
+              "eslint.config.js",
+              "vitest.workspace.ts",
+              "packages/core/package.json",
+              "packages/core/tsconfig.json",
+              "packages/core/src/index.ts",
+              ".github/workflows/ci.yml",
+              "LICENSE",
+              "README.md",
+              ".nvmrc"
+            ]
+          },
+          "after": {
+            "filesAffected": [
+              "package.json",
+              "pnpm-workspace.yaml",
+              "tsconfig.base.json",
+              "eslint.config.js",
+              "vitest.config.ts",
+              "packages/core/package.json",
+              "packages/core/tsconfig.json",
+              "packages/core/src/index.ts",
+              ".github/workflows/ci.yml",
+              "LICENSE",
+              "README.md",
+              ".nvmrc"
+            ]
+          }
+        }
+      ],
+      "unplannedFiles": [
+        ".gitignore",
+        "packages/core/src/index.test.ts",
+        "packages/core/tsconfig.build.json",
+        "pnpm-lock.yaml"
+      ]
+    },
+    {
+      "phaseId": "snapshot-domain-model",
+      "status": "not-started",
+      "attempts": 0
+    },
+    {
+      "phaseId": "rule-evaluation-engine",
+      "status": "not-started",
+      "attempts": 0
+    },
+    {
+      "phaseId": "in-memory-flag-client",
+      "status": "not-started",
+      "attempts": 0
+    },
+    {
+      "phaseId": "local-file-snapshot-source",
+      "status": "not-started",
+      "attempts": 0
+    }
+  ]
+}

@@ -1,2 +1,5 @@
 .env
 docker/volume/
+node_modules/
+dist/
+coverage/

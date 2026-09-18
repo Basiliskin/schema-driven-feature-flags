@@ -1,0 +1,360 @@
+{
+  "task": "Build a roadmap for the open-source schema-driven feature flag product (FeatureSync) described in docs/ (notes.md, notes-01.md, notes-02.md, playbooks/). Requirements: production-grade ready; DDD/SOLID/KISS/DRY; fully test-covered; LocalStack used only via environment config through the AWS SDK (no LocalStack-specific code paths).",
+  "analysis": {
+    "objective": "Ship @featuresync/core: a local-first, Zod-typed feature flag and configuration runtime that loads a validated immutable snapshot from a local JSON file and evaluates flags in memory with atomic snapshot replacement.",
+    "successDefinition": "An application can defineFeature() with a Zod schema, point FEATURESYNC_FILE at a snapshot, and call isEnabled/get/evaluate/version/has/getAll/ready with zero network I/O; invalid snapshots are rejected while the previous one stays active; CI enforces strict TS, lint layer boundaries and 100% line/branch/function/statement coverage.",
+    "assumptions": [
+      "Greenfield repo: only docs/ and docker/docker-compose.yml (LocalStack) exist.",
+      "Toolchain: pnpm workspaces, TypeScript strict, Vitest (v8 coverage), ESLint flat config, Node 22 LTS, ESM output via tsup.",
+      "Zod is a peer dependency of @featuresync/core; the snapshot JSON contract stays language-neutral so future Python/Go SDKs can consume it.",
+      "MVP operators are equals, notEquals, in, and implicit AND across `when` keys; percentage rollout is excluded per docs section 28.",
+      "LocalStack is reached only through standard AWS SDK v3 env config (AWS_ENDPOINT_URL, AWS_REGION, credentials); no code branches on LocalStack. Applies from horizon 2 onward.",
+      "License: Apache-2.0 unless the owner chooses otherwise."
+    ],
+    "risks": [
+      "Snapshot JSON contract chosen now becomes a public, cross-language API; a wrong shape forces a breaking version later — include a schemaVersion field from day one.",
+      "100% coverage can be gamed with assertion-free tests; rubrics require behavioral assertions, not just execution.",
+      "Type-level API (inferring keys and config types from defineFeature) can become complex; keep it to key + config inference only.",
+      "Evaluation semantics (rule order, missing attributes, type mismatches) are easy to leave ambiguous and hard to change once published."
+    ],
+    "outOfScope": [
+      "S3 snapshot source, SNS listener, periodic reconciliation — horizon 2 (AWS adapters, LocalStack via env).",
+      "Publisher Lambda, CDK infrastructure, IAM roles (ApplicationRead/Publisher/Admin) — horizon 3.",
+      "@featuresync/nestjs module, decorators, guard — later horizon.",
+      "featuresync CLI (init/validate/pull/snapshot/publish/rollback) — later horizon.",
+      "React/MUI dashboard with schema-generated forms, diff preview, history, rollback — later horizon.",
+      "CI/CD examples and snapshot pinning — later horizon.",
+      "Metrics hooks (featuresync_* counters) — later horizon; never auto-sent telemetry.",
+      "Percentage rollout, analytics, experimentation, Redis, database, custom auth, multi-cloud — excluded from MVP by docs section 28."
+    ],
+    "domainShape": "business",
+    "domainShapeReason": "The core is rule-heavy domain logic: flag definitions, typed configuration, targeting rules, immutable versioned snapshots and their validity invariants.",
+    "ubiquitousLanguage": [
+      { "term": "Feature", "meaning": "A named flag, either boolean or typed config, identified by a kebab-case key." },
+      { "term": "Snapshot", "meaning": "An immutable, versioned, validated set of all features for one environment." },
+      { "term": "Rule", "meaning": "A `when` condition over context attributes plus the value returned when it matches; first match wins." },
+      { "term": "Evaluation Context", "meaning": "The attributes (plan, country, platform…) passed to evaluate(), validated by a Zod schema." },
+      { "term": "Snapshot Source", "meaning": "A port that loads a raw snapshot from somewhere (file now, S3 later)." },
+      { "term": "Atomic Swap", "meaning": "Replacing the active snapshot only after the new one fully validates, so readers see old-whole or new-whole." },
+      { "term": "Flag Client", "meaning": "The in-memory runtime object applications call: isEnabled/get/evaluate/version/has/getAll/ready." },
+      { "term": "Quality Gates", "meaning": "The CI checks every change must pass: typecheck, lint with layer boundaries, 100% coverage tests." }
+    ]
+  },
+  "discoveryFindings": [],
+  "requiredMaterials": [],
+  "phases": [
+    {
+      "id": "monorepo-quality-gates",
+      "order": 1,
+      "name": "Set up the monorepo with quality gates",
+      "goal": "A pnpm TypeScript monorepo where every package is typechecked, linted with layer-boundary rules, and tested with a hard 100% coverage threshold in CI.",
+      "rationale": "The requirement is production-grade and fully covered code. Enforcing that mechanically from the first commit is far cheaper than retrofitting it; layer-boundary lint rules keep the DDD layering honest without relying on review.",
+      "filesAffected": ["package.json", "pnpm-workspace.yaml", "tsconfig.base.json", "eslint.config.js", "vitest.workspace.ts", "packages/core/package.json", "packages/core/tsconfig.json", "packages/core/src/index.ts", ".github/workflows/ci.yml", "LICENSE", "README.md", ".nvmrc"],
+      "changes": [
+        "Create pnpm workspace with packages/* and a core package skeleton exporting from src/index.ts",
+        "Enable TypeScript strict plus noUncheckedIndexedAccess and exactOptionalPropertyTypes",
+        "Configure ESLint flat config with typescript-eslint type-aware rules and import/no-restricted-paths so src/domain imports nothing from application or infrastructure",
+        "Configure Vitest with v8 coverage and thresholds of 100 for lines, branches, functions, statements",
+        "Add CI workflow running install, typecheck, lint, test with coverage on push and PR",
+        "Add Apache-2.0 LICENSE and a README stating the local-first positioning"
+      ],
+      "boundedContext": "Build Tooling",
+      "layer": "cross-cutting",
+      "blastRadius": "small",
+      "inputs": ["docs/notes.md section 25 (packages) and 26 (stack)"],
+      "expectedResult": "`pnpm verify` runs typecheck, lint and tests with enforced 100% coverage, and the same command passes in GitHub Actions CI.",
+      "dependsOn": [],
+      "rubric": [
+        {
+          "id": "gates-actually-fail",
+          "label": "Gates fail on violations",
+          "ruleStatement": "Each gate must turn red on a real violation, not merely exist.",
+          "passCriteria": ["A deliberately uncovered branch makes `pnpm verify` exit non-zero", "A domain file importing from infrastructure fails lint", "A type error fails typecheck"],
+          "failureExamples": ["Coverage thresholds set but `--coverage` not passed in CI, so they never apply", "no-restricted-paths zones written with wrong globs so nothing is ever flagged"],
+          "minScore": 8
+        },
+        {
+          "id": "strict-typescript",
+          "label": "Strict compiler settings",
+          "ruleStatement": "Shared tsconfig enables strict and the unchecked-index/exact-optional flags for all packages.",
+          "passCriteria": ["packages extend tsconfig.base.json", "No package overrides strict to false"],
+          "failureExamples": ["Core tsconfig not extending the base, silently running non-strict"],
+          "minScore": 8
+        },
+        {
+          "id": "ci-parity",
+          "label": "CI runs the same command as local",
+          "ruleStatement": "CI invokes the identical verify script developers run locally.",
+          "passCriteria": ["ci.yml calls `pnpm verify`", "Node version pinned via .nvmrc and used by CI"],
+          "failureExamples": ["CI runs `vitest run` without coverage while local runs with it"],
+          "minScore": 7
+        }
+      ],
+      "healerHint": "Prove each gate by making it fail once on a throwaway violation before declaring the phase done."
+    },
+    {
+      "id": "snapshot-domain-model",
+      "order": 2,
+      "name": "Model flags, rules and snapshots as domain types",
+      "goal": "Pure domain types and Zod contracts for Feature, Rule, Snapshot and Version, plus a typed defineFeature() helper.",
+      "rationale": "Every other part of FeatureSync (runtime, S3 sync, publisher Lambda, UI, CLI) reads or writes the same snapshot. Defining it once as a validated, immutable, language-neutral JSON contract is the DRY centre of the whole product.",
+      "filesAffected": ["packages/core/src/domain/feature.ts", "packages/core/src/domain/rule.ts", "packages/core/src/domain/snapshot.ts", "packages/core/src/domain/snapshot-contract.ts", "packages/core/src/domain/define-feature.ts", "packages/core/src/domain/errors.ts", "packages/core/test/domain/"],
+      "changes": [
+        "Define the snapshot JSON contract in Zod: schemaVersion, environment, version (positive int), createdAt, createdBy, previousVersion, reason, features map",
+        "Model boolean and config features; config features carry default value and ordered rules",
+        "Create Snapshot as a deeply frozen value object built only through a parse function returning a Result (ok or typed validation error)",
+        "Add defineFeature({ key, schema, default, context? }) that validates the default against the schema at definition time and infers config/context TypeScript types",
+        "Validate that every rule value in a snapshot conforms to its feature's registered schema when definitions are supplied"
+      ],
+      "boundedContext": "Flag Definition",
+      "layer": "domain",
+      "blastRadius": "medium",
+      "inputs": ["docs/notes.md sections 2-4, 15, 24", "docs/notes-01.md context schema and type-safe API"],
+      "expectedResult": "A `parseSnapshot()` function that turns unknown JSON into an immutable typed Snapshot or a descriptive validation error, with defineFeature() providing inferred types.",
+      "dependsOn": ["monorepo-quality-gates"],
+      "rubric": [
+        {
+          "id": "contract-language-neutral",
+          "label": "Snapshot contract is language-neutral JSON",
+          "ruleStatement": "The persisted snapshot contains only JSON data; no Zod or TS-specific constructs leak into it.",
+          "passCriteria": ["Snapshot fixtures round-trip through JSON.stringify/parse unchanged", "schemaVersion field present and validated"],
+          "failureExamples": ["Storing serialized Zod schemas inside the snapshot", "Using Date objects that serialize differently than they parse"],
+          "minScore": 8
+        },
+        {
+          "id": "immutability-enforced",
+          "label": "Snapshots are immutable",
+          "ruleStatement": "A parsed Snapshot cannot be mutated at any depth.",
+          "passCriteria": ["Test proves nested config mutation throws or is impossible by type and at runtime"],
+          "failureExamples": ["Object.freeze on the top level only, leaving rules arrays mutable"],
+          "minScore": 8
+        },
+        {
+          "id": "validation-errors-actionable",
+          "label": "Validation errors name the path",
+          "ruleStatement": "Invalid snapshots produce errors naming the feature key and field path.",
+          "passCriteria": ["Tests assert error paths like features.payment-flow.rules[0].value.maxAmount"],
+          "failureExamples": ["Returning a generic 'invalid snapshot' string", "Throwing raw ZodError from the public API"],
+          "minScore": 7
+        },
+        {
+          "id": "domain-purity",
+          "label": "Domain has no I/O",
+          "ruleStatement": "Domain files import only zod and sibling domain files.",
+          "passCriteria": ["Lint boundary rule passes", "No fs, process.env or clock access in src/domain (createdAt is data, not Date.now())"],
+          "failureExamples": ["defineFeature reading process.env for the environment"],
+          "minScore": 8
+        },
+        {
+          "id": "type-inference-tested",
+          "label": "Inferred types are tested",
+          "ruleStatement": "Type inference from defineFeature is verified by type tests, not only runtime tests.",
+          "passCriteria": ["expectTypeOf or @ts-expect-error tests prove wrong config keys/enum values fail to compile"],
+          "failureExamples": ["Types that silently widen to any, passing every runtime test"],
+          "minScore": 7
+        }
+      ],
+      "healerHint": "Keep the domain a set of pure parse/construct functions over plain data; freeze deeply and test types with expectTypeOf."
+    },
+    {
+      "id": "rule-evaluation-engine",
+      "order": 3,
+      "name": "Build the local rule evaluation engine",
+      "goal": "A pure, deterministic function that evaluates a feature against an evaluation context and returns the resolved value.",
+      "rationale": "Local evaluation is the product's core promise: no network call per flag check. Rule semantics must be exact and fully specified because future SDKs in other languages must reproduce them from the same snapshot.",
+      "filesAffected": ["packages/core/src/domain/evaluation/evaluate.ts", "packages/core/src/domain/evaluation/operators.ts", "packages/core/test/domain/evaluation/", "docs/spec/evaluation-semantics.md"],
+      "changes": [
+        "Implement operators equals, notEquals, in; multiple keys in `when` combine with AND",
+        "Evaluate rules in order; first match returns its value, otherwise the feature default",
+        "A disabled feature returns disabled/default regardless of rules",
+        "Missing context attribute means the condition does not match (never throws)",
+        "Validate context against the feature's context schema when one is defined; invalid context returns the default and a typed reason",
+        "Return a result object { value, enabled, reason: 'RULE_MATCH' | 'DEFAULT' | 'DISABLED' | 'INVALID_CONTEXT', ruleIndex? }",
+        "Write docs/spec/evaluation-semantics.md as the cross-language contract with a shared JSON test-vector file"
+      ],
+      "boundedContext": "Evaluation",
+      "layer": "domain",
+      "blastRadius": "medium",
+      "inputs": ["Snapshot and Feature types from snapshot-domain-model", "docs/notes.md section 3, 14; docs/notes-01.md evaluation engine"],
+      "expectedResult": "`evaluate(feature, context)` returns a deterministic EvaluationResult, verified against a shared JSON test-vector file that documents the semantics.",
+      "dependsOn": ["snapshot-domain-model"],
+      "rubric": [
+        {
+          "id": "semantics-fully-specified",
+          "label": "Every edge case is specified and tested",
+          "ruleStatement": "Missing attributes, type mismatches, empty rules, disabled features and rule order each have a documented outcome and a test vector.",
+          "passCriteria": ["test-vectors.json covers each listed edge case", "Spec doc and tests reference the same vectors"],
+          "failureExamples": ["Comparing number 5 to string '5' with == so it matches in JS but not in a future Go SDK"],
+          "minScore": 8
+        },
+        {
+          "id": "pure-and-deterministic",
+          "label": "Pure and deterministic",
+          "ruleStatement": "Evaluation has no side effects, no I/O and no randomness.",
+          "passCriteria": ["Same inputs always give deep-equal output; property-based test with fast-check"],
+          "failureExamples": ["Caching results in a module-level Map keyed by context object reference"],
+          "minScore": 8
+        },
+        {
+          "id": "never-throws-on-bad-context",
+          "label": "Never throws at runtime",
+          "ruleStatement": "Bad or partial context degrades to the default with a reason, never an exception.",
+          "passCriteria": ["Fuzz/property test with arbitrary context never throws"],
+          "failureExamples": ["Calling .includes on an attribute that turned out to be undefined"],
+          "minScore": 8
+        },
+        {
+          "id": "open-closed-operators",
+          "label": "Operators extendable without editing evaluate",
+          "ruleStatement": "Operators live in a registry so new ones (later: percentage) are added without modifying the evaluation loop.",
+          "passCriteria": ["evaluate.ts has no switch on operator names"],
+          "failureExamples": ["A growing if/else chain inside evaluate()"],
+          "minScore": 7
+        }
+      ],
+      "healerHint": "Write the JSON test vectors first, then make evaluate() pass them; keep operators as a small typed registry."
+    },
+    {
+      "id": "in-memory-flag-client",
+      "order": 4,
+      "name": "Build the in-memory flag client with atomic swap",
+      "goal": "The public FeatureFlags client that holds the active snapshot in memory, answers flag queries synchronously, and replaces snapshots atomically through a SnapshotSource port.",
+      "rationale": "Applications need one small, predictable object to call. Keeping loading behind a port means the same client works with a local file now and S3/SNS later, with no change to application code.",
+      "filesAffected": ["packages/core/src/application/flag-client.ts", "packages/core/src/application/snapshot-source.port.ts", "packages/core/src/application/snapshot-store.ts", "packages/core/src/application/logger.port.ts", "packages/core/src/index.ts", "packages/core/test/application/"],
+      "changes": [
+        "Define SnapshotSource port: load(): Promise<unknown> and optional subscribe(onChange) for push-based sources",
+        "Implement SnapshotStore holding one immutable Snapshot reference, replaced only after parseSnapshot succeeds",
+        "Implement createFeatureFlags({ source, definitions?, logger?, allowStaleStartup? }) with isEnabled, get, evaluate, version, has, getAll, ready, refresh, close",
+        "ready() resolves after first valid load and rejects on startup failure unless allowStaleStartup with an initial snapshot",
+        "On an invalid or failed refresh keep the previous snapshot active and report through the injected logger",
+        "Make query methods synchronous and generic over defineFeature types so keys and return types are checked at compile time",
+        "Never throw from query methods; unknown key returns the definition default or false"
+      ],
+      "boundedContext": "Runtime Client",
+      "layer": "application",
+      "blastRadius": "medium",
+      "inputs": ["parseSnapshot and evaluate from previous phases", "docs/notes.md sections 5, 20-22"],
+      "expectedResult": "`createFeatureFlags()` returns a client whose queries are synchronous in-memory lookups and whose refresh swaps snapshots atomically, keeping the old one on failure.",
+      "dependsOn": ["snapshot-domain-model", "rule-evaluation-engine"],
+      "rubric": [
+        {
+          "id": "atomic-swap-proven",
+          "label": "Old-whole or new-whole, never partial",
+          "ruleStatement": "Readers never observe a partially applied snapshot, and failed refreshes leave the prior snapshot active.",
+          "passCriteria": ["Test: invalid second snapshot → version() still returns first version and logger received an error", "Test: concurrent refreshes resolve to the latest valid version without interleaving"],
+          "failureExamples": ["Assigning features into the existing map one by one while validating"],
+          "minScore": 9
+        },
+        {
+          "id": "zero-io-on-query",
+          "label": "No I/O on the query path",
+          "ruleStatement": "isEnabled/get/evaluate are synchronous and never call the source.",
+          "passCriteria": ["Test with a spy source asserts load() count is unchanged after 1,000 queries", "Methods return non-Promise values by type"],
+          "failureExamples": ["Lazy-loading on first get() call"],
+          "minScore": 9
+        },
+        {
+          "id": "dependency-inversion",
+          "label": "Depends only on ports",
+          "ruleStatement": "The application layer depends on SnapshotSource and Logger interfaces, never on fs or AWS.",
+          "passCriteria": ["Lint boundary passes", "All tests use in-memory fake sources"],
+          "failureExamples": ["Default source that silently imports the file adapter"],
+          "minScore": 8
+        },
+        {
+          "id": "startup-failure-modes",
+          "label": "Startup failure behaviour matches the spec",
+          "ruleStatement": "Startup without a valid snapshot fails ready(), unless allowStaleStartup is set with a fallback.",
+          "passCriteria": ["Tests for both modes", "Error type is exported and documented"],
+          "failureExamples": ["ready() resolving with an empty snapshot so every flag silently reads false"],
+          "minScore": 8
+        },
+        {
+          "id": "small-public-surface",
+          "label": "Small, documented public API",
+          "ruleStatement": "index.ts exports only the client factory, defineFeature, ports, result and error types.",
+          "passCriteria": ["API surface snapshot test (e.g. exported names list) is checked in", "TSDoc on every export"],
+          "failureExamples": ["Exporting SnapshotStore internals for convenience in tests"],
+          "minScore": 7
+        }
+      ],
+      "healerHint": "Hold a single immutable reference and replace it in one assignment after validation; test with fake sources only."
+    },
+    {
+      "id": "local-file-snapshot-source",
+      "order": 5,
+      "name": "Load snapshots from a local JSON file",
+      "goal": "A SnapshotSource adapter that reads a snapshot from the path in FEATURESYNC_FILE, with optional file watching, proven end to end.",
+      "rationale": "Developers must be able to use FeatureSync with no AWS at all (docs section 8). This adapter also proves the port design and gives the first end-to-end usable release of @featuresync/core.",
+      "filesAffected": ["packages/core/src/infrastructure/file-snapshot-source.ts", "packages/core/src/infrastructure/config-from-env.ts", "packages/core/test/infrastructure/", "packages/core/test/e2e/file-to-evaluate.test.ts", "examples/node-local/", "packages/core/README.md"],
+      "changes": [
+        "Implement FileSnapshotSource reading and JSON-parsing a file path; read errors and malformed JSON surface as typed load errors",
+        "Add optional watch mode using fs.watch with debounce that triggers client refresh",
+        "Add createFeatureFlagsFromEnv() that reads FEATURESYNC_FILE and builds the client with the file source",
+        "Write an end-to-end test: temp file → ready() → evaluate() → rewrite with invalid JSON → old version kept → rewrite valid → new version active",
+        "Add examples/node-local showing defineFeature + evaluate, and document usage in the package README"
+      ],
+      "boundedContext": "Snapshot Distribution",
+      "layer": "infrastructure",
+      "blastRadius": "small",
+      "inputs": ["SnapshotSource port from in-memory-flag-client", "docs/notes.md section 8"],
+      "expectedResult": "Setting FEATURESYNC_FILE and calling createFeatureFlagsFromEnv() yields a working client, proven by an end-to-end test using real temp files.",
+      "dependsOn": ["in-memory-flag-client"],
+      "compensation": "Adapter is additive; revert the infrastructure folder and env factory export without touching domain or application code.",
+      "rubric": [
+        {
+          "id": "real-fs-e2e",
+          "label": "End-to-end on real files",
+          "ruleStatement": "The e2e test uses real temp files and the public API only.",
+          "passCriteria": ["Test uses os.tmpdir, cleans up, imports only from the package entry"],
+          "failureExamples": ["Mocking fs in the e2e test, so path and encoding bugs go unseen"],
+          "minScore": 8
+        },
+        {
+          "id": "env-config-only",
+          "label": "Configuration only through env/options",
+          "ruleStatement": "Environment variables are read only in config-from-env.ts; the adapter takes explicit options.",
+          "passCriteria": ["grep shows process.env only in config-from-env.ts", "Missing FEATURESYNC_FILE yields a clear config error"],
+          "failureExamples": ["FileSnapshotSource reading process.env internally, making it untestable in isolation"],
+          "minScore": 8
+        },
+        {
+          "id": "watch-resilience",
+          "label": "Watch mode survives bad writes",
+          "ruleStatement": "Partial or invalid file writes during watch never replace the active snapshot and never crash the process.",
+          "passCriteria": ["Test writes truncated JSON during watch and asserts version unchanged", "close() stops the watcher with no open handles"],
+          "failureExamples": ["Unhandled rejection from a read racing with an editor's atomic-save rename"],
+          "minScore": 8
+        },
+        {
+          "id": "usable-example",
+          "label": "Example runs as documented",
+          "ruleStatement": "examples/node-local runs with the README commands and prints evaluated values.",
+          "passCriteria": ["CI runs the example as a smoke test"],
+          "failureExamples": ["Example importing from src paths that differ from the published entry"],
+          "minScore": 7
+        }
+      ],
+      "healerHint": "Keep env parsing in one tiny factory and prove the adapter with real temp files, including a truncated-write case."
+    }
+  ],
+  "successCriteria": [
+    "An application can defineFeature() with a Zod schema, point FEATURESYNC_FILE at a snapshot, and call isEnabled/get/evaluate/version/has/getAll/ready with zero network I/O; invalid snapshots are rejected while the previous one stays active; CI enforces strict TS, lint layer boundaries and 100% coverage.",
+    "Set up the monorepo with quality gates: `pnpm verify` runs typecheck, lint and tests with enforced 100% coverage, and passes in GitHub Actions CI.",
+    "Model flags, rules and snapshots as domain types: parseSnapshot() turns unknown JSON into an immutable typed Snapshot or a descriptive validation error.",
+    "Build the local rule evaluation engine: evaluate(feature, context) is deterministic and verified against shared JSON test vectors.",
+    "Build the in-memory flag client with atomic swap: synchronous queries, atomic refresh, old snapshot kept on failure.",
+    "Load snapshots from a local JSON file: createFeatureFlagsFromEnv() works end to end on real files."
+  ],
+  "deferred": [
+    "S3 snapshot source, SNS listener, periodic reconciliation — horizon 2; integration tests hit LocalStack purely via AWS SDK env config (AWS_ENDPOINT_URL etc.), no LocalStack code paths.",
+    "Publisher Lambda (validate, version, write snapshot, update current.json, publish SNS, audit metadata), CDK stack and least-privilege IAM roles — horizon 3.",
+    "@featuresync/nestjs module, DI, @FeatureFlag decorator, FeatureFlagGuard — later horizon.",
+    "featuresync CLI: init, validate, pull, snapshot (with --version pinning), publish, rollback — later horizon.",
+    "Dashboard (React/Vite/MUI): environments, feature list, schema-generated forms, rules UI, diff preview, version history, rollback — later horizon.",
+    "CI/CD examples (GitHub Actions, pinned snapshots, offline tests) — later horizon.",
+    "Metrics hooks (snapshot version/age, sync totals/errors, evaluation totals) exposed for user-wired OpenTelemetry/Prometheus; no automatic telemetry — later horizon.",
+    "Percentage rollout, analytics, experimentation, Redis, database, custom auth, multi-cloud, extra SDKs — excluded from MVP by docs section 28."
+  ],
+  "revision": 0
+}
