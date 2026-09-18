@@ -93,6 +93,39 @@ Without `s3:ListBucket`, S3 answers a request for a missing key with `403 Access
 `404 NoSuchKey`. The reader therefore treats both as "not found", while keeping the original error
 as the cause so a genuine permission problem stays visible in logs.
 
+## Change detection
+
+A reader follows changes by polling `<env>/current.json`; it never lists the bucket.
+
+- **Conditional GET.** Each poll sends `GetObject` with `IfNoneMatch` set to the pointer ETag it last
+  saw. The first poll, before any ETag is known, sends no condition.
+- **304 means no change.** With `@aws-sdk/client-s3` the `304 Not Modified` answer does not come back
+  as a response: `send()` rejects with a service error whose `$metadata.httpStatusCode` is `304`
+  (there is no `NotModified` exception class). The reader treats that rejection as "unchanged" and
+  every other rejection as a failure it logs while keeping the active snapshot. LocalStack answers
+  the same way; the integration suite asserts it.
+- **Version dedup.** A changed pointer is delivered only when its `version` differs from the one
+  already loaded. A pointer rewritten with the same version (new ETag, same content) only updates the
+  stored ETag. Snapshots are immutable per version, so the version is the identity.
+- **Reconciliation.** Every `reconcileIntervalMs` (default 10 minutes, never below the poll
+  interval) one poll omits `IfNoneMatch` and reads the pointer in full, so a change an ETag
+  comparison missed still arrives. Version dedup applies to it as to any other poll.
+
+### Local S3 endpoint
+
+The reader builds its client from the standard AWS SDK environment only; there is no LocalStack
+code path. The integration suite runs with:
+
+| Variable | Value |
+|---|---|
+| `AWS_ENDPOINT_URL_S3` | `http://s3.localhost.localstack.cloud:4566` |
+| `AWS_REGION` | `us-east-1` |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | `test` / `test` |
+
+The JavaScript SDK has no environment variable for path-style addressing. None is needed: the SDK
+keeps its default virtual-hosted addressing (`<bucket>.s3.localhost.localstack.cloud`), and every
+subdomain of `localhost.localstack.cloud` resolves to `127.0.0.1`.
+
 ## Failure modes
 
 A reader only fetches and reports; the flag client decides what a failure means. Its behaviour is

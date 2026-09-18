@@ -1,0 +1,213 @@
+{
+  "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-03-s3-change-polling-localstack-ci-roadmap.json",
+  "roadmapTask": "Plan FeatureSync horizon 3: S3 change polling in @featuresync/aws (subscribe with conditional GETs, reconciliation, version dedup), an opt-in env-only LocalStack integration suite on a pinned image, and a CI job that fails when LOCALSTACK_AUTH_TOKEN is missing.",
+  "createdAt": "2026-09-18T08:29:45Z",
+  "updatedAt": "2026-09-18T09:02:54Z",
+  "roadmapRevision": 0,
+  "phases": [
+    {
+      "phaseId": "poll-current-pointer-subscribe",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-18T08:29:45Z",
+      "baseRef": "2c3fa7e91644353c9cd0d3415eab533535c25ca3",
+      "baseDirty": true,
+      "notes": " VERIFY: grading payload was notes + 4-file list, grader read files itself; no 10s to demote; no compensation defined.",
+      "unplannedFiles": [
+        "packages/aws/test/infrastructure/fake-s3.ts"
+      ],
+      "completedAt": "2026-09-18T08:38:45Z",
+      "gateRun": "core-build: pass; typecheck: pass; lint: pass; test (vitest --coverage, 100% thresholds, 189 tests): pass",
+      "gradeResult": {
+        "phaseId": "poll-current-pointer-subscribe",
+        "dimensionScores": [
+          {
+            "dimensionId": "not-modified-detection",
+            "score": 9,
+            "pass": true,
+            "evidence": "304 by status or NotModified name checked before toS3Error; IfNoneMatch omitted with no ETag; tests cover status, name, and first-tick omission."
+          },
+          {
+            "dimensionId": "version-dedup-delivery",
+            "score": 9,
+            "pass": true,
+            "evidence": "Dedup on shared loaded.version, set only after snapshot GET succeeds; raw JSON delivered, no validation; ETag-only change and load-then-subscribe tested."
+          },
+          {
+            "dimensionId": "timer-lifecycle-safety",
+            "score": 8,
+            "pass": true,
+            "evidence": "Chained setTimeout re-armed in finally only if !stopped; per-closure timer. Gaps: in-flight unsubscribe test does not use a post-load new version; no double-subscribe test."
+          },
+          {
+            "dimensionId": "transient-error-recovery",
+            "score": 9,
+            "pass": true,
+            "evidence": "Logger gets keeping-the-active-snapshot wording; chain continues; recovery and failed-snapshot-fetch retry tested."
+          },
+          {
+            "dimensionId": "options-and-refactor-integrity",
+            "score": 7,
+            "pass": true,
+            "evidence": "Number.isFinite && >0 validation, aws-local console logger, shared load path, default 30000 tested. Gap: no non-number pollIntervalMs test; fake-s3.ts outside filesAffected."
+          }
+        ],
+        "overallPass": true
+      }
+    },
+    {
+      "phaseId": "add-reconciliation-pass",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-18T08:43:18Z",
+      "baseRef": "2c3fa7e91644353c9cd0d3415eab533535c25ca3",
+      "baseDirty": true,
+      "notes": "Base dirty (uncommitted phase poll-current-pointer-subscribe work): s3-snapshot-source.ts, fake-s3.ts, load/subscribe tests, discoveries.md, ledger files. Changed: packages/aws/src/infrastructure/s3-snapshot-source.ts, packages/aws/test/infrastructure/s3-snapshot-source.subscribe.test.ts. Adds reconcileIntervalMs (default 600000, finite and >= pollIntervalMs); on the single chained timer a tick past the interval sends GetObject without IfNoneMatch, then the same version dedup/ETag refresh applies. Tests: stale-ETag delivery, unchanged version + ETag refresh + repeat, equal intervals, default 10min, unsubscribe clears timer, bad options. VERIFY: first grade failed reconcile-dedup-and-etag-refresh (7<8: no test of snapshot fetch error on a reconciliation tick). Healer: added that test to subscribe.test.ts (test-only, scoped); re-graded that dimension only (9), other 3 carried forward. Grading payload: notes + file list, grader read files itself. No 10s to demote; no compensation defined.",
+      "completedAt": "2026-09-18T08:48:21Z",
+      "gateRun": "core-build: pass; typecheck: pass; lint: pass; test (vitest --coverage, 100% thresholds, 200 tests): pass",
+      "gradeResult": {
+        "phaseId": "add-reconciliation-pass",
+        "overallPass": true,
+        "dimensionScores": [
+          {
+            "dimensionId": "reconcile-bypasses-etag",
+            "score": 9,
+            "pass": true,
+            "evidence": "Stale-ETag test delivers {v:2} once; ifNoneMatch trace proves normal ticks conditional. fetchText spreads {} so key is absent, but no test asserts key absence."
+          },
+          {
+            "dimensionId": "reconcile-dedup-and-etag-refresh",
+            "score": 9,
+            "pass": true,
+            "evidence": "(re-graded after healer) All 3 criteria tested; new test uses stale ETag so only the next reconciliation can retry; checks exact log and {v:2} delivery. Not 10: no request trace for in-between ticks."
+          },
+          {
+            "dimensionId": "single-timer-invariant",
+            "score": 8,
+            "pass": true,
+            "evidence": "One setTimeout in schedule(); reconciliation is a flag inside tick; getTimerCount()===0 after unsubscribe post-reconcile. Hanging-GetObject test never passes reconcileIntervalMs."
+          },
+          {
+            "dimensionId": "reconcile-interval-validation",
+            "score": 9,
+            "pass": true,
+            "evidence": "Rejects INTERVAL-1, 0, -1, NaN, Infinity; compares with caller pollIntervalMs using <, equality accepted and tested; 10-min default shown; coverage 100%."
+          }
+        ]
+      }
+    },
+    {
+      "phaseId": "localstack-integration-suite",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-18T08:51:42Z",
+      "baseRef": "2c3fa7e91644353c9cd0d3415eab533535c25ca3",
+      "baseDirty": true,
+      "notes": "Base dirty (uncommitted phases 1-2 work): s3-snapshot-source.ts, fake-s3.ts, load/subscribe tests, discoveries.md, ledger files. Changed: docker/docker-compose.yml, packages/aws/vitest.integration.config.ts, packages/aws/integration/s3-snapshot-source.localstack.test.ts, packages/aws/package.json, .env.example, docs/spec/s3-layout.md, package.json, packages/aws/tsconfig.json, vitest.config.ts, blockers.md. Pins localstack/localstack:2026.08.3 with curl healthcheck and SERVICES=s3; adds env-only LocalStack suite (load, change delivered once, unchanged pointer rejects with 304 and no delivery; unique bucket emptied/deleted in afterAll); integration config reads AWS_* from process env or root .env; root vitest now uses inline per-package projects that exclude integration/** (directory projects ignored root exclude); spec gains Change detection section. Implementation-time checks: test:integration passed twice in a row against the already-running localstack-aws container (same image digest as 2026.08.3), no leftover buckets; pnpm verify passed with AWS_ENDPOINT_URL_S3 unset and listed no localstack tests. NOT run: docker compose up --wait, because the user container localstack-aws already holds port 4566; compose config validated only. VERIFY: passed first grade, no healer. Grading payload: notes + 10-file list, grader read files itself. No 10s to demote. docker compose up --wait not run literally (port 4566 held by user container localstack-pro:latest); pinned image healthcheck proven in a portless throwaway container instead. Compensation: delete any leftover featuresync-* test buckets in local LocalStack; nothing touches real AWS.",
+      "unplannedFiles": [
+        "package.json",
+        "packages/aws/tsconfig.json",
+        "vitest.config.ts",
+        "docs/roadmaps/featuresync/blockers.md"
+      ],
+      "completedAt": "2026-09-18T08:58:37Z",
+      "gradeResult": {
+        "phaseId": "localstack-integration-suite",
+        "overallPass": true,
+        "dimensionScores": [
+          {
+            "dimensionId": "env-only-configuration",
+            "score": 8,
+            "pass": true,
+            "evidence": "Suite uses new S3Client({}) (test:24); no endpoint/4566/localstack in packages/aws/src. .env.example lists AWS_* and LOCALSTACK_AUTH_TOKEN, no path-style var; documents virtual-host addressing instead."
+          },
+          {
+            "dimensionId": "isolation-from-verify",
+            "score": 9,
+            "pass": true,
+            "evidence": "Root vitest.config.ts:13 excludes integration/** per project; integration config includes only *.localstack.test.ts, coverage off; eslint does not ignore integration; verify exit 0."
+          },
+          {
+            "dimensionId": "real-behaviour-assertions",
+            "score": 9,
+            "pass": true,
+            "evidence": "Three named tests; exactly-once waits 3x200ms with toHaveBeenCalledTimes(1); pollUntil has timeout; unchanged test needs 3 real 304 rejections; unsubscribe in afterEach."
+          },
+          {
+            "dimensionId": "repeatable-cleanup",
+            "score": 8,
+            "pass": true,
+            "evidence": "randomUUID bucket; afterAll empties then deletes, runs on failure; two consecutive runs passed. emptyBucket skips pagination (few objects)."
+          },
+          {
+            "dimensionId": "pinned-healthchecked-image-and-spec",
+            "score": 8,
+            "pass": true,
+            "evidence": "Pins 2026.08.3; curl healthcheck with interval/timeout/retries reached healthy; token guard + SERVICES=s3; s3-layout.md Change detection section. Literal compose up --wait not run."
+          }
+        ]
+      },
+      "gateRun": "core-build: pass; typecheck: pass; lint: pass; test (vitest --coverage, 100% thresholds, 200 tests, AWS_ENDPOINT_URL_S3 unset, no localstack files listed): pass; test:integration x2 against running LocalStack: pass (3 tests each); pinned image 2026.08.3 healthcheck in throwaway container: healthy ~15s"
+    },
+    {
+      "phaseId": "localstack-ci-job",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-18T08:59:59Z",
+      "baseRef": "2c3fa7e91644353c9cd0d3415eab533535c25ca3",
+      "baseDirty": true,
+      "notes": "Base dirty (uncommitted phases 1-3 work + ledger/memory files). Changed: .github/workflows/ci.yml. Adds a localstack job next to verify: job-level AWS_* env (same values as .env.example); first step after checkout maps secrets.LOCALSTACK_AUTH_TOKEN to env TOKEN and exits 1 with ::error missing-token message when empty (no job if:, no continue-on-error); same pnpm/node(.nvmrc)/frozen-lockfile setup as verify; docker compose -f docker/docker-compose.yml up -d --wait with LOCALSTACK_AUTH_TOKEN in step env; pnpm test:integration (root script builds core first); failure() log dump and always() compose down -v. YAML parse ok; actionlint not installed locally; job not run on GitHub (no push). VERIFY: passed first grade, no healer. Grading payload: notes + 1-file diff (37 lines). No 10s to demote. No compensation defined.",
+      "unplannedFiles": [],
+      "amendments": [
+        {
+          "at": "2026-09-18T08:59:59Z",
+          "by": "execute",
+          "reason": "Contract said to set a path-style env var; the JS SDK has no env var for forcePathStyle and the suite uses virtual-host addressing via s3.localhost.localstack.cloud, so CI mirrors .env.example without one.",
+          "grounding": "discoveries.md 2026-09-18 horizon 3 localstack entry; .env.example comment",
+          "before": {
+            "changes": [
+              "Add a job named localstack next to verify, reusing checkout, pnpm setup, node from .nvmrc and pnpm install --frozen-lockfile.",
+              "Add a first step that exits 1 with a message like 'LOCALSTACK_AUTH_TOKEN secret is missing; the LocalStack integration job requires it (fork PRs fail by design)' when the secret is empty.",
+              "Start the pinned LocalStack with docker compose -f docker/docker-compose.yml up -d --wait so the job uses the same pinned image and healthcheck.",
+              "Set the AWS SDK env vars for the job (endpoint, region, dummy credentials, path-style), build core, then run the integration script."
+            ]
+          },
+          "after": {
+            "changes": [
+              "Add a job named localstack next to verify, reusing checkout, pnpm setup, node from .nvmrc and pnpm install --frozen-lockfile.",
+              "Add a first step that exits 1 with a message like 'LOCALSTACK_AUTH_TOKEN secret is missing; the LocalStack integration job requires it (fork PRs fail by design)' when the secret is empty.",
+              "Start the pinned LocalStack with docker compose -f docker/docker-compose.yml up -d --wait so the job uses the same pinned image and healthcheck.",
+              "Set the same AWS SDK env vars as .env.example (endpoint, region, dummy credentials; no path-style var), then run the root test:integration script, which builds core first."
+            ]
+          }
+        }
+      ],
+      "completedAt": "2026-09-18T09:02:54Z",
+      "gateRun": "verify (core-build, typecheck, lint, test 100% coverage): pass; ci.yml YAML parse: pass; actionlint (rhysd/actionlint docker): pass; job not run on GitHub (no push)",
+      "gradeResult": {
+        "phaseId": "localstack-ci-job",
+        "overallPass": true,
+        "dimensionScores": [
+          {
+            "dimensionId": "fail-fast-missing-token",
+            "score": 9,
+            "pass": true,
+            "evidence": "Secret mapped to env TOKEN, [ -z ] check exits 1 with ::error before install/compose; no job if:, no continue-on-error. Not 10: fork-PR path untested on GitHub."
+          },
+          {
+            "dimensionId": "pinned-compose-with-wait",
+            "score": 8,
+            "pass": true,
+            "evidence": "Only compose -f docker/docker-compose.yml up -d --wait, no services:; token in step env; failure() log dump, always() down -v."
+          },
+          {
+            "dimensionId": "env-parity-and-ordering",
+            "score": 8,
+            "pass": true,
+            "evidence": "Env matches .env.example; no path-style var is a sound amendment (SDK v3 has none; virtual-host resolves). .nvmrc + frozen-lockfile; core built first; actionlint clean."
+          }
+        ]
+      }
+    }
+  ]
+}

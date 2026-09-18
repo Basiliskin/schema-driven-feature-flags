@@ -8,7 +8,7 @@
 - [landed] 2026-09-18 | horizon 1 | evaluation | Snapshot boolean features have no default: an enabled one is on with zero rules, off when rules exist and none match [docs/spec/evaluation-semantics.md] → revisit — see horizon-02 roadmap.md
 - [landed] 2026-09-18 | horizon 1 | api | Public index no longer exports parseSnapshot/evaluate/SNAPSHOT_SCHEMA_VERSION (small-surface rubric) [packages/core/src/index.ts] → CLI validate must re-export parseSnapshot deliberately.
 - [landed] 2026-09-18 | horizon 1 | watch | fs.watch on a file stops after an atomic-save rename; the file source watches the directory and dedupes by content — see horizon-01 roadmap.md
-- [landed] 2026-09-18 | horizon 2 | port | SnapshotSource is {load(): Promise<unknown>; subscribe?(onChange): Unsubscribe}, no stop/error hook [packages/core/src/application/snapshot-source.port.ts] → S3 timers live in — see horizon-02 roadmap.md
+- [landed] 2026-09-18 | horizon 2 | port | SnapshotSource is {load(): Promise<unknown>; subscribe?(onChange): Unsubscribe}, no stop/error hook [packages/core/src/application/snapshot-source.port.ts] → S3 timers — see horizon-03 roadmap.md
 - [landed] 2026-09-18 | horizon 2 | client | createFeatureFlags validates every pushed/loaded value, keeps last good, throws StartupError only with no fallback [packages/core/src/application/flag-client.ts] → — see horizon-02 roadmap.md
 - [landed] 2026-09-18 | horizon 2 | api | core exports neither parseSnapshot nor consoleLogger [packages/core/src/index.ts] → sibling packages need their own default logger and must not validate snapshots.
 - [landed] 2026-09-18 | horizon 2 | coverage | root vitest projects packages/* with coverage include packages/*/src at 100% [vitest.config.ts] → new packages are gated automatically; integration tests need a separate config.
@@ -23,3 +23,6 @@
 - 2026-09-18 | horizon 3 | error mapping | Failed GetObject becomes S3SnapshotError: POINTER_NOT_FOUND/SNAPSHOT_NOT_FOUND when NoSuchKey/AccessDenied/404/403, — see horizon-03 roadmap.md
 - 2026-09-18 | horizon 3 | vitest/coverage | Root vitest.config.ts: projects ['packages/*'], v8 coverage over packages/*/src/**/*.ts at 100% all metrics. verify = [vitest.config.ts] → LocalStack suite must be — see horizon-03 roadmap.md
 - 2026-09-18 | horizon 3 | AWS SDK 304 behavior | @aws-sdk/client-s3 3.1135.0; GetObject accepts IfNoneMatch; no NotModified exception class — a 304 goes through the — see horizon-03 roadmap.md
+- 2026-09-18 | horizon 3 | subscribe timing | createFeatureFlags calls subscribe() at construction, before load() resolves, so the S3 poller reads the shared loaded {etag, version} at each tick rather than capturing it at subscribe time.
+- 2026-09-18 | horizon 3 | vitest | Directory projects ('packages/*') ignore root test.exclude; root now builds inline projects per package excluding integration/** [vitest.config.ts] → new packages are still picked up automatically.
+- 2026-09-18 | horizon 3 | localstack | SDK v3 against LocalStack 2026.08.3: IfNoneMatch hit rejects with $metadata.httpStatusCode 304; virtual-host via s3.localhost.localstack.cloud needs no path-style env — see horizon-03 roadmap.md

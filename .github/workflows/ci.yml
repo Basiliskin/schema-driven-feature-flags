@@ -17,3 +17,40 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify
       - run: pnpm example:node-local
+
+  localstack:
+    runs-on: ubuntu-latest
+    env:
+      AWS_ENDPOINT_URL_S3: http://s3.localhost.localstack.cloud:4566
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require LOCALSTACK_AUTH_TOKEN
+        env:
+          TOKEN: ${{ secrets.LOCALSTACK_AUTH_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::LOCALSTACK_AUTH_TOKEN secret is missing; the LocalStack integration job requires it (fork PRs fail by design)"
+            exit 1
+          fi
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Start LocalStack
+        env:
+          LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_AUTH_TOKEN }}
+        run: docker compose -f docker/docker-compose.yml up -d --wait
+      - run: pnpm test:integration
+      - name: LocalStack logs
+        if: failure()
+        run: docker compose -f docker/docker-compose.yml logs localstack
+      - name: Stop LocalStack
+        if: always()
+        env:
+          LOCALSTACK_AUTH_TOKEN: unused
+        run: docker compose -f docker/docker-compose.yml down -v

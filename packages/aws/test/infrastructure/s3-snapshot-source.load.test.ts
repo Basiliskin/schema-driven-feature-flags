@@ -2,6 +2,7 @@ import { GetObjectCommand, type S3Client } from '@aws-sdk/client-s3';
 import { describe, expect, it, vi } from 'vitest';
 import { S3SnapshotError, type S3SnapshotErrorReason } from '../../src/infrastructure/s3-snapshot-error.js';
 import { createS3SnapshotSource } from '../../src/infrastructure/s3-snapshot-source.js';
+import { current, fakeS3, pointer, s3Error, type StoredObject } from './fake-s3.js';
 
 const { constructedWith } = vi.hoisted(() => ({
   constructedWith: [] as unknown[],
@@ -19,34 +20,6 @@ vi.mock('@aws-sdk/client-s3', async (importOriginal) => {
   }
   return { ...actual, S3Client };
 });
-
-type StoredObject = { readonly body?: string; readonly etag?: string } | { readonly error: Error };
-
-const pointer = (version: number, environment = 'production') => ({
-  schemaVersion: 1,
-  environment,
-  version,
-  snapshotKey: `${environment}/snapshots/${String(version)}.json`,
-});
-
-const s3Error = (name: string, httpStatusCode: number) =>
-  Object.assign(new Error(name), { name, $metadata: { httpStatusCode } });
-
-const fakeS3 = (objects: Record<string, StoredObject>) => {
-  const keys: string[] = [];
-  const send = vi.fn((command: GetObjectCommand) => {
-    const key = command.input.Key ?? '';
-    keys.push(key);
-    const object = objects[key] ?? { error: s3Error('NoSuchKey', 404) };
-    if ('error' in object) return Promise.reject(object.error);
-    const { body, etag } = object;
-    return Promise.resolve({
-      ETag: etag,
-      Body: body === undefined ? undefined : { transformToString: () => Promise.resolve(body) },
-    });
-  });
-  return { client: { send } as unknown as Pick<S3Client, 'send'>, keys, send };
-};
 
 const sourceOver = (objects: Record<string, StoredObject>) => {
   const fake = fakeS3(objects);
@@ -81,11 +54,6 @@ const expectFailure = async (
   expect(error.message).toBe(`${reason} for s3 object ${key}`);
   return error;
 };
-
-const current = (version: number, etag = `"v${String(version)}"`): StoredObject => ({
-  body: JSON.stringify(pointer(version)),
-  etag,
-});
 
 describe('createS3SnapshotSource load', () => {
   it('reads the current pointer, then the snapshot it names, and returns the raw JSON', async () => {
@@ -324,7 +292,7 @@ describe('createS3SnapshotSource load', () => {
       });
 
       expect(constructedWith).toEqual([{}]);
-      expect(Object.keys(source)).toEqual(['load']);
+      expect(Object.keys(source)).toEqual(['load', 'subscribe']);
     });
 
     it('sends requests through the default client when none is injected', async () => {
