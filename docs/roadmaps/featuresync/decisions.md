@@ -7,3 +7,6 @@
 - 2026-09-18 | horizon 2 | Apps detect snapshot changes by polling current.json (ETag) plus reconciliation first; SNS→SQS push comes in a later horizon — because the user chose polling first.
 - 2026-09-18 | horizon 2 | @aws-sdk/client-s3 is a peer (and dev) dependency of @featuresync/aws, never a direct dependency — because consumers must control their single SDK copy.
 - 2026-09-18 | horizon 2 | @featuresync/aws never validates Snapshots itself; it hands raw JSON to core, which validates every value — because parseSnapshot stays private to core.
+- 2026-09-18 | horizon 3 | S3 polling dedupes deliveries by pointer version, not ETag or content hash — because snapshots are immutable per version (user choice).
+- 2026-09-18 | horizon 3 | The LocalStack CI job fails, never skips, when LOCALSTACK_AUTH_TOKEN is missing, fork PRs included — because the user chose a strict bar.
+- 2026-09-18 | horizon 3 | Integration tests live in packages/aws/integration with their own vitest config, outside root coverage — because verify must not need LocalStack.
