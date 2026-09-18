@@ -26,11 +26,15 @@ export type PointerResult =
 export const snapshotKeyFor = (environment: string, version: number): string =>
   `${environment}/snapshots/${String(version)}.json`;
 
+export const environmentSchema = z.string().min(1).regex(/^[^/]+$/, 'environment must not contain "/"');
+
+export const versionSchema = z.int().positive();
+
 const pointerSchema = z
   .object({
     schemaVersion: z.literal(POINTER_SCHEMA_VERSION),
-    environment: z.string().min(1).regex(/^[^/]+$/, 'environment must not contain "/"'),
-    version: z.int().positive(),
+    environment: environmentSchema,
+    version: versionSchema,
     snapshotKey: z.string(),
   })
   .refine((pointer) => pointer.snapshotKey === snapshotKeyFor(pointer.environment, pointer.version), {

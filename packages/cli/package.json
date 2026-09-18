@@ -1,0 +1,27 @@
+{
+  "name": "@featuresync/cli",
+  "version": "0.0.0",
+  "description": "Command-line tool to validate, publish and roll back FeatureSync snapshots.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "featuresync": "dist/bin.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@featuresync/aws": "workspace:*",
+    "@featuresync/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "@aws-sdk/client-s3": "^3.1135.0"
+  },
+  "devDependencies": {
+    "@aws-sdk/client-s3": "^3.1135.0"
+  }
+}

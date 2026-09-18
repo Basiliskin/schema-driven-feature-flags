@@ -1,0 +1,223 @@
+{
+  "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-04-snapshot-publisher-cli-roadmap.json",
+  "roadmapTask": "Plan horizon 4 of FeatureSync (docs/roadmaps/featuresync): the write side — a snapshot publisher that validates and writes immutable versioned snapshots plus the current pointer per docs/spec/s3-layout.md, driven by a small CLI (validate / publish / rollback).",
+  "createdAt": "2026-09-18T09:20:02Z",
+  "updatedAt": "2026-09-18T12:55:00Z",
+  "roadmapRevision": 0,
+  "phases": [
+    {
+      "phaseId": "core-export-parse-snapshot",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-18T09:20:02Z",
+      "baseRef": "85f1379aebedc5f69b45afd33e894e17ee685275",
+      "baseDirty": true,
+      "notes": "Already dirty at start: docs/roadmaps/featuresync/{blockers,decisions,discoveries,state}.md, horizon-04 roadmap .json/.md | Changed: packages/core/src/index.ts, packages/core/test/index.test.ts (new), packages/core/test/application/public-api.test.ts. Exports parseSnapshot from the core entry point with a doc comment; new entry-point test covers accept + field-level reject; existing public-API key-list test updated to include parseSnapshot (would fail otherwise). Note: reverses horizon-2 decision that parseSnapshot stays private to core — planned by horizon 4. | VERIFY: first grade failed accept-reject-contract 6<7 (accept test checked no Snapshot field; reject test never asserted non-empty message). Healer: test now asserts value.version and non-empty issue message; verify green; re-graded accept-reject-contract only (8), other dimensions carried forward. compensation: none.",
+      "unplannedFiles": [
+        "packages/core/test/application/public-api.test.ts"
+      ],
+      "completedAt": "2026-09-18T09:23:50Z",
+      "gateRun": "pnpm verify (core build, typecheck, lint, vitest --coverage 100%): pass",
+      "gradeResult": {
+        "phaseId": "core-export-parse-snapshot",
+        "overallPass": true,
+        "dimensionScores": [
+          {
+            "dimensionId": "entry-point-export",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "minimal-surface",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "accept-reject-contract",
+            "score": 8,
+            "minScore": 7,
+            "passed": true,
+            "regraded": true
+          },
+          {
+            "dimensionId": "domain-purity",
+            "score": 9,
+            "minScore": 9,
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "phaseId": "aws-publish-rollback-rules",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-18T09:26:07Z",
+      "baseRef": "85f1379aebedc5f69b45afd33e894e17ee685275",
+      "baseDirty": true,
+      "notes": "Already dirty at start: horizon-04 memory/roadmap files + phase core-export-parse-snapshot changes (core index.ts, core tests) | Changed: packages/aws/src/domain/publishing.ts (new), packages/aws/test/domain/publishing.test.ts (new), packages/aws/src/domain/current-pointer.ts. Adds nextSnapshotVersion, buildCurrentPointer (uses POINTER_SCHEMA_VERSION + snapshotKeyFor), validateEnvironmentName, validateVersion (canonical decimal string or number; rejects 01/1.0/-1), checkRollbackTarget (NO_CURRENT_POINTER / INVALID_VERSION / TARGET_NOT_BELOW_CURRENT Results). current-pointer.ts now exports environmentSchema/versionSchema so the rules are reused, not rewritten. pnpm verify passed while implementing. | VERIFY: first grade passed (9/9/9/9); current-pointer.ts edit judged minimal extraction of existing schemas. compensation: none.",
+      "unplannedFiles": [
+        "packages/aws/src/domain/current-pointer.ts"
+      ],
+      "completedAt": "2026-09-18T09:40:00Z",
+      "gateRun": "pnpm verify (core build, typecheck, lint, vitest --coverage 100%): pass",
+      "gradeResult": {
+        "phaseId": "aws-publish-rollback-rules",
+        "overallPass": true,
+        "dimensionScores": [
+          {
+            "dimensionId": "version-sequencing",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "rollback-target-rules",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "rule-reuse",
+            "score": 9,
+            "minScore": 7,
+            "passed": true
+          },
+          {
+            "dimensionId": "pure-domain-layer",
+            "score": 9,
+            "minScore": 9,
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "phaseId": "aws-s3-snapshot-publisher",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-18T09:30:46Z",
+      "baseRef": "85f1379aebedc5f69b45afd33e894e17ee685275",
+      "baseDirty": true,
+      "notes": "Already dirty at start: horizon-04 memory/roadmap/ledger files + phases core-export-parse-snapshot and aws-publish-rollback-rules changes (core index.ts + tests, aws domain/publishing.ts + test, aws domain/current-pointer.ts) | Changed: packages/aws/src/infrastructure/s3-snapshot-publisher.ts (new), s3-errors.ts (new), s3-snapshot-source.ts (errorShape moved out), src/index.ts (exports), test/infrastructure/s3-snapshot-publisher.test.ts (new), test/infrastructure/s3-snapshot-source.load.test.ts (entry-point key list). createS3SnapshotPublisher({bucket, client?, validate}) with publish(env, snapshot)->version and rollback(env, target)->version; snapshot put IfNoneMatch *, pointer put IfMatch ETag (IfNoneMatch * on first publish); only NoSuchKey/404 = no pointer; 412/409 -> VERSION_EXISTS on snapshot, CONFLICT on pointer. pnpm verify passed while implementing (100% coverage). For VERIFY: the injected-validation grep for @featuresync/core in packages/aws/src hits the pre-existing type-only import in s3-snapshot-source.ts (horizon 3), not this phase; the publisher imports nothing from core. | VERIFY: first grade passed (9/9/9/9/9); pre-existing type-only core import in s3-snapshot-source.ts accepted as out of scope. Optional: no test for 409 on pointer put->CONFLICT. compensation: none.",
+      "unplannedFiles": [
+        "packages/aws/test/infrastructure/s3-snapshot-source.load.test.ts"
+      ],
+      "amendments": [
+        {
+          "at": "2026-09-18T09:33:27Z",
+          "by": "execute",
+          "reason": "The planned reason list had no home for a malformed/foreign-environment current.json or an environment name containing /, and the CLI phase does not validate environment names; mapping those to REQUEST_FAILED would misreport them.",
+          "grounding": "packages/aws/src/domain/publishing.ts exports validateEnvironmentName (INVALID_ENVIRONMENT); parseCurrentPointer returns INVALID_POINTER; cli-validate-publish-rollback changes list no env validation.",
+          "before": {
+            "changes": [
+              "Throw S3PublishError with reasons INVALID_SNAPSHOT | VERSION_EXISTS | CONFLICT (412 Precondition Failed) | INVALID_ROLLBACK_TARGET | REQUEST_FAILED, and export it and the factory from packages/aws/src/index.ts"
+            ]
+          },
+          "after": {
+            "changes": [
+              "Throw S3PublishError with reasons INVALID_ENVIRONMENT | INVALID_POINTER | INVALID_SNAPSHOT | VERSION_EXISTS | CONFLICT (412 Precondition Failed) | INVALID_ROLLBACK_TARGET | REQUEST_FAILED, and export it and the factory from packages/aws/src/index.ts"
+            ]
+          }
+        }
+      ],
+      "completedAt": "2026-09-18T09:50:00Z",
+      "gateRun": "pnpm verify (core build, typecheck, lint, vitest --coverage 100%): pass",
+      "gradeResult": {
+        "phaseId": "aws-s3-snapshot-publisher",
+        "overallPass": true,
+        "dimensionScores": [
+          {
+            "dimensionId": "write-ordering-conditional",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "error-classification",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "injected-validation",
+            "score": 9,
+            "minScore": 9,
+            "passed": true
+          },
+          {
+            "dimensionId": "rollback-immutability",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "sdk-config-and-exports",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "phaseId": "aws-publisher-localstack-suite",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-18T10:00:00Z",
+      "baseRef": "85f1379aebedc5f69b45afd33e894e17ee685275",
+      "baseDirty": true,
+      "notes": "Already dirty at start: horizon-04 memory/roadmap/ledger files + phases 1-3 changes (core index/tests, aws domain/publishing + current-pointer, aws infrastructure publisher/errors/source + tests, aws index.ts) | Changed: packages/aws/integration/s3-snapshot-publisher.localstack.test.ts (new), docs/spec/s3-layout.md (new 'Publishing / write access' section). Suite: raw-SDK probe (repeated IfNoneMatch '*' and stale IfMatch both -> name PreconditionFailed, 412 on localstack 2026.08.3, matching publisher classification, no mapping change needed); publish v1 -> v2 -> rollback v1 with createS3SnapshotSource.load() after each + HeadObject snapshots/2.json still exists; Promise.allSettled race -> exactly one fulfilled + one S3PublishError CONFLICT/VERSION_EXISTS; invalid publish -> ListObjectsV2 empty. validate = core parseSnapshot, fresh bucket per test, env-only config. pnpm test:integration 7/7 pass locally; pnpm verify pass (integration outside coverage include packages/*/src). CI LocalStack job not run here. | VERIFY: first grade passed (9/9/9/8); isolation-and-env-config capped at 8 because CI LocalStack job not yet run. compensation: none.",
+      "unplannedFiles": [],
+      "completedAt": "2026-09-18T10:40:00Z",
+      "gateRun": "pnpm verify (core build, typecheck, lint, vitest --coverage): pass; pnpm test:integration (localstack, 2 files/7 tests): pass",
+      "gradeResult": {
+        "phaseId": "aws-publisher-localstack-suite",
+        "overallPass": true,
+        "dimensionScores": [
+          {
+            "dimensionId": "conditional-semantics-probe",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "read-side-roundtrip",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "concurrency-and-invalid",
+            "score": 9,
+            "minScore": 7,
+            "passed": true
+          },
+          {
+            "dimensionId": "isolation-and-env-config",
+            "score": 8,
+            "minScore": 8,
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "phaseId": "cli-validate-publish-rollback",
+      "status": "awaiting-verification",
+      "attempts": 1,
+      "startedAt": "2026-09-18T11:00:00Z",
+      "baseRef": "85f1379aebedc5f69b45afd33e894e17ee685275",
+      "baseDirty": true,
+      "notes": "Already dirty at start: horizon-04 memory/roadmap/ledger files + phases 1-4 changes (core index/tests, aws domain/infrastructure/integration/index, docs/spec/s3-layout.md) | Changed: packages/cli/{package.json,tsconfig.json,tsconfig.build.json,src/main.ts,src/bin.ts,test/main.test.ts,test/bin.test.ts} (new), package.json, pnpm-lock.yaml. main(argv, io=nodeIo) returns EXIT_OK 0 / EXIT_INVALID_SNAPSHOT 1 (incl. INVALID_POINTER) / EXIT_CONFLICT 2 (CONFLICT, VERSION_EXISTS) / EXIT_USAGE_OR_IO 3 (usage, missing file, INVALID_ENVIRONMENT, INVALID_ROLLBACK_TARGET, REQUEST_FAILED, unexpected throws); parseArgs strict; bucket --bucket over FEATURESYNC_BUCKET; validate never builds a publisher; issues print as path: message on stderr. bin.ts sets process.exitCode = await main(argv) (shebang kept in dist/bin.js). Root verify/test:integration build core, aws, cli. pnpm verify passed while implementing (288 tests, coverage thresholds 100%); node dist/bin.js smoke-tested.",
+      "unplannedFiles": [
+        "packages/cli/tsconfig.json",
+        "packages/cli/tsconfig.build.json",
+        "packages/cli/test/bin.test.ts",
+        "pnpm-lock.yaml"
+      ]
+    }
+  ]
+}

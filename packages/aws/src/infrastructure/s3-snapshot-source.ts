@@ -1,6 +1,7 @@
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import type { Logger, SnapshotSource, Unsubscribe } from '@featuresync/core';
 import { parseCurrentPointer, snapshotKeyFor, type CurrentPointer } from '../domain/current-pointer.js';
+import { errorShape } from './s3-errors.js';
 import { S3SnapshotError } from './s3-snapshot-error.js';
 
 /** Options for {@link createS3SnapshotSource}. */
@@ -38,15 +39,6 @@ const consoleLogger: Logger = {
   error: (message, error) => {
     console.error(`[featuresync] ${message}`, error);
   },
-};
-
-const errorShape = (error: unknown): { name?: unknown; status?: unknown } => {
-  if (typeof error !== 'object' || error === null) return {};
-  const { name, $metadata } = error as {
-    name?: unknown;
-    $metadata?: { httpStatusCode?: unknown };
-  };
-  return { name, status: $metadata?.httpStatusCode };
 };
 
 // With GetObject-only permissions S3 answers 403 rather than 404 for a missing key.

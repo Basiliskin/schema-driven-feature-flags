@@ -10,3 +10,6 @@
 - 2026-09-18 | horizon 3 | S3 polling dedupes deliveries by pointer version, not ETag or content hash — because snapshots are immutable per version (user choice).
 - 2026-09-18 | horizon 3 | The LocalStack CI job fails, never skips, when LOCALSTACK_AUTH_TOKEN is missing, fork PRs included — because the user chose a strict bar.
 - 2026-09-18 | horizon 3 | Integration tests live in packages/aws/integration with their own vitest config, outside root coverage — because verify must not need LocalStack.
+- 2026-09-18 | horizon 4 | The CLI-driven publisher is the single writer of the S3 layout; no Lambda or UI writes snapshots — because the user chose a CLI-owned write.
+- 2026-09-18 | horizon 4 | The S3 publisher lives in @featuresync/aws next to the pointer contract; @featuresync/cli stays thin with no business logic — because the user confirmed it at preview.
+- 2026-09-18 | horizon 4 | A snapshot orphaned by a failed pointer write makes the next publish fail with VERSION_EXISTS and is fixed by hand — because automatic skip-ahead was deferred (user choice).

@@ -322,9 +322,14 @@ describe('createS3SnapshotSource load', () => {
 });
 
 describe('package entry point', () => {
-  it('exports the S3 snapshot source and its error', async () => {
+  it('exports the S3 snapshot source, the publisher and their errors', async () => {
     const entry = await import('../../src/index.js');
 
-    expect(Object.keys(entry).sort()).toEqual(['S3SnapshotError', 'createS3SnapshotSource']);
+    expect(Object.keys(entry).sort()).toEqual([
+      'S3PublishError',
+      'S3SnapshotError',
+      'createS3SnapshotPublisher',
+      'createS3SnapshotSource',
+    ]);
   });
 });

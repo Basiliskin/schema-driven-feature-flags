@@ -93,6 +93,26 @@ Without `s3:ListBucket`, S3 answers a request for a missing key with `403 Access
 `404 NoSuchKey`. The reader therefore treats both as "not found", while keeping the original error
 as the cause so a genuine permission problem stays visible in logs.
 
+## Publishing / write access
+
+A publisher needs `s3:GetObject` and `s3:PutObject` on the bucket's keys. It never deletes or
+overwrites a snapshot, and every write is conditional:
+
+1. Read `current.json` and keep its ETag (none on the first publish).
+2. Write `snapshots/<n>.json` with `IfNoneMatch: '*'`, so an existing version is never replaced.
+3. Write `current.json` with `IfMatch: <etag>`, or `IfNoneMatch: '*'` on the first publish, so a
+   pointer moved by someone else in the meantime is never clobbered.
+
+A lost condition comes back as `412` with error name `PreconditionFailed`, for both `IfNoneMatch`
+and a stale `IfMatch`; the LocalStack integration suite asserts exactly this shape. Real S3 may also
+answer `409 ConditionalRequestConflict` while a competing write is in flight, and the publisher
+treats it the same way: `VERSION_EXISTS` on the snapshot write, `CONFLICT` on the pointer write.
+
+If the snapshot write succeeds but the pointer write fails, `snapshots/<n>.json` is left orphaned:
+readers never see it, but the next publish computes the same `<n>` and fails with
+`VERSION_EXISTS`. Recover by hand — delete the orphaned snapshot, or point `current.json` at it —
+and publish again.
+
 ## Change detection
 
 A reader follows changes by polling `<env>/current.json`; it never lists the bucket.

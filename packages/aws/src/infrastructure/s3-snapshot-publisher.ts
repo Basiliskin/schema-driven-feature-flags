@@ -1,0 +1,180 @@
+import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { parseCurrentPointer, snapshotKeyFor, type CurrentPointer } from '../domain/current-pointer.js';
+import {
+  buildCurrentPointer,
+  checkRollbackTarget,
+  nextSnapshotVersion,
+  validateEnvironmentName,
+} from '../domain/publishing.js';
+import { errorShape } from './s3-errors.js';
+
+/** Why a publish or rollback wrote nothing, or stopped before moving the pointer. */
+export type S3PublishErrorReason =
+  | 'INVALID_ENVIRONMENT'
+  | 'INVALID_POINTER'
+  | 'INVALID_SNAPSHOT'
+  | 'VERSION_EXISTS'
+  | 'CONFLICT'
+  | 'INVALID_ROLLBACK_TARGET'
+  | 'REQUEST_FAILED';
+
+/** A publish or rollback failed. `cause` holds the underlying S3 or validation error. */
+export class S3PublishError extends Error {
+  override readonly name = 'S3PublishError';
+
+  constructor(
+    readonly reason: S3PublishErrorReason,
+    readonly key: string,
+    cause: unknown,
+  ) {
+    super(`${reason} for s3 object ${key}`, { cause });
+  }
+}
+
+export type SnapshotValidation = { readonly ok: true } | { readonly ok: false; readonly error: unknown };
+
+/** Options for {@link createS3SnapshotPublisher}. */
+export interface S3SnapshotPublisherOptions {
+  readonly bucket: string;
+  /** Defaults to a client configured only from the standard AWS SDK environment and shared config. */
+  readonly client?: Pick<S3Client, 'send'>;
+  /** Decides whether a raw snapshot may be published or restored, e.g. the core package's `parseSnapshot`. */
+  readonly validate: (snapshot: unknown) => SnapshotValidation;
+}
+
+export interface S3SnapshotPublisher {
+  /** Writes the snapshot as the next version and makes it current. Resolves to the new version. */
+  publish(environment: string, snapshot: unknown): Promise<number>;
+  /** Points `current.json` back at an existing lower version. Resolves to that version. */
+  rollback(environment: string, targetVersion: number): Promise<number>;
+}
+
+interface ReadPointer {
+  readonly pointer: CurrentPointer;
+  readonly etag: string;
+}
+
+const isAbsent = (error: unknown): boolean => {
+  const { name, status } = errorShape(error);
+  return name === 'NoSuchKey' || status === 404;
+};
+
+// S3 answers a lost conditional-write race with 412, or 409 while a competing write is in flight.
+const isPreconditionFailed = (error: unknown): boolean => {
+  const { name, status } = errorShape(error);
+  return name === 'PreconditionFailed' || name === 'ConditionalRequestConflict' || status === 412 || status === 409;
+};
+
+const parseJson = (text: string | undefined): unknown => JSON.parse(text ?? '');
+
+/** Writes the `<environment>/snapshots/<n>.json` + `<environment>/current.json` layout with S3 conditional writes. */
+export function createS3SnapshotPublisher(options: S3SnapshotPublisherOptions): S3SnapshotPublisher {
+  const { bucket, validate } = options;
+  const client = options.client ?? new S3Client({});
+
+  const checkEnvironment = (environment: string): string => {
+    const checked = validateEnvironmentName(environment);
+    if (!checked.ok) throw new S3PublishError('INVALID_ENVIRONMENT', environment, checked.error);
+    return checked.value;
+  };
+
+  const checkSnapshot = (key: string, snapshot: unknown): void => {
+    const verdict = validate(snapshot);
+    if (!verdict.ok) throw new S3PublishError('INVALID_SNAPSHOT', key, verdict.error);
+  };
+
+  const getObject = async (key: string) => {
+    const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+    return { text: await response.Body?.transformToString(), etag: response.ETag };
+  };
+
+  const readPointer = async (environment: string): Promise<ReadPointer | undefined> => {
+    const key = `${environment}/current.json`;
+    let object: Awaited<ReturnType<typeof getObject>>;
+    try {
+      object = await getObject(key);
+    } catch (error) {
+      if (isAbsent(error)) return undefined;
+      throw new S3PublishError('REQUEST_FAILED', key, error);
+    }
+    if (object.etag === undefined) {
+      throw new S3PublishError('REQUEST_FAILED', key, new Error('Pointer response carries no ETag'));
+    }
+    let raw: unknown;
+    try {
+      raw = parseJson(object.text);
+    } catch (error) {
+      throw new S3PublishError('INVALID_POINTER', key, error);
+    }
+    const pointer = parseCurrentPointer(raw);
+    if (!pointer.ok) throw new S3PublishError('INVALID_POINTER', key, pointer.error);
+    if (pointer.value.environment !== environment) {
+      throw new S3PublishError(
+        'INVALID_POINTER',
+        key,
+        new Error(`Pointer names environment ${pointer.value.environment}, expected ${environment}`),
+      );
+    }
+    return { pointer: pointer.value, etag: object.etag };
+  };
+
+  const put = async (
+    key: string,
+    body: string,
+    condition: { IfMatch: string } | { IfNoneMatch: '*' },
+    onPreconditionFailed: 'VERSION_EXISTS' | 'CONFLICT',
+  ): Promise<void> => {
+    try {
+      await client.send(
+        new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: 'application/json', ...condition }),
+      );
+    } catch (error) {
+      throw new S3PublishError(isPreconditionFailed(error) ? onPreconditionFailed : 'REQUEST_FAILED', key, error);
+    }
+  };
+
+  const writePointer = (environment: string, version: number, etag: string | undefined): Promise<void> =>
+    put(
+      `${environment}/current.json`,
+      JSON.stringify(buildCurrentPointer(environment, version)),
+      etag === undefined ? { IfNoneMatch: '*' } : { IfMatch: etag },
+      'CONFLICT',
+    );
+
+  const publish = async (environment: string, snapshot: unknown): Promise<number> => {
+    const env = checkEnvironment(environment);
+    checkSnapshot(`${env}/snapshots`, snapshot);
+    const current = await readPointer(env);
+    const version = nextSnapshotVersion(current?.pointer);
+    await put(snapshotKeyFor(env, version), JSON.stringify(snapshot), { IfNoneMatch: '*' }, 'VERSION_EXISTS');
+    await writePointer(env, version, current?.etag);
+    return version;
+  };
+
+  const readSnapshot = async (key: string): Promise<unknown> => {
+    let text: string | undefined;
+    try {
+      ({ text } = await getObject(key));
+    } catch (error) {
+      throw new S3PublishError(isAbsent(error) ? 'INVALID_ROLLBACK_TARGET' : 'REQUEST_FAILED', key, error);
+    }
+    try {
+      return parseJson(text);
+    } catch (error) {
+      throw new S3PublishError('INVALID_SNAPSHOT', key, error);
+    }
+  };
+
+  const rollback = async (environment: string, targetVersion: number): Promise<number> => {
+    const env = checkEnvironment(environment);
+    const current = await readPointer(env);
+    const target = checkRollbackTarget(current?.pointer, targetVersion);
+    if (!target.ok) throw new S3PublishError('INVALID_ROLLBACK_TARGET', `${env}/current.json`, target.error);
+    const key = snapshotKeyFor(env, target.value);
+    checkSnapshot(key, await readSnapshot(key));
+    await writePointer(env, target.value, current?.etag);
+    return target.value;
+  };
+
+  return { publish, rollback };
+}

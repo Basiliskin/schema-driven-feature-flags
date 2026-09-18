@@ -30,4 +30,9 @@ export {
 export type { EvaluationReason, EvaluationResult } from './domain/evaluation/evaluate.js';
 export type { BooleanFeature, ConfigFeature, Feature } from './domain/feature.js';
 export type { BooleanRule, Condition, ConfigRule, OperatorExpression } from './domain/rule.js';
+/**
+ * Validates raw snapshot JSON with the same rules every reader applies. Returns a Result holding either
+ * a frozen Snapshot or a SnapshotValidationError whose issues list each field-level {path, message}.
+ */
+export { parseSnapshot } from './domain/snapshot.js';
 export type { DeepReadonly, Snapshot } from './domain/snapshot.js';

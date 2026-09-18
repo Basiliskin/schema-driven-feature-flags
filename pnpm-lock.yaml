@@ -58,6 +58,19 @@ importers:
         specifier: ^3.1135.0
         version: 3.1135.0
 
+  packages/cli:
+    dependencies:
+      '@featuresync/aws':
+        specifier: workspace:*
+        version: link:../aws
+      '@featuresync/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      '@aws-sdk/client-s3':
+        specifier: ^3.1135.0
+        version: 3.1135.0
+
   packages/core:
     dependencies:
       zod:
