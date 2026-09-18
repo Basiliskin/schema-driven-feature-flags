@@ -1,5 +1,14 @@
-export const PACKAGE_NAME = '@featuresync/core';
-
+export {
+  createFeatureFlags,
+  type FeatureFlags,
+  type FeatureFlagsOptions,
+  type FlagEvaluation,
+  type FlagReason,
+  type SnapshotFeatures,
+} from './application/flag-client.js';
+export { StartupError } from './application/errors.js';
+export type { Logger } from './application/logger.port.js';
+export type { SnapshotSource, Unsubscribe } from './application/snapshot-source.port.js';
 export { defineFeature, type ConfigOf, type ContextOf, type FeatureDefinition } from './domain/define-feature.js';
 export {
   FeatureDefinitionError,
@@ -7,13 +16,7 @@ export {
   type Result,
   type ValidationIssue,
 } from './domain/errors.js';
-export {
-  evaluate,
-  type EvaluateOptions,
-  type EvaluationReason,
-  type EvaluationResult,
-} from './domain/evaluation/evaluate.js';
+export type { EvaluationReason, EvaluationResult } from './domain/evaluation/evaluate.js';
 export type { BooleanFeature, ConfigFeature, Feature } from './domain/feature.js';
 export type { BooleanRule, Condition, ConfigRule, OperatorExpression } from './domain/rule.js';
-export { SNAPSHOT_SCHEMA_VERSION } from './domain/snapshot-contract.js';
-export { parseSnapshot, type DeepReadonly, type ParseSnapshotOptions, type Snapshot } from './domain/snapshot.js';
+export type { DeepReadonly, Snapshot } from './domain/snapshot.js';

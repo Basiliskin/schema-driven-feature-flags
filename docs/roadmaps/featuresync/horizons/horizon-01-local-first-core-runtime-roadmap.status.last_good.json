@@ -2,7 +2,7 @@
   "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-01-local-first-core-runtime-roadmap.json",
   "roadmapTask": "Build a roadmap for the open-source schema-driven feature flag product (FeatureSync) described in docs/ (notes.md, notes-01.md, notes-02.md, playbooks/). Requirements: production-grade ready; DDD/SOLID/KISS/DRY; fully test-covered; LocalStack used only via environment config through the AWS SDK (no LocalStack-specific code paths).",
   "createdAt": "2026-09-18T06:12:11Z",
-  "updatedAt": "2026-09-18T06:48:00Z",
+  "updatedAt": "2026-09-18T06:54:58Z",
   "roadmapRevision": 0,
   "phases": [
     {
@@ -60,7 +60,7 @@
         "pnpm-lock.yaml"
       ],
       "completedAt": "2026-09-18T06:15:58Z",
-      "gateRun": "pnpm verify: pass; probes (throwaway, removed): uncovered branch\u2192pnpm test exit 1, domain\u2192infrastructure import\u2192pnpm lint exit 1, type error\u2192pnpm typecheck exit 2",
+      "gateRun": "pnpm verify: pass; probes (throwaway, removed): uncovered branch→pnpm test exit 1, domain→infrastructure import→pnpm lint exit 1, type error→pnpm typecheck exit 2",
       "gradeResult": {
         "phaseId": "monorepo-quality-gates",
         "dimensionScores": [
@@ -140,12 +140,12 @@
     },
     {
       "phaseId": "rule-evaluation-engine",
-      "status": "awaiting-verification",
+      "status": "done",
       "attempts": 1,
       "startedAt": "2026-09-18T06:30:00Z",
       "baseRef": "873b9437751346ab17a2abfdcfdc015634699898",
       "baseDirty": true,
-      "notes": "Already dirty at start: phase-2 domain files, core package.json, index.ts, lockfile, docs/roadmaps/ (all uncommitted). | Changed (unstaged vs staged phase-2 index): packages/core/src/domain/evaluation/{operators,evaluate}.ts, packages/core/src/domain/rule.ts (conditions: scalar or one-key operator object from registry), packages/core/test/domain/evaluation/{vectors,evaluate}.test.ts, docs/spec/{evaluation-semantics.md,evaluation-vectors.json} (33 vectors, each cited in the spec), packages/core/src/index.ts (exports), packages/core/package.json + pnpm-lock.yaml (fast-check dev dep). Pure evaluate(feature, context, {contextSchema?}) -> {value, enabled, reason, ruleIndex?}; strict type-aware comparison; missing/non-scalar attributes never match; boolean fallback = on only when no rules; fast-check property tests for never-throws and determinism. Implementation-time typecheck+lint+test exited 0 (not the VERIFY gate).",
+      "notes": "Already dirty at start: phase-2 domain files, core package.json, index.ts, lockfile, docs/roadmaps/ (all uncommitted). | Changed (unstaged vs staged phase-2 index): packages/core/src/domain/evaluation/{operators,evaluate}.ts, packages/core/src/domain/rule.ts (conditions: scalar or one-key operator object from registry), packages/core/test/domain/evaluation/{vectors,evaluate}.test.ts, docs/spec/{evaluation-semantics.md,evaluation-vectors.json} (33 vectors, each cited in the spec), packages/core/src/index.ts (exports), packages/core/package.json + pnpm-lock.yaml (fast-check dev dep). Pure evaluate(feature, context, {contextSchema?}) -> {value, enabled, reason, ruleIndex?}; strict type-aware comparison; missing/non-scalar attributes never match; boolean fallback = on only when no rules; fast-check property tests for never-throws and determinism. Implementation-time typecheck+lint+test exited 0 (not the VERIFY gate). | VERIFY: passed first grade (all 9s), no healer retry. Compensation: none.",
       "amendments": [
         {
           "at": "2026-09-18T06:30:00Z",
@@ -176,12 +176,53 @@
         "packages/core/src/index.ts",
         "packages/core/package.json",
         "pnpm-lock.yaml"
-      ]
+      ],
+      "completedAt": "2026-09-18T06:50:14Z",
+      "gateRun": "pnpm typecheck: pass; pnpm lint: pass; pnpm test (100% coverage): pass",
+      "gradeResult": {
+        "phaseId": "rule-evaluation-engine",
+        "dimensionScores": [
+          {
+            "dimensionId": "semantics-fully-specified",
+            "score": 9,
+            "pass": true,
+            "evidence": "Spec cites vectors per rule: disabled (semantics.md:27), empty rules (:39), rule order (:33-35), missing/non-scalar attrs (:68-69), type strictness 5 vs 5-string (:76); vectors.test.ts:21 runs the same JSON. Not 10: INVALID_CONTEXT and unknown operator (:81) have no shared vector."
+          },
+          {
+            "dimensionId": "pure-and-deterministic",
+            "score": 9,
+            "pass": true,
+            "evidence": "evaluate.ts:33-75 no module state/I/O/randomness; fast-check determinism evaluate.test.ts:74-82, identity-independence :94-100, frozen input :102-111. Not 10: property test uses one fixed feature, does not generate features."
+          },
+          {
+            "dimensionId": "never-throws-on-bad-context",
+            "score": 9,
+            "pass": true,
+            "evidence": "isScalar guard (evaluate.ts:69), own-property lookup (:68), non-object context -> {} (:63-64), safeParse (:59) -> INVALID_CONTEXT; fc.anything() tests :74-92. Not 10: a context schema whose refine throws would still throw; untested."
+          },
+          {
+            "dimensionId": "open-closed-operators",
+            "score": 9,
+            "pass": true,
+            "evidence": "Registry operators.ts:17-21; evaluate.ts:72-75 dispatches via operators[name].matches, no switch; rule.ts schema derived from registry. Not 10: no test demonstrates adding an operator without edits."
+          }
+        ],
+        "overallPass": true
+      }
     },
     {
       "phaseId": "in-memory-flag-client",
-      "status": "not-started",
-      "attempts": 0
+      "status": "awaiting-verification",
+      "attempts": 1,
+      "startedAt": "2026-09-18T06:52:50Z",
+      "baseRef": "b9428b3fee7e4089aa557be4d797e72c4bb931c7",
+      "baseDirty": true,
+      "notes": "Already dirty at start: docs/roadmaps/featuresync/discoveries.md (memory compaction). | Changed: packages/core/src/application/{flag-client,snapshot-source.port,snapshot-store,logger.port,errors}.ts, src/index.ts, test/application/{flag-client,public-api}.test.ts; removed src/index.test.ts. createFeatureFlags holds one frozen Snapshot in SnapshotStore, swapped in one assignment after parseSnapshot; ticket ordering makes the latest-started refresh win; failed/invalid refresh keeps old + logs; ready() rejects with StartupError(cause) unless allowStaleStartup+valid fallbackSnapshot; queries sync, typed by definitions, never throw (NOT_FOUND reason for missing keys). Index trimmed to factory, defineFeature, ports, result/error types (parseSnapshot/evaluate no longer public). pnpm verify exit 0 during implementation (not a VERIFY run).",
+      "unplannedFiles": [
+        "packages/core/src/application/errors.ts",
+        "packages/core/test/application/public-api.test.ts",
+        "packages/core/src/index.test.ts (deleted)"
+      ]
     },
     {
       "phaseId": "local-file-snapshot-source",
