@@ -1,10 +1,19 @@
 # Discoveries
-- 2026-09-18 | horizon 1 | repo | Greenfield: only docs/ and docker/docker-compose.yml (LocalStack, auth token from .env) exist [docker/docker-compose.yml] → all code paths are new.
-- 2026-09-18 | horizon 1 | localstack | docker/volume/ holds a LocalStack TLS private key; it is gitignored [.gitignore] → keep it ignored, never commit volume.
-- 2026-09-18 | horizon 1 | tooling | typescript-eslint 8.x refuses TypeScript 7; TS is pinned to ^6 [package.json] → keep TS 6 until typescript-eslint supports TS 7.
-- 2026-09-18 | horizon 1 | tooling | import-x no-restricted-paths only fires with file globs (dir/**/*) plus the TypeScript resolver [eslint.config.js] → new layers need zones in that form.
-- 2026-09-18 | horizon 1 | zod | z.json() reports a non-JSON value (e.g. NaN) at the value root, not the nested field [packages/core/src/domain/feature.ts] → field-level paths come only from registered feature schemas.
-- 2026-09-18 | horizon 1 | evaluation | Snapshot `when` values are a scalar (equals) or a one-key operator object built from the operator registry [packages/core/src/domain/rule.ts] → new operators (percentage) — see horizon-01 roadmap.md
-- 2026-09-18 | horizon 1 | evaluation | Snapshot boolean features have no default: an enabled one is on with zero rules, off when rules exist and none match [docs/spec/evaluation-semantics.md] → revisit if an — see horizon-01 roadmap.md
-- 2026-09-18 | horizon 1 | api | Public index no longer exports parseSnapshot/evaluate/SNAPSHOT_SCHEMA_VERSION (small-surface rubric) [packages/core/src/index.ts] → CLI validate must re-export parseSnapshot deliberately.
-- 2026-09-18 | horizon 1 | watch | fs.watch on a file stops after an atomic-save rename; the file source watches the directory and dedupes by content [packages/core/src/infrastructure/file-snapshot-source.ts] → reuse for any file watcher.
+- [landed] 2026-09-18 | horizon 1 | repo | Greenfield: only docs/ and docker/docker-compose.yml (LocalStack, auth token from .env) exist [docker/docker-compose.yml] → all code paths are new.
+- [landed] 2026-09-18 | horizon 1 | localstack | docker/volume/ holds a LocalStack TLS private key; it is gitignored [.gitignore] → keep it ignored, never commit volume.
+- [landed] 2026-09-18 | horizon 1 | tooling | typescript-eslint 8.x refuses TypeScript 7; TS is pinned to ^6 [package.json] → keep TS 6 until typescript-eslint supports TS 7.
+- [landed] 2026-09-18 | horizon 1 | tooling | import-x no-restricted-paths only fires with file globs (dir/**/*) plus the TypeScript resolver [eslint.config.js] → new layers need zones in that form.
+- [landed] 2026-09-18 | horizon 1 | zod | z.json() reports a non-JSON value (e.g. NaN) at the value root, not the nested field [packages/core/src/domain/feature.ts] → field-level paths come only from registered feature schemas.
+- [landed] 2026-09-18 | horizon 1 | evaluation | Snapshot `when` values are a scalar (equals) or a one-key operator object built from the operator registry [packages/core/src/domain/rule.ts] → new operators — see horizon-02 roadmap.md
+- [landed] 2026-09-18 | horizon 1 | evaluation | Snapshot boolean features have no default: an enabled one is on with zero rules, off when rules exist and none match [docs/spec/evaluation-semantics.md] → revisit — see horizon-02 roadmap.md
+- [landed] 2026-09-18 | horizon 1 | api | Public index no longer exports parseSnapshot/evaluate/SNAPSHOT_SCHEMA_VERSION (small-surface rubric) [packages/core/src/index.ts] → CLI validate must re-export parseSnapshot deliberately.
+- [landed] 2026-09-18 | horizon 1 | watch | fs.watch on a file stops after an atomic-save rename; the file source watches the directory and dedupes by content — see horizon-01 roadmap.md
+- 2026-09-18 | horizon 2 | port | SnapshotSource is {load(): Promise<unknown>; subscribe?(onChange): Unsubscribe}, no stop/error hook [packages/core/src/application/snapshot-source.port.ts] → S3 timers live in — see horizon-02 roadmap.md
+- 2026-09-18 | horizon 2 | client | createFeatureFlags validates every pushed/loaded value, keeps last good, throws StartupError only with no fallback [packages/core/src/application/flag-client.ts] → aws adapters only fetch raw JSON.
+- 2026-09-18 | horizon 2 | api | core exports neither parseSnapshot nor consoleLogger [packages/core/src/index.ts] → sibling packages need their own default logger and must not validate snapshots.
+- 2026-09-18 | horizon 2 | coverage | root vitest projects packages/* with coverage include packages/*/src at 100% [vitest.config.ts] → new packages are gated automatically; integration tests need a separate config.
+- 2026-09-18 | horizon 2 | ci | ci.yml has one verify job with no services, docker or secrets [.github/workflows/ci.yml] → a LocalStack job needs compose + LOCALSTACK_AUTH_TOKEN secret.
+- 2026-09-18 | horizon 2 | localstack | compose image unpinned, no healthcheck, token required, no .env.example [docker/docker-compose.yml] → pin image and add healthcheck before CI use.
+- 2026-09-18 | horizon 2 | iam | app role is GetObject-only; without ListBucket S3 returns 403 not 404 for a missing key [docs/notes.md] → error mapping must treat 403 as possibly-missing.
+- 2026-09-18 | horizon 2 | layout | notes.md sketches <env>/current.json + <env>/snapshots/<n>.json and SNS msg {environment, version, snapshotKey}; no S3 spec existed [docs/notes.md] → new docs/spec/s3-layout.md.
+- 2026-09-18 | horizon 2 | ci | CI runs pnpm verify with no build step and dist/ is gitignored [.github/workflows/ci.yml] → a runtime import of @featuresync/core from aws fails typecheck until core is built first.
