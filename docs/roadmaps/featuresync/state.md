@@ -16,3 +16,7 @@
 - 2026-09-18 | horizon 7 | completed | 3 phases, 3 amendments (test paths moved to test/), 0 overrides
 - 2026-09-18 | horizon 8 | planned | 4 phases (S3 source push detection, CLI --topic-arn, LocalStack SNS/SQS env, LocalStack push proof); gate passed, 1 major fixed, 0 debt
 - 2026-09-18 | horizon 8 | completed | 4 phases, 0 amendments, 0 overrides
+
+- 2026-09-18 | horizon 9 | planned | 5 phases (CloudFormation deployment stack, publisher/reader IAM policies, policy assertion tests, LocalStack deploy proof, deploy guide); gate passed, 2 major healed, 8 minor debt
+- 2026-09-18 | horizon 9 | replanned | revise-phases, 1 phase added + 1 revised — stacks created a bucket/topic each; added queue-only mode, docs now depend on it
+- 2026-09-18 | horizon 9 | completed | 6 phases, 1 amendment, 0 overrides

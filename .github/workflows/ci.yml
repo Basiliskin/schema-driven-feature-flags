@@ -24,6 +24,9 @@ jobs:
       AWS_ENDPOINT_URL_S3: http://s3.localhost.localstack.cloud:4566
       AWS_ENDPOINT_URL_SNS: http://localhost:4566
       AWS_ENDPOINT_URL_SQS: http://localhost:4566
+      AWS_ENDPOINT_URL_CLOUDFORMATION: http://localhost:4566
+      AWS_ENDPOINT_URL_IAM: http://localhost:4566
+      AWS_ENDPOINT_URL_STS: http://localhost:4566
       AWS_REGION: us-east-1
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test

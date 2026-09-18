@@ -23,5 +23,10 @@
 - 2026-09-18 | horizon 8 | A push load failure rethrows so SQS redelivers the message; users must configure a DLQ with maxReceiveCount to bound retries — because a lost change is worse than a retried one (user choice at preview).
 - 2026-09-18 | horizon 8 | Push lives inside createS3SnapshotSource via an optional notificationQueue option; the SnapshotSource port and public exports are otherwise unchanged — because push is an S3-source detail, not a core concern.
 - 2026-09-18 | horizon 8 | A notification is only a hint: push re-reads current.json unconditionally, so a rollback lands only once the pointer confirms it; push and poll loads run serially — because ordering must follow the pointer.
-- 2026-09-18 | horizon 8 | Poison Message policy: unparseable queue messages keep the queue's existing delete-immediately behaviour; only the options field (notificationQueue) changes on createS3SnapshotSource — because poison can never succeed on retry.
+- 2026-09-18 | horizon 8 | Poison Message policy: unparseable queue messages keep the queue's existing delete-immediately behaviour; only the options field (notificationQueue) changes on createS3SnapshotSource — — see horizon-08 roadmap.md
 - 2026-09-18 | horizon 8 | CLI publish/rollback take --topic-arn ?? FEATURESYNC_TOPIC_ARN; a failed Change Notification prints one stderr warning and exits 0 — because the pointer write already succeeded and polling still converges.
+
+- 2026-09-18 | horizon 9 | The Deployment Stack is a plain CloudFormation JSON template in packages/deploy deployed via the SDK, not AWS CDK — because CDK on LocalStack needs cdklocal/bootstrap (user confirmed at preview).
+- 2026-09-18 | horizon 9 | 403→*_NOT_FOUND mapping unchanged; publisher and pull principals get s3:ListBucket, StringLikeIfExists s3:prefix <env>/* — because only real AWS proves it (LocalStack skips IAM).
+- 2026-09-18 | horizon 9 | CI proves policies only by static assertion tests; no LocalStack IAM-deny test — because localstack 2026.08.3 with ENFORCE_IAM=1 let a Reader Policy user PutObject (freemium token).
+- 2026-09-18 | horizon 9 | Multiple reading apps share one full stack (bucket, topic, publisher policy) and each deploys a queue-only stack via ExistingBucketName/ExistingTopicArn — not one full stack per app (user chose replan).

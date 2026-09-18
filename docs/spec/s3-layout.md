@@ -74,44 +74,35 @@ never refuses a version because it is lower than the one it already holds.
 
 ## Read access
 
-Applications need only `s3:GetObject`, scoped to the bucket's keys:
+The deployment stack ([`packages/deploy/template/featuresync-stack.json`](../../packages/deploy/template/featuresync-stack.json))
+is the source of truth for FeatureSync's IAM policies. A reading app attaches its **Reader Policy**
+(output `ReaderPolicyArn`), which grants:
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": "s3:GetObject",
-      "Resource": "arn:aws:s3:::<bucket>/*"
-    }
-  ]
-}
-```
+| Action | Resource |
+|---|---|
+| `s3:GetObject` | `arn:aws:s3:::<bucket>/<env>/*` |
+| `sqs:ReceiveMessage`, `sqs:DeleteMessage` | the app's notification queue (not its dead-letter queue) |
+| `s3:ListBucket`, only when the stack parameter `ReaderListBucket` is `true` | `arn:aws:s3:::<bucket>`, condition `StringLikeIfExists` `s3:prefix` = `<env>/*` |
 
 Without `s3:ListBucket`, S3 answers a request for a missing key with `403 AccessDenied`, not
 `404 NoSuchKey`. The reader therefore treats both as "not found", while keeping the original error
 as the cause so a genuine permission problem stays visible in logs.
 
-`featuresync pull` reads one immutable snapshot and never `current.json`, so a CI role that only
-pulls pinned versions can be scoped to the snapshot keys of one environment:
-
-```json
-{
-  "Effect": "Allow",
-  "Action": "s3:GetObject",
-  "Resource": "arn:aws:s3:::<bucket>/<env>/snapshots/*"
-}
-```
-
-Under this policy a missing version also answers `403`. `pull` reports that as access denied
-rather than as a missing version, so grant `s3:ListBucket` (with an `<env>/snapshots/` prefix
-condition) if CI should distinguish the two.
+`featuresync pull` reads one immutable snapshot and never `current.json`, so a CI principal that
+only pulls pinned versions attaches the Reader Policy too. Without `s3:ListBucket` a missing version
+answers `403`, and `pull` reports it as access denied rather than as a missing version. Deploy the
+stack with `ReaderListBucket=true` if CI should tell the two apart. The condition uses
+`StringLikeIfExists` because a `GetObject` request carries no `s3:prefix` key: a plain `StringLike`
+would never match it, and S3 would keep answering `403`.
 
 ## Publishing / write access
 
-A publisher needs `s3:GetObject` and `s3:PutObject` on the bucket's keys. It never deletes or
-overwrites a snapshot, and every write is conditional:
+A publisher attaches the stack's **Publisher Policy** (output `PublisherPolicyArn`): `s3:GetObject`
+and `s3:PutObject` on `arn:aws:s3:::<bucket>/<env>/*`, `s3:ListBucket` on the bucket with the same
+`StringLikeIfExists` `s3:prefix` = `<env>/*` condition, and `sns:Publish` on the change topic. The
+publisher only treats `404` as "not found", so it needs `s3:ListBucket` to read a missing
+`current.json` on the first publish. It never deletes or overwrites a snapshot, and every write is
+conditional:
 
 1. Read `current.json` and keep its ETag (none on the first publish).
 2. Write `snapshots/<n>.json` with `IfNoneMatch: '*'`, so an existing version is never replaced.

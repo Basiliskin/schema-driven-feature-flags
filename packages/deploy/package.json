@@ -1,0 +1,14 @@
+{
+  "name": "@featuresync/deploy",
+  "version": "0.0.0",
+  "private": true,
+  "description": "CloudFormation deployment stack for FeatureSync.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "files": [
+    "template"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

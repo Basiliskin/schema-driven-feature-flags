@@ -1,0 +1,801 @@
+{
+  "task": "Horizon 9 of FeatureSync: deployment stack (S3 snapshot bucket, SNS change topic, per-app SQS notification queue + DLQ, least-privilege publisher/reader IAM policies) deployable into the user's own AWS account; resolve the IAM-verification-on-LocalStack and 403→*_NOT_FOUND blockers.",
+  "analysis": {
+    "objective": "Deliver a deployment stack that lets a user stand FeatureSync up in their own AWS account: an S3 snapshot bucket, an SNS change topic, and a per-app SQS notification queue with a DLQ (maxReceiveCount). It also includes least-privilege IAM policies for the publisher (CLI) and for reading apps, and closes the two open blockers: IAM verification on LocalStack Community, and the 403-to-*_NOT_FOUND mapping.",
+    "successDefinition": "Versioned IaC template (bucket, topic, per-app queue+DLQ with parameterised maxReceiveCount, topic-only queue policy, publisher+reader IAM policies, outputs); least-privilege policies with no wildcard actions/resources beyond stack ARNs; policy-assertion tests in existing CI plus decision + manual real-AWS recipe; 403 blocker resolved by a recorded decision plus prefix-scoped s3:ListBucket grants (publisher always, reader via parameter), horizon-6 isNotFound/isMissing split unchanged and no runtime code change; template deploys to LocalStack via SDK env config only and push proof passes against stack resources; all CI gates green (100% coverage, ESLint layers, typecheck, LocalStack job); deploy/attach docs incl. why DLQ is required.",
+    "assumptions": [
+      "IaC tool: AWS CDK in TypeScript as a new workspace package; plain CloudFormation YAML fallback.",
+      "S3 layout contract (snapshot keys + current.json) fixed; IAM ARNs derived from it.",
+      "Per-app queue is an instantiable construct/parameterised stack, one per reading app.",
+      "SNS subscription uses the RawMessageDelivery shape the horizon-7 reader accepts.",
+      "Least-privilege blocker resolved by static policy-assertion tests in CI plus documented manual real-AWS check; no real-AWS creds in CI.",
+      "Bucket defaults: versioning on, block public access, SSE-S3, enforce TLS.",
+      "No customer-managed KMS."
+    ],
+    "risks": [
+      "LocalStack Community does not enforce IAM; assertions prove intent only.",
+      "Too-tight policies break code paths: without s3:ListBucket missing keys return 403, interacting with isMissing/isNotFound.",
+      "Changing source 403 behaviour reopens horizon-6 decision; must be recorded as a new decision.",
+      "CDK deps may strain 100% coverage and layer ESLint rules; package may need own coverage scope.",
+      "CDK deploy on LocalStack (cdklocal/bootstrap) may need tooling beyond SDK env config, violating decision; fallback: deploy synthesized template via CloudFormation API with AWS_ENDPOINT_URL.",
+      "LocalStack CI job fails (never skips) on fork PRs.",
+      "Too-low maxReceiveCount default sends transient failures to DLQ.",
+      "Open horizon-7 blockers (RawMessageDelivery shapes, poison messages) may surface against stack-created subscriptions."
+    ],
+    "outOfScope": [
+      "Real-AWS automated tests in CI — no credentials provisioned.",
+      "Dashboard/UI — separate future package.",
+      "Lambda publisher/validator — CLI is single writer (horizon-4 decision).",
+      "Multi-account/multi-region/cross-account — single user-owned account.",
+      "DLQ redrive tooling or CloudWatch alarms — follow-up.",
+      "Customer-managed KMS keys — adds IAM surface.",
+      "Terraform/Pulumi variants — one IaC flavour first.",
+      "Changes to snapshot format, pointer contract, or SnapshotSource port — binding contracts.",
+      "Remaining horizon-7 blockers unrelated to deployment/IAM.",
+      "npm publishing/release automation.",
+      "CI OIDC role setup for user pipelines."
+    ],
+    "domainShape": "technical",
+    "domainShapeReason": "Infrastructure provisioning and IAM policy authoring for existing runtime components; no new flag/targeting/snapshot domain rules.",
+    "ubiquitousLanguage": [
+      {
+        "term": "Deployment Stack",
+        "meaning": "Versioned infrastructure template provisioning every FeatureSync AWS resource in the user's account, exposing names/ARNs as outputs."
+      },
+      {
+        "term": "Snapshot Bucket",
+        "meaning": "S3 bucket holding immutable versioned snapshots and the current.json Current Pointer."
+      },
+      {
+        "term": "Change Topic",
+        "meaning": "SNS topic the publisher notifies after publish/rollback."
+      },
+      {
+        "term": "Notification Queue",
+        "meaning": "Per-app SQS queue subscribed to the Change Topic; only the topic may send."
+      },
+      {
+        "term": "Dead-Letter Queue (DLQ)",
+        "meaning": "SQS queue receiving messages after maxReceiveCount failed receives."
+      },
+      {
+        "term": "Publisher Policy",
+        "meaning": "Least-privilege IAM policy for the CLI principal."
+      },
+      {
+        "term": "Reader Policy",
+        "meaning": "Least-privilege IAM policy for a reading app."
+      },
+      {
+        "term": "Policy Assertion Test",
+        "meaning": "CI unit test asserting exact IAM actions/resources/conditions in the template."
+      }
+    ]
+  },
+  "discoveryFindings": [
+    {
+      "area": "S3 SDK calls",
+      "finding": "packages/aws/src sends only GetObjectCommand (s3-read.ts readObjectText, optional IfNoneMatch), PutObjectCommand (publisher, conditional) and PublishCommand (sns-change-notifier.ts). No HeadObject/ListObjects/DeleteObject in src.",
+      "filePath": "packages/aws/src/infrastructure/s3-read.ts",
+      "implication": "Publisher S3 = s3:GetObject+s3:PutObject; reader = s3:GetObject (ListBucket optional). No Delete/Acl/wildcards; assertion tests pin exact sets."
+    },
+    {
+      "area": "Publisher conditional writes",
+      "finding": "Writes <env>/snapshots/<n>.json IfNoneMatch '*', <env>/current.json IfMatch etag (IfNoneMatch '*' first publish); reads current.json first. Rollback isNotFound -> INVALID_ROLLBACK_TARGET (line 192); missing pointer treated undefined (line 129).",
+      "filePath": "packages/aws/src/infrastructure/s3-snapshot-publisher.ts",
+      "implication": "Without s3:ListBucket first publish and bad-rollback get 403 which isNotFound does not match -> publisher fails. Publisher policy needs s3:ListBucket (prefix-scoped) or code must change."
+    },
+    {
+      "area": "S3 key layout",
+      "finding": "docs/spec/s3-layout.md: <env>/snapshots/<n>.json immutable, <env>/current.json mutable; env prefix has no '/'. Lines 77-113 already document reader/pull/publisher IAM JSON snippets.",
+      "filePath": "docs/spec/s3-layout.md",
+      "implication": "Derive resource ARNs from layout; keep spec IAM section consistent with or pointing to stack policies."
+    },
+    {
+      "area": "403 handling",
+      "finding": "s3-read.ts: isNotFound = NoSuchKey/404; isMissing = isNotFound OR AccessDenied/403 (comment: GetObject-only perms give 403 for missing key). isMissing used only by s3-snapshot-source.ts:75 (-> *_NOT_FOUND with cause). Fetcher has isAccessDenied -> ACCESS_DENIED.",
+      "filePath": "packages/aws/src/infrastructure/s3-read.ts",
+      "implication": "Horizon-6 split holds; reader without ListBucket works. 403 decision candidate: keep split + stack grants prefix-scoped s3:ListBucket to publisher/pull. Any mapping change = new decision."
+    },
+    {
+      "area": "pull 403",
+      "finding": "s3-snapshot-fetcher.ts maps 404->SNAPSHOT_NOT_FOUND, 403->ACCESS_DENIED; spec says pull role reports missing version as access denied unless s3:ListBucket with <env>/snapshots/ prefix condition.",
+      "filePath": "packages/aws/src/infrastructure/s3-snapshot-fetcher.ts",
+      "implication": "Publisher/CLI policy includes s3:ListBucket on bucket ARN with s3:prefix condition; assertion test checks it."
+    },
+    {
+      "area": "SNS/SQS SDK calls",
+      "finding": "sns-change-notifier sends only PublishCommand. sqs-notification-queue sends only ReceiveMessageCommand and DeleteMessageCommand; failed load leaves message for redelivery.",
+      "filePath": "packages/aws/src/infrastructure/sqs-notification-queue.ts",
+      "implication": "Publisher sns:Publish on topic only; reader sqs:ReceiveMessage+DeleteMessage on own queue only. DLQ required since failed loads never deleted."
+    },
+    {
+      "area": "Change-notification spec",
+      "finding": "Queue policy must allow topic to sqs:SendMessage; raw or envelope delivery both accepted (lines 43-46, 98); DLQ maxReceiveCount e.g. 5 recommended (lines 92-93).",
+      "filePath": "docs/spec/change-notification.md",
+      "implication": "Queue policy: Allow sns.amazonaws.com sqs:SendMessage, Condition aws:SourceArn=topic. maxReceiveCount default 5, parameterised."
+    },
+    {
+      "area": "Integration tests",
+      "finding": "4 *.localstack.test.ts files create resources imperatively via SDK (CreateBucket, CreateTopic, CreateQueue, SetQueueAttributes, Subscribe, ...). No IaC.",
+      "filePath": "packages/aws/integration/push-detection.localstack.test.ts",
+      "implication": "Stack proof = new localstack test deploying template via @aws-sdk/client-cloudformation CreateStack with AWS_ENDPOINT_URL and reading outputs; model on push-detection."
+    },
+    {
+      "area": "LocalStack setup",
+      "finding": "docker/docker-compose.yml pins localstack/localstack:2026.08.3, requires LOCALSTACK_AUTH_TOKEN (licensed image), SERVICES=s3,sns,sqs; healthcheck greps only those.",
+      "filePath": "docker/docker-compose.yml",
+      "implication": "Must add cloudformation (+iam, sts) to SERVICES and healthcheck. IAM enforcement premise to be checked against auth-token tier; static assertion tests remain CI proof."
+    },
+    {
+      "area": "CI",
+      "finding": "ci.yml: verify job (pnpm verify: build, typecheck, lint, test+coverage, example:node-local); localstack job sets AWS_ENDPOINT_URL_S3/SNS/SQS, us-east-1, test creds, fails without token, docker compose up --wait, pnpm test:integration.",
+      "filePath": ".github/workflows/ci.yml",
+      "implication": "Add AWS_ENDPOINT_URL_CLOUDFORMATION (or generic) env. Assertion tests run in verify with no creds."
+    },
+    {
+      "area": "Workspace",
+      "finding": "pnpm-workspace packages/*, examples/*; packages aws, cli, core, nestjs. Root package.json has explicit per-package build chains in verify/test:integration. tsconfig.base.json only. No CDK/CloudFormation deps.",
+      "filePath": "package.json",
+      "implication": "New packages/deploy auto-picked by workspace and vitest projects; add build to verify only if needed; follow packages/aws tsconfig pattern."
+    },
+    {
+      "area": "Coverage",
+      "finding": "vitest.config.ts: one project per package, excludes integration/**, coverage packages/*/src/**/*.ts at 100% all metrics. aws integration config: integration/**/*.localstack.test.ts, forwards AWS_* env, no coverage, 30s timeouts.",
+      "filePath": "vitest.config.ts",
+      "implication": "Template code in src/ must be 100% covered; a plain CloudFormation template outside src/ (e.g. packages/deploy/template/) avoids coverage pressure and tests can load it."
+    },
+    {
+      "area": "ESLint",
+      "finding": "import-x/no-restricted-paths layer rules on packages/*/src/{domain,application}; lint is 'eslint . --max-warnings=0'.",
+      "filePath": "eslint.config.js",
+      "implication": "Flat template + small policy/test module avoids layer friction; generated output (cdk.out) would need ignoring."
+    },
+    {
+      "area": "Existing IaC",
+      "finding": "No CDK/CloudFormation/Terraform files or deps anywhere.",
+      "implication": "Greenfield IaC; plain CloudFormation template deployed via @aws-sdk/client-cloudformation fits 'LocalStack only via SDK env config' better than CDK (needs cdklocal/bootstrap)."
+    },
+    {
+      "area": "Docs",
+      "finding": "README.md mentions deploy/IAM; docs/spec has s3-layout.md (IAM snippets), change-notification.md, evaluation-semantics.md. Node 22.",
+      "filePath": "README.md",
+      "implication": "Deploy/attach docs update README and cross-link spec IAM sections as single source of truth."
+    }
+  ],
+  "requiredMaterials": [],
+  "phases": [
+    {
+      "id": "add-cloudformation-deployment-stack",
+      "order": 0,
+      "name": "Add CloudFormation template for FeatureSync resources",
+      "goal": "Provide one versioned Deployment Stack template that creates the Snapshot Bucket, Change Topic, one per-app Notification Queue with its Dead-Letter Queue (DLQ), and the queue policy that lets only the topic send.",
+      "rationale": "Today users must hand-create the S3 bucket, SNS topic and SQS queues (the integration tests do it imperatively). A plain CloudFormation JSON template (AWS's built-in infrastructure-as-code format) is chosen over AWS CDK because CDK on LocalStack needs cdklocal and a bootstrap step, breaking the binding decision that LocalStack is reached only via standard AWS SDK endpoint env config; a plain template outside src/ also avoids the 100% coverage and layer-lint rules and can be JSON.parsed by tests with zero new dependencies.",
+      "filePath": "packages/deploy/template/featuresync-stack.json",
+      "filesAffected": [
+        "packages/deploy/package.json (new workspace package, no runtime deps)",
+        "packages/deploy/template/featuresync-stack.json (new)",
+        "packages/deploy/tsconfig.json (new, mirrors packages/aws pattern)"
+      ],
+      "changes": [
+        "Create packages/deploy as a pnpm workspace package holding only the template and its tests",
+        "Declare the Snapshot Bucket with versioning on, block-all-public-access, SSE-S3 encryption and a bucket policy denying non-TLS requests (aws:SecureTransport false)",
+        "Declare the Change Topic (SNS)",
+        "Declare the Notification Queue and its DLQ with a RedrivePolicy whose maxReceiveCount comes from a parameter defaulting to 5 (per docs/spec/change-notification.md)",
+        "Add a queue policy allowing only sns.amazonaws.com to sqs:SendMessage with Condition aws:SourceArn equal to the topic ARN",
+        "Subscribe the queue to the topic with RawMessageDelivery as a parameter (the horizon-7 reader accepts raw and envelope shapes)",
+        "Parameters for app name and env prefix; Outputs for bucket name, topic ARN, queue URL/ARN and DLQ ARN"
+      ],
+      "boundedContext": "Deployment Stack",
+      "layer": "infrastructure",
+      "blastRadius": "medium",
+      "inputs": [
+        "docs/spec/s3-layout.md key layout (<env>/snapshots/<n>.json, <env>/current.json)",
+        "docs/spec/change-notification.md queue-policy and DLQ guidance"
+      ],
+      "expectedResult": "packages/deploy/template/featuresync-stack.json: a valid CloudFormation template declaring bucket, topic, queue, DLQ, queue policy and subscription with parameters and outputs",
+      "dependsOn": [],
+      "rubric": [
+        {
+          "id": "bucket-hardening",
+          "label": "Snapshot Bucket hardening",
+          "ruleStatement": "The Snapshot Bucket must be versioned, block all public access, be encrypted, and deny non-TLS requests. 10 = all four plus DeletionPolicy/UpdateReplacePolicy Retain on the bucket; 8 = all four settings present; minScore 8.",
+          "passCriteria": [
+            "In featuresync-stack.json the bucket has VersioningConfiguration.Status Enabled",
+            "PublicAccessBlockConfiguration sets all four flags (BlockPublicAcls, BlockPublicPolicy, IgnorePublicAcls, RestrictPublicBuckets) true",
+            "BucketEncryption uses SSE-S3 (AES256)",
+            "An AWS::S3::BucketPolicy has a Deny statement with Condition Bool aws:SecureTransport \"false\" covering both the bucket ARN and bucket ARN/*",
+            "For 10: DeletionPolicy Retain and UpdateReplacePolicy Retain on the bucket so stack deletion never destroys snapshot history"
+          ],
+          "failureExamples": [
+            "The TLS Deny covers only arn:...:bucket/* and omits the bucket ARN itself, so ListBucket over plain HTTP is still allowed",
+            "Only BlockPublicAcls and BlockPublicPolicy are set; IgnorePublicAcls and RestrictPublicBuckets are missing"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "topic-scoped-queue-policy",
+          "label": "Only the Change Topic can send to the queue",
+          "ruleStatement": "The queue policy must let only the SNS service send to the Notification Queue, and only for this stack's Change Topic. 10 = also exactly one action and no send permission on the DLQ; 8 = service principal + aws:SourceArn condition; minScore 8.",
+          "passCriteria": [
+            "AWS::SQS::QueuePolicy Principal is {\"Service\":\"sns.amazonaws.com\"}, not \"*\" or an AWS account",
+            "The only Action is sqs:SendMessage",
+            "Condition ArnEquals aws:SourceArn is a Ref to this stack's topic, not a hardcoded ARN",
+            "The subscription Endpoint is the queue ARN (GetAtt Arn) and RawMessageDelivery is a Ref to a parameter"
+          ],
+          "failureExamples": [
+            "Principal is \"*\" with a SourceArn condition — works, but lets any principal send if the condition key is absent",
+            "Condition uses StringEquals with a hardcoded ARN string, so a second stack deploy points at the wrong topic"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "dlq-redrive-parameterized",
+          "label": "DLQ redrive wired and parameterized",
+          "ruleStatement": "The Notification Queue must redrive to its DLQ with maxReceiveCount taken from a parameter defaulting to 5. 10 = DLQ also retains messages longer than the source queue (e.g. 14 days); 8 = redrive + parameter; minScore 8.",
+          "passCriteria": [
+            "The queue's RedrivePolicy.deadLetterTargetArn is GetAtt of the DLQ Arn",
+            "RedrivePolicy.maxReceiveCount is a Ref to a Number parameter with Default 5 and MinValue ≥1",
+            "For 10: the DLQ MessageRetentionPeriod is longer than the source queue's"
+          ],
+          "failureExamples": [
+            "maxReceiveCount is hardcoded to 5, so users cannot tune it",
+            "The DLQ is declared but the queue has no RedrivePolicy, so the DLQ never receives messages"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "multi-instance-safe",
+          "label": "Repeatable per app and env",
+          "ruleStatement": "The template must deploy once per app/env in the same account without name collisions, and its Outputs must expose everything consumers need. 10 = no hardcoded physical names anywhere and parameters have AllowedPattern validation; 8 = names derived from parameters or CloudFormation-generated and all five Outputs present; minScore 7.",
+          "passCriteria": [
+            "No BucketName/TopicName/QueueName is a literal string — each is omitted or built with Fn::Sub from the AppName/EnvPrefix parameters",
+            "Outputs include bucket name, topic ARN, queue URL, queue ARN and DLQ ARN",
+            "The template parses with JSON.parse and `aws cloudformation validate-template` (or cfn-lint) reports no errors",
+            "packages/deploy/package.json has no runtime dependencies"
+          ],
+          "failureExamples": [
+            "QueueName derives from AppName but the DLQ name is fixed, so the second app's stack fails with AlreadyExists",
+            "The EnvPrefix parameter has no AllowedPattern, so a trailing-slash value produces an S3 prefix like prod//"
+          ],
+          "minScore": 7
+        }
+      ],
+      "healerHint": "Most likely failure: the TLS-deny statement or queue policy is scoped too loosely (bucket ARN missing, Principal \"*\"). Fix: list both the bucket ARN and bucket/* as resources, and use Principal Service sns.amazonaws.com with ArnEquals aws:SourceArn on Ref of the topic."
+    },
+    {
+      "id": "add-least-privilege-iam-policies",
+      "order": 1,
+      "name": "Add publisher and reader IAM policies",
+      "goal": "Add the Publisher Policy and Reader Policy to the Deployment Stack as managed IAM policies granting exactly the actions the SDK calls in packages/aws/src need, scoped to stack ARNs, and settle the 403-to-*_NOT_FOUND blocker by granting the publisher prefix-scoped s3:ListBucket rather than changing the horizon-6 isNotFound/isMissing split.",
+      "rationale": "Users need ready-made, non-wildcard permissions for the CLI publisher and for reading apps. Without s3:ListBucket, S3 returns 403 Access Denied instead of 404 for a missing key; the publisher's isNotFound check deliberately ignores 403 (horizon-6 decision), so first publish and rollback-target checks would break. Granting ListBucket limited to the env prefixes fixes this without touching code or reopening that decision.",
+      "filesAffected": [
+        "packages/deploy/template/featuresync-stack.json",
+        "docs/spec/s3-layout.md (IAM section lines ~77-113 point to the stack policies)",
+        "docs/roadmaps/featuresync/decisions.md (step inside the phase: record the 403 resolution)"
+      ],
+      "changes": [
+        "Add Publisher Policy (AWS::IAM::ManagedPolicy): s3:GetObject+s3:PutObject on arn:...:bucket/<env>/*, s3:ListBucket on the bucket ARN with an s3:prefix condition for <env>/, sns:Publish on the topic ARN only",
+        "Add Reader Policy: s3:GetObject on <env>/ keys, sqs:ReceiveMessage+sqs:DeleteMessage on this app's queue only; s3:ListBucket optional since isMissing already maps 403 to *_NOT_FOUND",
+        "Export both policy ARNs as stack Outputs",
+        "Rewrite the IAM snippets in docs/spec/s3-layout.md to match the template and link to it as single source of truth",
+        "Record the decision: 403 mapping unchanged; publisher/pull principals get prefix-scoped s3:ListBucket; note in the decision that the 403→not-found behaviour is proven only by the manual real-AWS recipe, since LocalStack does not enforce IAM",
+        "Add a boolean parameter (default false) that adds prefix-scoped s3:ListBucket to the Reader Policy, so a CI principal running `featuresync pull` gets SNAPSHOT_NOT_FOUND instead of ACCESS_DENIED for a missing version; document which policy a pull principal attaches"
+      ],
+      "boundedContext": "Deployment Stack",
+      "layer": "infrastructure",
+      "blastRadius": "small",
+      "inputs": [
+        "Stack template from add-cloudformation-deployment-stack",
+        "SDK call inventory: GetObject, PutObject, Publish, ReceiveMessage, DeleteMessage (packages/aws/src/infrastructure)"
+      ],
+      "expectedResult": "Publisher Policy and Reader Policy resources in featuresync-stack.json with no wildcard actions and resources limited to stack ARNs",
+      "dependsOn": [
+        "add-cloudformation-deployment-stack"
+      ],
+      "rubric": [
+        {
+          "id": "exact-action-sets",
+          "label": "Actions match the SDK calls",
+          "ruleStatement": "Each policy must grant exactly the actions packages/aws/src calls — no wildcards, nothing extra. 10 = each statement is a separate Sid tied to one SDK call; 8 = exact action sets; minScore 8.",
+          "passCriteria": [
+            "Publisher Policy actions are exactly s3:GetObject, s3:PutObject, s3:ListBucket, sns:Publish",
+            "Reader Policy actions are exactly s3:GetObject, sqs:ReceiveMessage, sqs:DeleteMessage, plus s3:ListBucket only under the pull parameter",
+            "No Action contains \"*\" (e.g. s3:* or s3:Get*)",
+            "A grep for SDK Command classes in packages/aws/src/infrastructure finds none whose action is missing from a policy"
+          ],
+          "failureExamples": [
+            "The Reader Policy adds sqs:GetQueueAttributes \"just in case\" though no code calls it",
+            "s3:GetObjectVersion is added for rollback although the code reads by key, not by version"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "resource-and-prefix-scoping",
+          "label": "Scoped to stack ARNs and the env prefix",
+          "ruleStatement": "Object actions must be limited to <env>/* and ListBucket limited by an s3:prefix condition. 10 = the condition also covers the prefix itself (<env>/ and <env>/*); 8 = prefix-scoped; minScore 8.",
+          "passCriteria": [
+            "The resource for s3:GetObject/PutObject is Fn::Sub '${Bucket.Arn}/${EnvPrefix}/*', not bucket/*",
+            "s3:ListBucket is on the bucket ARN with Condition StringLike s3:prefix '${EnvPrefix}/*'",
+            "sns:Publish is on Ref of the topic; the sqs actions are on GetAtt of the queue Arn, not the DLQ",
+            "Both policy ARNs appear in Outputs"
+          ],
+          "failureExamples": [
+            "ListBucket has no s3:prefix condition, so the publisher can list other envs' keys",
+            "The Reader Policy's sqs resource includes the DLQ ARN, letting a reader consume dead-lettered messages"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "reader-listbucket-toggle",
+          "label": "Pull-principal ListBucket parameter works both ways",
+          "ruleStatement": "A boolean parameter (default false) must add prefix-scoped ListBucket to the Reader Policy only when it is true. 10 = implemented with a Fn::If/AWS::NoValue conditional statement and the parameter's AllowedValues restricted; 8 = both branches correct; minScore 7.",
+          "passCriteria": [
+            "A Conditions entry uses Fn::Equals on the parameter against \"true\"",
+            "With the parameter false, the Reader Policy contains no s3:ListBucket (resolves through Fn::If to AWS::NoValue)",
+            "With it true, the added statement carries the same s3:prefix condition as the publisher's"
+          ],
+          "failureExamples": [
+            "Fn::If returns an empty object {} instead of AWS::NoValue, creating a statement with no action that CloudFormation rejects",
+            "The conditional ListBucket statement omits the s3:prefix condition"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "decision-and-spec-sync",
+          "label": "Spec and decision record match the template",
+          "ruleStatement": "docs/spec/s3-layout.md and decisions.md must describe the same policies as the template and record the 403 resolution. 10 = the spec points to the template instead of repeating JSON that can drift; 8 = consistent content; minScore 7.",
+          "passCriteria": [
+            "The IAM section of s3-layout.md lists the same actions/resources as the template, or points to it",
+            "decisions.md records: 403 mapping unchanged; publisher/pull principals get prefix-scoped s3:ListBucket; proven only by the manual real-AWS recipe because LocalStack does not enforce IAM",
+            "s3-layout.md has no leftover s3:* or Resource \"*\" snippets"
+          ],
+          "failureExamples": [
+            "The old spec snippet stays, granting s3:ListBucket on the whole bucket with no prefix condition, contradicting the template",
+            "The decision entry omits that LocalStack cannot prove the 403 behaviour"
+          ],
+          "minScore": 7
+        }
+      ],
+      "healerHint": "Most likely failure: the Fn::If for the reader ListBucket returns {} instead of AWS::NoValue, or the s3:prefix condition is missing. Fix: wrap the statement in Fn::If with AWS::NoValue as the false branch and copy the publisher's StringLike s3:prefix condition."
+    },
+    {
+      "id": "test-iam-policy-assertions",
+      "order": 2,
+      "name": "Test IAM policies with static assertion tests",
+      "goal": "Add Policy Assertion Tests that run in the existing verify CI job with no AWS credentials, pinning the exact actions, resources and conditions of every policy in the template — the CI proof of least privilege because LocalStack does not reliably enforce IAM.",
+      "rationale": "LocalStack does not reliably enforce IAM, so a deploy there cannot prove the policies are tight. The CI proof is instead to read the template JSON in a unit test and assert the exact permission sets, so a later edit adding a wildcard or an extra action fails the build. This closes the IAM-verification-under-LocalStack blocker together with a manual real-AWS check documented later.",
+      "filesAffected": [
+        "packages/deploy/test/stack-policies.test.ts (new)",
+        "vitest.config.ts (add packages/deploy project if auto-pickup misses it)"
+      ],
+      "changes": [
+        "Load the template with JSON.parse and locate each IAM policy and the queue policy",
+        "Assert the Publisher Policy action set is exactly {s3:GetObject, s3:PutObject, s3:ListBucket, sns:Publish} and s3:ListBucket carries the s3:prefix condition",
+        "Assert the Reader Policy action set is exactly {s3:GetObject, sqs:ReceiveMessage, sqs:DeleteMessage} with resources referencing only stack resources",
+        "Assert no statement uses '*' as action or resource, and the queue policy requires aws:SourceArn equal to the topic",
+        "Assert the DLQ RedrivePolicy exists and maxReceiveCount defaults to 5",
+        "Assert every s3:ListBucket grant (publisher, and reader when the pull parameter is on) carries an s3:prefix condition limited to <env>/ and is absent from the reader when the parameter is off"
+      ],
+      "boundedContext": "Deployment Stack",
+      "layer": "cross-cutting",
+      "blastRadius": "small",
+      "inputs": [
+        "featuresync-stack.json with policies from add-least-privilege-iam-policies"
+      ],
+      "expectedResult": "packages/deploy/test/stack-policies.test.ts passing inside pnpm verify",
+      "dependsOn": [
+        "add-least-privilege-iam-policies"
+      ],
+      "rubric": [
+        {
+          "id": "exact-set-equality",
+          "label": "Exact equality, not containment",
+          "ruleStatement": "Tests must compare each policy's full action set to the expected set so any extra action fails. 10 = actions normalized first (string treated as one-item array, sorted) then compared with toEqual; 8 = exact comparison; minScore 8.",
+          "passCriteria": [
+            "Each policy's actions are flattened across all statements and compared with toEqual on a sorted array or Set, not toContain/arrayContaining",
+            "A helper handles Action written as either a string or an array",
+            "Hand-adding sqs:GetQueueAttributes to the Reader Policy makes a test fail"
+          ],
+          "failureExamples": [
+            "expect(actions).toContain('s3:GetObject') still passes after s3:DeleteObject is added",
+            "Only Statement[0] is checked, so a wildcard in a second statement goes unnoticed"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "wildcard-and-condition-guards",
+          "label": "Wildcard and condition guards cover every policy",
+          "ruleStatement": "Every policy-shaped resource must be checked for \"*\" or partial-wildcard actions, the queue policy's aws:SourceArn, and s3:prefix on every ListBucket. 10 = policies are found by resource Type so a newly added policy is covered automatically; 8 = all current policies checked; minScore 8.",
+          "passCriteria": [
+            "Policies are found by filtering Resources on Type (AWS::IAM::ManagedPolicy, AWS::SQS::QueuePolicy, AWS::S3::BucketPolicy), not by fixed logical IDs alone",
+            "Any action matching /\\*/ fails, not only an action exactly equal to \"*\"",
+            "A test asserts the queue policy's aws:SourceArn condition references the topic",
+            "A test asserts every ListBucket carries an s3:prefix condition"
+          ],
+          "failureExamples": [
+            "The wildcard check rejects only exactly \"*\", so s3:Get* passes",
+            "The exemption for the bucket-policy Deny statement's Resource \"*\" also skips the Allow statements, missing a \"*\" there"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "parameter-branch-coverage",
+          "label": "Both reader-parameter branches tested",
+          "ruleStatement": "Tests must cover both values of the Reader ListBucket parameter and the default maxReceiveCount of 5. 10 = a small resolver evaluates Fn::If/Conditions per branch; 8 = both branches asserted in some way; minScore 7.",
+          "passCriteria": [
+            "A test asserts that with the parameter false (default) the reader has no s3:ListBucket",
+            "A test asserts that with it true, ListBucket appears with an s3:prefix condition",
+            "A test asserts the DLQ RedrivePolicy exists and the maxReceiveCount parameter Default is 5"
+          ],
+          "failureExamples": [
+            "Only the Fn::If structure is inspected, so swapped true/false branches still pass",
+            "The redrive test checks the parameter exists but not that its Default is 5"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "runs-in-verify-offline",
+          "label": "Runs in pnpm verify with no credentials",
+          "ruleStatement": "The suite must be picked up by the existing verify job and make no network or AWS calls. 10 = it also fails loudly if the template path moves; 8 = runs in verify; minScore 8.",
+          "passCriteria": [
+            "`pnpm verify` output lists stack-policies.test.ts",
+            "The test imports no @aws-sdk client and passes with AWS_* env unset",
+            "The template is read from a path relative to the test file (new URL or path.resolve(__dirname))"
+          ],
+          "failureExamples": [
+            "The vitest workspace glob misses packages/deploy, so the file never runs and CI stays green",
+            "The template path depends on process.cwd(), so the test passes from the root but fails from the package directory"
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "Most likely failure: containment checks, or a wildcard check matching only exact \"*\", let extra actions or s3:Get* slip through. Fix: flatten each policy's actions into a sorted array compared with toEqual, and fail on any action matching /\\*/."
+    },
+    {
+      "id": "test-stack-deploy-on-localstack",
+      "order": 3,
+      "name": "Test deploying the stack to LocalStack",
+      "goal": "Deploy the template to LocalStack via @aws-sdk/client-cloudformation CreateStack using only AWS SDK endpoint env config, then prove publish → push notification reaches the app's queue using the stack's outputs.",
+      "rationale": "The template must actually deploy and work end to end, not just look right. The existing integration tests build resources one SDK call at a time; this test deploys the real template instead and reuses the push-detection flow against its resources, so no LocalStack-specific code path is added.",
+      "filesAffected": [
+        "packages/aws/integration/deployment-stack.localstack.test.ts (new, modelled on push-detection.localstack.test.ts)",
+        "packages/aws/package.json (devDependency @aws-sdk/client-cloudformation)",
+        "docker/docker-compose.yml (SERVICES + healthcheck add cloudformation, iam, sts)",
+        ".github/workflows/ci.yml (localstack job env adds AWS_ENDPOINT_URL_CLOUDFORMATION)"
+      ],
+      "changes": [
+        "Check whether the pinned licensed LocalStack image (2026.08.3) enforces IAM (ENFORCE_IAM=1); if it does, add a negative case where a Reader Policy principal's PutObject is denied; if not, record the finding in the 403/IAM decision entry and in discoveries.md",
+        "Add cloudformation, iam and sts to LocalStack SERVICES and the healthcheck",
+        "Set AWS_ENDPOINT_URL_CLOUDFORMATION (and IAM/STS) in the CI localstack job, same as the S3/SNS/SQS endpoints",
+        "Create the stack from featuresync-stack.json, wait for CREATE_COMPLETE, read Outputs",
+        "Publish a snapshot to the output bucket/topic and assert the reader's queue receives the Change Notification and the source loads the new version",
+        "Delete the stack in afterAll"
+      ],
+      "boundedContext": "Deployment Stack",
+      "layer": "cross-cutting",
+      "blastRadius": "medium",
+      "inputs": [
+        "featuresync-stack.json",
+        "LOCALSTACK_AUTH_TOKEN CI secret (already configured)"
+      ],
+      "expectedResult": "deployment-stack.localstack.test.ts passing in the CI localstack job",
+      "dependsOn": [
+        "add-least-privilege-iam-policies"
+      ],
+      "compensation": "Revert the docker-compose SERVICES change and CI env lines; the test file is standalone.",
+      "rubric": [
+        {
+          "id": "real-template-deploy",
+          "label": "Deploys the actual template via SDK",
+          "ruleStatement": "The test must run CreateStack on featuresync-stack.json as it exists on disk, using only standard AWS_ENDPOINT_URL_* env config. 10 = also asserts final stack status and prints the failure reason on error; 8 = deploys and waits; minScore 8.",
+          "passCriteria": [
+            "TemplateBody is read from packages/deploy/template/featuresync-stack.json, not an inline copy",
+            "No `endpoint:` is hardcoded in client config; AWS_ENDPOINT_URL_CLOUDFORMATION/IAM/STS are set in ci.yml",
+            "It waits with waitUntilStackCreateComplete (or equivalent) and reads Outputs",
+            "docker-compose SERVICES and the healthcheck include cloudformation, iam, sts"
+          ],
+          "failureExamples": [
+            "The test passes endpoint: 'http://localhost:4566' to the client, adding a LocalStack-only code path",
+            "On CREATE_FAILED the test times out without printing the stack events"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "end-to-end-via-outputs",
+          "label": "Publish-to-queue flow uses only the Outputs",
+          "ruleStatement": "The publish and push-detection steps must take every resource identifier from the stack Outputs. 10 = also asserts the loaded version number; 8 = notification received and loaded; minScore 8.",
+          "passCriteria": [
+            "Bucket name, topic ARN and queue URL come from DescribeStacks Outputs, with no literal names",
+            "A published snapshot produces a Change Notification on the Output queue",
+            "The snapshot source loads the new version (the assertion compares the version value)"
+          ],
+          "failureExamples": [
+            "The test reuses the queue from the older push-detection setup instead of the stack's queue",
+            "It asserts only that a message arrived, not that the source loaded the new version"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "isolation-and-teardown",
+          "label": "Repeatable and cleans up",
+          "ruleStatement": "Repeated or parallel runs must not collide, and the stack must be removed even when the test fails. 10 = the bucket is emptied before DeleteStack and the delete is awaited; 8 = unique names + afterAll delete; minScore 7.",
+          "passCriteria": [
+            "The stack name and AppName parameter include a random or timestamp suffix",
+            "afterAll runs DeleteStack even if creation failed, guarding against an undefined stack ID",
+            "Because the bucket is versioned, afterAll empties all object versions before DeleteStack (or handles the Retain policy)"
+          ],
+          "failureExamples": [
+            "DeleteStack fails with BucketNotEmpty because versioned objects remain, and the next run collides on names",
+            "afterAll throws when beforeAll failed, hiding the real error"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "iam-enforcement-premise-checked",
+          "label": "IAM enforcement premise checked",
+          "ruleStatement": "The phase must verify, not assume, whether the pinned LocalStack image enforces IAM, and act on the result. 10 = enforcement probed and a negative reader-PutObject case added when supported; 8 = premise checked and outcome recorded; minScore 7.",
+          "passCriteria": [
+            "The test or a documented probe runs with ENFORCE_IAM=1 against the pinned image",
+            "If enforced: a Reader Policy principal's PutObject fails with AccessDenied in the LocalStack test",
+            "If not enforced: the outcome is recorded in decisions.md/discoveries.md with the image version"
+          ],
+          "failureExamples": [
+            "The phase repeats 'LocalStack does not enforce IAM' without running any probe on the licensed image",
+            "ENFORCE_IAM is turned on globally and breaks the existing integration suites that use test credentials"
+          ],
+          "minScore": 7
+        }
+      ],
+      "healerHint": "Most likely failure: teardown breaks on the versioned bucket, or the stack name collides between runs. Fix: add a unique suffix to the stack name and AppName, and delete all object versions before DeleteStack in a guarded afterAll."
+    },
+    {
+      "id": "add-queue-only-stack-mode",
+      "order": 4,
+      "filePath": null,
+      "name": "Add a queue-only mode that attaches to an existing bucket and topic",
+      "goal": "Let a reading app deploy the Deployment Stack in queue-only mode. In this mode the stack creates only its notification queue, DLQ, topic-only queue policy, SNS subscription and Reader Policy, all bound to an existing snapshot bucket and change topic passed in as parameters. Full mode stays the default and behaves as before.",
+      "rationale": "A publisher publishes once to one bucket and topic, and each reading app needs its own queue on that topic. If each app creates its own bucket and topic, apps cannot share a published snapshot set. This keeps plain CloudFormation JSON deployed via the SDK, as decided in decisions.md for horizon 9.",
+      "filesAffected": [
+        "packages/deploy/template/featuresync-stack.json",
+        "packages/deploy/test/stack-policies.test.ts",
+        "packages/aws/integration/deployment-stack.localstack.test.ts"
+      ],
+      "changes": [
+        "Add parameters ExistingBucketName and ExistingTopicArn, both defaulting to empty, and a condition CreateSharedResources that is true when both are empty",
+        "Put Condition CreateSharedResources on SnapshotBucket, SnapshotBucketPolicy, ChangeTopic and PublisherPolicy, and give SnapshotBucket DeletionPolicy/UpdateReplacePolicy Retain",
+        "Resolve the bucket name/ARN and topic ARN through Fn::If in NotificationQueuePolicy (SourceArn), NotificationSubscription (TopicArn) and ReaderPolicy (resources and ListBucket prefix), keeping least-privilege action sets unchanged",
+        "Make the SnapshotBucketName and ChangeTopicArn outputs resolve through Fn::If, and put Condition CreateSharedResources on the PublisherPolicyArn output",
+        "Extend stack-policies.test.ts to resolve both condition branches and assert that queue-only mode creates no bucket, topic or publisher policy, and that its queue policy, subscription and reader policy reference the passed-in ARNs",
+        "Extend the LocalStack test to deploy a second queue-only stack against the first stack's outputs and prove a publish on the shared topic reaches the second queue",
+        "Add a template Rules assertion that ExistingBucketName and ExistingTopicArn are either both empty or both set, with a static test case for it"
+      ],
+      "boundedContext": "Deployment Stack",
+      "layer": "infrastructure",
+      "blastRadius": "medium",
+      "inputs": [
+        "packages/deploy/template/featuresync-stack.json (the 9 resources, parameters AppName/Environment/MaxReceiveCount/RawMessageDelivery/ReaderListBucket, condition GrantReaderListBucket)",
+        "Stack outputs SnapshotBucketName and ChangeTopicArn from a full-mode stack",
+        "Existing static Fn::If resolution in stack-policies.test.ts"
+      ],
+      "expectedResult": "featuresync-stack.json supports a queue-only mode via ExistingBucketName/ExistingTopicArn, covered by static policy assertions for both modes and a LocalStack test in which a queue-only stack receives notifications from a full stack's topic",
+      "dependsOn": [
+        "test-stack-deploy-on-localstack",
+        "test-iam-policy-assertions"
+      ],
+      "rubric": [
+        {
+          "id": "conditional-shared-resources",
+          "label": "Shared resources gated by CreateSharedResources",
+          "ruleStatement": "In featuresync-stack.json, SnapshotBucket, SnapshotBucketPolicy, ChangeTopic, PublisherPolicy and the PublisherPolicyArn output all carry Condition CreateSharedResources. That condition is true only when both ExistingBucketName and ExistingTopicArn are empty. Scale: 10 means the both-or-neither Rules assertion is also covered by a static test; 8 is a competent, complete implementation; minScore is the acceptable bar.",
+          "passCriteria": [
+            "The template has parameters ExistingBucketName and ExistingTopicArn, both with Default \"\"",
+            "Conditions.CreateSharedResources uses Fn::And over two Fn::Equals checks against \"\" (or an equivalent that needs BOTH parameters to be empty)",
+            "SnapshotBucket, SnapshotBucketPolicy, ChangeTopic, PublisherPolicy and Outputs.PublisherPolicyArn each have \"Condition\": \"CreateSharedResources\"",
+            "SnapshotBucket has DeletionPolicy: Retain and UpdateReplacePolicy: Retain",
+            "A template Rules assertion rejects exactly one Existing* parameter being set, and a static test checks it"
+          ],
+          "failureExamples": [
+            "The condition uses Fn::Or, so setting only ExistingTopicArn still creates a new bucket and the app reads from the wrong bucket",
+            "PublisherPolicyArn output is left without a condition, so a queue-only deploy fails with an unresolved reference",
+            "SnapshotBucket gets DeletionPolicy Retain but no UpdateReplacePolicy"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "fn-if-reference-resolution",
+          "label": "Queue-mode references resolve to the passed-in ARNs",
+          "ruleStatement": "Every reference to the bucket or topic in NotificationQueuePolicy (SourceArn), NotificationSubscription (TopicArn), ReaderPolicy (object ARN, bucket ARN, ListBucket prefix) and the SnapshotBucketName/ChangeTopicArn outputs resolves through Fn::If. Any Ref or GetAtt pointing at a conditional resource sits only in its true branch. Scale: 10 means no reviewer could ask for more; 8 is a competent, complete implementation; minScore is the acceptable bar.",
+          "passCriteria": [
+            "grep the template for Ref/Fn::GetAtt of SnapshotBucket and ChangeTopic: each hit is inside the true branch of an Fn::If on CreateSharedResources, or inside a resource that is itself conditional",
+            "The false branch builds the bucket ARN from ExistingBucketName (for example Fn::Sub arn:${AWS::Partition}:s3:::${ExistingBucketName}) and uses ExistingTopicArn directly",
+            "The ReaderPolicy ListBucket s3:prefix condition still works in both branches when ReaderListBucket is enabled",
+            "Running cfn-lint or aws cloudformation validate-template on the template reports no errors"
+          ],
+          "failureExamples": [
+            "ReaderPolicy converts the object resource to Fn::If but leaves the ListBucket bucket ARN as GetAtt SnapshotBucket.Arn, so queue-only create fails",
+            "The queue policy SourceArn is hardcoded to Ref ChangeTopic",
+            "The false-branch ARN uses a hardcoded 'arn:aws:' instead of the AWS::Partition pseudo-parameter"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "least-privilege-preserved-both-modes",
+          "label": "Least-privilege action sets unchanged in both modes",
+          "ruleStatement": "Both modes keep exactly the pre-existing action sets and scopes for the Reader and Publisher policies. The queue policy still allows only sns.amazonaws.com with aws:SourceArn equal to the effective topic. Scale: 10 means no reviewer could ask for more; 8 is a competent, complete implementation; minScore is the acceptable bar.",
+          "passCriteria": [
+            "The ReaderPolicy Action list is identical to the one at the phase 1-4 commit (git diff shows only Resource/Condition edits)",
+            "No wildcard resource ('*' or an unscoped bucket ARN) is introduced in either branch",
+            "The NotificationQueuePolicy Principal is still Service sns.amazonaws.com, and its SourceArn condition equals the effective topic ARN in both branches"
+          ],
+          "failureExamples": [
+            "To make the false branch simpler, Resource is set to arn:aws:s3:::*",
+            "The queue policy drops the SourceArn condition in queue-only mode"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "static-assertions-both-branches",
+          "label": "Policy Assertion Test covers both condition branches offline",
+          "ruleStatement": "stack-policies.test.ts resolves the template under full mode and under queue-only mode. It asserts which resources exist in each mode and which ARNs they reference, and it runs offline in pnpm verify. Scale: 10 means the tests also cover the partial-parameter case and output conditions; 8 is a competent, complete implementation; minScore is the acceptable bar.",
+          "passCriteria": [
+            "The test file has separate cases for full mode and for queue-only mode (with ExistingBucketName/ExistingTopicArn set)",
+            "The queue-only case asserts that SnapshotBucket, SnapshotBucketPolicy, ChangeTopic and PublisherPolicy are absent after condition resolution",
+            "The queue-only case asserts that the SourceArn, subscription TopicArn and ReaderPolicy resources equal the passed-in values",
+            "The existing full-mode assertions are still present and pass",
+            "pnpm verify passes without network or LocalStack"
+          ],
+          "failureExamples": [
+            "The resolver evaluates Fn::If but ignores resource-level Condition, so absence is never tested",
+            "The tests only check that the Condition key exists and never resolve the reference values"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "localstack-cross-stack-delivery",
+          "label": "LocalStack proves a queue-only stack receives from the shared topic",
+          "ruleStatement": "The LocalStack test deploys a full stack and then a queue-only stack that gets the full stack's outputs as parameters. After one publish on the shared topic, a message arrives on the second stack's queue. The test cleans up both stacks, and SDK clients are configured only through environment config. Scale: 10 means no reviewer could ask for more; 8 is a competent, complete implementation; minScore is the acceptable bar.",
+          "passCriteria": [
+            "deployment-stack.localstack.test.ts creates a second stack with ExistingBucketName/ExistingTopicArn taken from DescribeStacks outputs of the first stack",
+            "The test publishes to ChangeTopicArn and receives the message from the queue-only stack's queue URL output",
+            "Teardown deletes the queue-only stack before the full stack, and the retained bucket does not break reruns (unique names or emptied and deleted)",
+            "The test contains no hardcoded endpoint beyond the existing SDK env config pattern",
+            "Running the test twice in a row passes both times"
+          ],
+          "failureExamples": [
+            "The second stack reuses the same AppName, so the queue names collide and the rerun fails",
+            "Because of Retain, the bucket from run 1 blocks run 2 with BucketAlreadyExists",
+            "The test asserts only that the stack status is CREATE_COMPLETE, and no message delivery is checked"
+          ],
+          "minScore": 7
+        }
+      ],
+      "healerHint": "Most likely one leftover Ref/GetAtt to SnapshotBucket or ChangeTopic outside an Fn::If (often the ReaderPolicy ListBucket ARN or an output) breaks the queue-only deploy. Grep for every reference and wrap each one in Fn::If on CreateSharedResources."
+    },
+    {
+      "id": "document-stack-deployment",
+      "order": 5,
+      "filePath": null,
+      "name": "Document deploying the stack and attaching policies",
+      "goal": "Write a guide to deploying the Deployment Stack into the user's own AWS account. It covers deploying one full-mode stack for the shared bucket and topic, deploying one queue-only stack per reading app, attaching the Publisher Policy and Reader Policy to principals, why the DLQ is required, and a manual real-AWS least-privilege verification recipe.",
+      "rationale": "Users need to know how to deploy the template, wire its outputs into the CLI (--topic-arn / FEATURESYNC_TOPIC_ARN) and createS3SnapshotSource, and understand that a failed push load is redelivered until the DLQ catches it. The manual real-AWS check is the second half of closing the IAM-verification blocker, since CI has no real-AWS credentials.",
+      "filesAffected": [
+        "docs/deploy.md (new)",
+        "README.md (link + short deploy section)",
+        "docs/spec/change-notification.md (link to the stack for the DLQ setup)"
+      ],
+      "changes": [
+        "Describe deploying with aws cloudformation deploy or the SDK, with parameters (app name, env prefix, maxReceiveCount, raw delivery, ExistingBucketName/ExistingTopicArn) and --capabilities CAPABILITY_NAMED_IAM",
+        "Show deploying one full-mode stack for the shared bucket and topic, then one queue-only stack per reading app that passes the full stack's SnapshotBucketName and ChangeTopicArn outputs",
+        "Show attaching the Publisher Policy to the CLI's role or user, and each queue-only stack's Reader Policy to that app's role",
+        "Explain why the DLQ with maxReceiveCount is mandatory and that the snapshot bucket is retained on stack deletion",
+        "Add a manual real-AWS verification recipe: publisher succeeds, reader cannot PutObject, missing version reports SNAPSHOT_NOT_FOUND for the publisher/pull principal"
+      ],
+      "boundedContext": "Deployment Stack",
+      "layer": "interface",
+      "blastRadius": "small",
+      "inputs": [
+        "Stack outputs and parameters, including queue-only mode parameters ExistingBucketName/ExistingTopicArn",
+        "Policy Assertion Test results"
+      ],
+      "expectedResult": "docs/deploy.md deployment and policy-attachment guide, linked from README.md",
+      "dependsOn": [
+        "add-queue-only-stack-mode"
+      ],
+      "rubric": [
+        {
+          "id": "topology-full-plus-queue-only",
+          "label": "Guide describes one full stack plus one queue-only stack per app",
+          "ruleStatement": "docs/deploy.md tells the user to deploy exactly one full-mode stack (the shared bucket and topic) and then one queue-only stack per reading app, fed from the full stack's outputs. It never says each app gets its own full stack. Scale: 10 means no reviewer could ask for more; 8 is a competent, complete implementation; minScore is the acceptable bar.",
+          "passCriteria": [
+            "docs/deploy.md contains a full-mode deploy command without ExistingBucketName/ExistingTopicArn",
+            "The guide contains a queue-only deploy command that passes ExistingBucketName=<SnapshotBucketName output> and ExistingTopicArn=<ChangeTopicArn output>",
+            "It shows how to read those outputs (aws cloudformation describe-stacks --query ...)",
+            "No sentence says 'one stack per reading app' in the full-stack sense"
+          ],
+          "failureExamples": [
+            "The guide says 'deploy one stack instance per reading app' without queue-only parameters, so every app gets its own bucket and topic",
+            "The queue-only step says 'pass the bucket name' but never shows where to get it"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "commands-match-template",
+          "label": "Commands and parameter names match the real template",
+          "ruleStatement": "Every parameter, output and capability named in the guide exists in featuresync-stack.json, spelled exactly as the template spells it, and each command could run as written. Scale: 10 means no reviewer could ask for more; 8 is a competent, complete implementation; minScore is the acceptable bar.",
+          "passCriteria": [
+            "Each --parameter-overrides key in docs/deploy.md (AppName, Environment, MaxReceiveCount, RawMessageDelivery, ReaderListBucket, ExistingBucketName, ExistingTopicArn) matches a key in the template's Parameters",
+            "Each output named (SnapshotBucketName, ChangeTopicArn, PublisherPolicyArn, ReaderPolicyArn, queue URL/ARN) exists in the template's Outputs",
+            "The deploy commands include --capabilities CAPABILITY_NAMED_IAM",
+            "The guide shows the CLI wiring via --topic-arn / FEATURESYNC_TOPIC_ARN and the reader wiring via createS3SnapshotSource"
+          ],
+          "failureExamples": [
+            "The guide uses 'TopicArn' or 'BucketName' as the parameter name while the template uses ExistingTopicArn",
+            "It omits CAPABILITY_NAMED_IAM, so the copy-pasted deploy fails with InsufficientCapabilities"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "policy-attachment-and-dlq-rationale",
+          "label": "Policy attachment, DLQ and retention explained",
+          "ruleStatement": "The guide shows how to attach PublisherPolicy to the CLI principal and each queue-only stack's ReaderPolicy to that app's role. It explains that a failed load is redelivered until maxReceiveCount moves it to the DLQ, and that the bucket is retained on stack deletion. Scale: 10 means no reviewer could ask for more; 8 is a competent, complete implementation; minScore is the acceptable bar.",
+          "passCriteria": [
+            "There is an aws iam attach-role-policy (or attach-user-policy) example that uses the PublisherPolicyArn output",
+            "There is a per-app example that attaches that app's queue-only stack ReaderPolicyArn",
+            "A paragraph states why the DLQ is mandatory (poison messages are redelivered until maxReceiveCount) and how to inspect or redrive it",
+            "The guide states that the snapshot bucket survives stack deletion and must be emptied or deleted by hand",
+            "README.md links to docs/deploy.md, and docs/spec/change-notification.md links to the stack for the DLQ setup"
+          ],
+          "failureExamples": [
+            "The guide tells readers to attach the full stack's ReaderPolicy to every app, but that policy does not grant the app's own queue",
+            "The DLQ is mentioned only as 'recommended'"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "manual-real-aws-verification-recipe",
+          "label": "Runnable real-AWS least-privilege recipe",
+          "ruleStatement": "The guide includes a step-by-step manual check on real AWS. It shows the publisher succeeding, the reader being denied PutObject, and a missing version reporting SNAPSHOT_NOT_FOUND for the publisher/pull principal, with the expected output for each step. Scale: 10 means the recipe also covers cleanup and the reader 403 path; 8 is a competent, complete implementation; minScore is the acceptable bar.",
+          "passCriteria": [
+            "There are numbered steps with concrete commands (assume-role or profile, publish, aws s3api put-object as the reader)",
+            "Each step names the expected result (success, AccessDenied, SNAPSHOT_NOT_FOUND)",
+            "The recipe says it closes the IAM-verification blocker that LocalStack Community cannot verify",
+            "It includes a cleanup step"
+          ],
+          "failureExamples": [
+            "The recipe says 'verify the reader cannot write' without a command or expected error",
+            "It claims the LocalStack test proves IAM denial, which contradicts the blocker"
+          ],
+          "minScore": 7
+        }
+      ],
+      "healerHint": "Most likely the guide drifts from the template: wrong parameter or output names, or it still describes a full stack per app. Diff every name in docs/deploy.md against featuresync-stack.json and rewrite the topology section as one full stack plus N queue-only stacks."
+    }
+  ],
+  "successCriteria": [
+    "Versioned IaC template (bucket, topic, per-app queue+DLQ with parameterised maxReceiveCount, topic-only queue policy, publisher+reader IAM policies, outputs); least-privilege policies with no wildcard actions/resources beyond stack ARNs; policy-assertion tests in existing CI plus decision + manual real-AWS recipe; 403 blocker resolved by a recorded decision plus prefix-scoped s3:ListBucket grants (publisher always, reader via parameter), horizon-6 isNotFound/isMissing split unchanged and no runtime code change; template deploys to LocalStack via SDK env config only and push proof passes against stack resources; all CI gates green (100% coverage, ESLint layers, typecheck, LocalStack job); queue-only mode (ExistingBucketName/ExistingTopicArn) so N reading apps attach queues to one shared bucket/topic; deploy/attach docs for one full stack plus one queue-only stack per app, incl. why DLQ is required.",
+    "Add CloudFormation template for FeatureSync resources: packages/deploy/template/featuresync-stack.json: a valid CloudFormation template declaring bucket, topic, queue, DLQ, queue policy and subscription with parameters and outputs",
+    "Add publisher and reader IAM policies: Publisher Policy and Reader Policy resources in featuresync-stack.json with no wildcard actions and resources limited to stack ARNs",
+    "Test IAM policies with static assertion tests: packages/deploy/test/stack-policies.test.ts passing inside pnpm verify",
+    "Test deploying the stack to LocalStack: deployment-stack.localstack.test.ts passing in the CI localstack job",
+    "Add a queue-only mode that attaches to an existing bucket and topic: featuresync-stack.json supports ExistingBucketName/ExistingTopicArn, covered by both-mode static assertions and a LocalStack cross-stack delivery test",
+    "Document deploying the stack and attaching policies: docs/deploy.md deployment and policy-attachment guide (one full stack plus one queue-only stack per app), linked from README.md"
+  ],
+  "deferred": [
+    "Real-AWS automated tests in CI — no credentials provisioned.",
+    "Dashboard/UI — separate future package.",
+    "Lambda publisher/validator — CLI is single writer (horizon-4 decision).",
+    "Multi-account/multi-region/cross-account — single user-owned account.",
+    "DLQ redrive tooling or CloudWatch alarms — follow-up.",
+    "Customer-managed KMS keys — adds IAM surface.",
+    "Terraform/Pulumi variants — one IaC flavour first.",
+    "Changes to snapshot format, pointer contract, or SnapshotSource port — binding contracts.",
+    "Remaining horizon-7 blockers unrelated to deployment/IAM.",
+    "npm publishing/release automation.",
+    "CI OIDC role setup for user pipelines.",
+    "AWS CDK package variant — YAGNI: needs cdklocal/bootstrap, conflicts with SDK-env-only LocalStack decision",
+    "'featuresync deploy' CLI command — YAGNI: no user need; AWS CLI/SDK already deploys a template"
+  ],
+  "revision": 1,
+  "revisionReason": "Every stack instance created its own bucket and topic, so one-stack-per-reading-app could not share snapshots. Added add-queue-only-stack-mode; document-stack-deployment now depends on it and documents one full stack plus one queue-only stack per app."
+}

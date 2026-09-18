@@ -1,0 +1,331 @@
+{
+  "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-09-aws-deployment-stack-roadmap.json",
+  "roadmapTask": "Horizon 9 of FeatureSync: deployment stack (S3 snapshot bucket, SNS change topic, per-app SQS notification queue + DLQ, least-privilege publisher/reader IAM policies) deployable into the user's own AWS account; resolve the IAM-verification-on-LocalStack and 403→*_NOT_FOUND blockers.",
+  "createdAt": "2026-09-18T16:34:32Z",
+  "updatedAt": "2026-09-18T18:09:08Z",
+  "roadmapRevision": 1,
+  "phases": [
+    {
+      "phaseId": "add-cloudformation-deployment-stack",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-18T16:34:32Z",
+      "baseRef": "a2a75a08669fa0bef60b3fea738e4627bdd00d95",
+      "baseDirty": true,
+      "notes": "Already dirty at start: docs/roadmaps/featuresync/{decisions,discoveries,state}.md, horizons/horizon-09 roadmap json+md. Changed: packages/deploy/package.json, packages/deploy/tsconfig.json, packages/deploy/template/featuresync-stack.json (all new); pnpm-lock.yaml (workspace importer entry). Plain CloudFormation JSON: versioned/SSE-S3/public-blocked bucket with TLS-deny policy, SNS topic, per-app SQS queue + DLQ (MaxReceiveCount param, default 5), topic-only queue policy (sns.amazonaws.com + ArnEquals SourceArn), subscription with RawMessageDelivery param; params AppName/Environment; outputs bucket, topic ARN, queue URL/ARN, DLQ ARN. No typecheck script yet: tsconfig includes test/, which phase 3 creates (tsc errors on an empty include). Local pnpm verify exit 0.",
+      "unplannedFiles": [
+        "pnpm-lock.yaml"
+      ],
+      "completedAt": "2026-09-18T16:37:38Z",
+      "gateRun": [
+        "pnpm verify: pass"
+      ],
+      "gradeResult": {
+        "phaseId": "add-cloudformation-deployment-stack",
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "bucket-hardening",
+            "score": 8,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "topic-scoped-queue-policy",
+            "score": 10,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "dlq-redrive-parameterized",
+            "score": 10,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "multi-instance-safe",
+            "score": 9,
+            "minScore": 7,
+            "passed": true
+          }
+        ],
+        "summary": "All pass; grader notes: no Retain DeletionPolicy on bucket; explicit QueueName from StackName can exceed the 80-char SQS limit."
+      }
+    },
+    {
+      "phaseId": "add-least-privilege-iam-policies",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-18T16:40:41Z",
+      "baseRef": "a2a75a08669fa0bef60b3fea738e4627bdd00d95",
+      "baseDirty": true,
+      "notes": "Already dirty at start: phase-1 files (packages/deploy/*, pnpm-lock.yaml) and docs/roadmaps/featuresync/{decisions,discoveries,state}.md, horizon-09 roadmap/ledger files. Changed: packages/deploy/template/featuresync-stack.json (PublisherPolicy + ReaderPolicy ManagedPolicies, ReaderListBucket param + GrantReaderListBucket condition via Fn::If/AWS::NoValue, PublisherPolicyArn/ReaderPolicyArn outputs; file re-serialized by JSON.stringify), docs/spec/s3-layout.md (Read access + publisher IAM text now point to the stack), decisions.md (+1 horizon-9 403 decision), discoveries.md (+1 StringLikeIfExists), blockers.md (horizon-2 403 blocker marked resolved). Amendment 1: StringLikeIfExists instead of StringLike (user-chosen). Local pnpm verify exit 0.",
+      "unplannedFiles": [
+        "docs/roadmaps/featuresync/discoveries.md",
+        "docs/roadmaps/featuresync/blockers.md"
+      ],
+      "completedAt": "2026-09-18T16:44:22Z",
+      "gateRun": [
+        "pnpm verify: pass"
+      ],
+      "gradeResult": {
+        "phaseId": "add-least-privilege-iam-policies",
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "exact-action-sets",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "resource-and-prefix-scoping",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "reader-listbucket-toggle",
+            "score": 10,
+            "minScore": 7,
+            "passed": true
+          },
+          {
+            "dimensionId": "decision-and-spec-sync",
+            "score": 9,
+            "minScore": 7,
+            "passed": true
+          }
+        ],
+        "summary": "All pass against the amended contract (StringLikeIfExists). Grader notes: grouped Sids; <env>/ not listed explicitly beside <env>/*; spec restates policy contents in a table (drift risk)."
+      }
+    },
+    {
+      "phaseId": "test-iam-policy-assertions",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-18T16:45:15Z",
+      "baseRef": "a2a75a08669fa0bef60b3fea738e4627bdd00d95",
+      "baseDirty": true,
+      "notes": "Already dirty at start: phase-1/2 files (packages/deploy/*, pnpm-lock.yaml, docs/spec/s3-layout.md) and featuresync memory/roadmap files. Changed: packages/deploy/test/stack-policies.test.ts (new, 10 tests: exact sorted action sets per policy, ReaderListBucket on/off via Fn::If resolution, no wildcard actions/bare * resources, all refs point at stack resources/params, every ListBucket has StringLikeIfExists s3:prefix ${Environment}/*, queue policy SourceArn = topic, DLQ redrive + MaxReceiveCount default 5); packages/deploy/package.json (+typecheck script, deferred from phase 1). vitest.config.ts unchanged (auto-picks packages/*). Mutation check: adding sqs:GetQueueAttributes to ReaderPolicy fails the suite. Local pnpm verify exit 0.",
+      "unplannedFiles": [
+        "packages/deploy/package.json"
+      ],
+      "completedAt": "2026-09-18T16:49:32Z",
+      "gateRun": [
+        "pnpm verify (AWS_* unset): pass"
+      ],
+      "gradeResult": {
+        "phaseId": "test-iam-policy-assertions",
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "exact-set-equality",
+            "score": 10,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "wildcard-and-condition-guards",
+            "score": 10,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "parameter-branch-coverage",
+            "score": 10,
+            "minScore": 7,
+            "passed": true
+          },
+          {
+            "dimensionId": "runs-in-verify-offline",
+            "score": 8,
+            "minScore": 8,
+            "passed": true
+          }
+        ],
+        "summary": "All pass. Grader note: default pnpm verify reporter does not print the test file name (verbose reporter shows 10/10)."
+      }
+    },
+    {
+      "phaseId": "test-stack-deploy-on-localstack",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-18T16:51:34Z",
+      "baseRef": "a2a75a08669fa0bef60b3fea738e4627bdd00d95",
+      "baseDirty": true,
+      "notes": "Already dirty at start: phase 1-3 files (packages/deploy/*, pnpm-lock.yaml, docs/spec/s3-layout.md) and featuresync memory/roadmap files. Changed: packages/aws/integration/deployment-stack.localstack.test.ts (new: CreateStack from packages/deploy template with CAPABILITY_IAM, unique stack name + AppName suffix, waitUntilStackCreateComplete, Outputs-driven publisher/source, push-only delivery asserts version 2; afterAll empties all object versions then DeleteStack + wait, guarded on stackId); packages/aws/package.json (+devDep @aws-sdk/client-cloudformation); pnpm-lock.yaml; docker/docker-compose.yml (SERVICES + healthcheck add cloudformation, iam, sts); .github/workflows/ci.yml (AWS_ENDPOINT_URL_CLOUDFORMATION/IAM/STS); .env.example (same three); decisions.md (+1 IAM-not-enforced), discoveries.md (+2), blockers.md (horizon-1 IAM blocker resolved). IAM probe: pinned image 2026.08.3 with ENFORCE_IAM=1 and the local (freemium-licensed) token allowed PutObject for a Reader Policy user, so per the contract the negative case was dropped and the finding recorded. Ran against a pinned-image container on port 4666 (LOCALSTACK_HOST set), since the user has another LocalStack on 4566: pnpm test:integration 5 files/11 tests pass; both test stacks DELETE_COMPLETE. pnpm verify exit 0 (one earlier run hit a timing flake in core file-snapshot-source watch tests; clean on rerun). Compensation: revert compose SERVICES/healthcheck and CI env lines; test file standalone. VERIFY: grader passed 8/10/9/8; no 10→9 demotions. Compensation known: revert compose SERVICES/healthcheck + CI/.env.example endpoint lines, delete test file.",
+      "unplannedFiles": [
+        ".env.example",
+        "pnpm-lock.yaml",
+        "docs/roadmaps/featuresync/discoveries.md",
+        "docs/roadmaps/featuresync/blockers.md",
+        "docs/roadmaps/featuresync/decisions.md"
+      ],
+      "completedAt": "2026-09-18T17:11:00Z",
+      "gateRun": [
+        "pnpm verify: pass",
+        "pnpm test:integration (pinned localstack 2026.08.3, LOCALSTACK_HOST on container, port 4666): 5 files/11 tests pass"
+      ],
+      "gradeResult": {
+        "phaseId": "test-stack-deploy-on-localstack",
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "real-template-deploy",
+            "score": 8,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "Template read from disk; no hardcoded endpoint; waiter + Outputs; compose/CI include cloudformation,iam,sts. No final-status assert or stack events on CREATE_FAILED."
+          },
+          {
+            "dimensionId": "end-to-end-via-outputs",
+            "score": 10,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "All ids from Outputs via output(); push-only; 10: asserts loaded version values (second === first+1, onChange with snapshot(second))."
+          },
+          {
+            "dimensionId": "isolation-and-teardown",
+            "score": 9,
+            "minScore": 7,
+            "pass": true,
+            "evidence": "uuid-suffixed stack/AppName; guarded afterAll empties versions+markers then awaits delete; ListObjectVersions unpaginated."
+          },
+          {
+            "dimensionId": "iam-enforcement-premise-checked",
+            "score": 8,
+            "minScore": 7,
+            "pass": true,
+            "evidence": "ENFORCE_IAM=1 probe on 2026.08.3 allowed PutObject; recorded in decisions.md/discoveries.md; probe not scripted."
+          }
+        ]
+      }
+    },
+    {
+      "phaseId": "add-queue-only-stack-mode",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-18T17:23:30Z",
+      "baseRef": "a2a75a08669fa0bef60b3fea738e4627bdd00d95",
+      "baseDirty": true,
+      "notes": "Already dirty at start: phase 1-4 files (packages/deploy/*, packages/aws/integration/deployment-stack.localstack.test.ts, packages/aws/package.json, pnpm-lock.yaml, docker/docker-compose.yml, .github/workflows/ci.yml, .env.example, docs/spec/s3-layout.md) and featuresync memory/roadmap files. Changed: packages/deploy/template/featuresync-stack.json (params ExistingBucketName/ExistingTopicArn default empty; Rules ExistingResourcesTogether both-or-neither; condition CreateSharedResources = Fn::And of two empty checks, on SnapshotBucket/SnapshotBucketPolicy/ChangeTopic/PublisherPolicy + PublisherPolicyArn output; bucket DeletionPolicy/UpdateReplacePolicy Retain; queue policy SourceArn, subscription TopicArn, ReaderPolicy object/ListBucket ARNs, SnapshotBucketName/ChangeTopicArn outputs via Fn::If, false branch arn:${AWS::Partition}:s3:::${ExistingBucketName}; action sets unchanged); packages/deploy/test/stack-policies.test.ts (generic resolver for Fn::If anywhere, And/Or/Not/Equals, resource/output Condition, Rules; reader + every-policy suites run per mode; full/queue-only resource-set, reference, output cases; 4-case Rules test; 28 tests); packages/aws/integration/deployment-stack.localstack.test.ts (createStack/deleteStack helpers; second queue-only stack from first stack Outputs with unique AppName; publish on shared topic received on queue-only queue; teardown queue-only stack first, then empty+delete full stack, then DeleteBucket on retained bucket); discoveries.md +1. pnpm verify exit 0 (482 tests). pnpm test:integration on pinned 2026.08.3, port 4666, run twice: 5 files/12 tests pass both, all 4 stacks DELETE_COMPLETE, no buckets left. No cfn-lint/aws CLI installed: template validity shown only by LocalStack CreateStack in both modes. VERIFY: grader 10/8/9/10/9; both 10s carry above-bar evidence, no demotions. Compensation: none declared for this phase; revert = restore template/test files from before this phase.",
+      "unplannedFiles": [
+        "docs/roadmaps/featuresync/discoveries.md"
+      ],
+      "completedAt": "2026-09-18T18:01:05Z",
+      "gradeResult": {
+        "phaseId": "add-queue-only-stack-mode",
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "conditional-shared-resources",
+            "score": 10,
+            "minScore": 7,
+            "pass": true,
+            "evidence": "All criteria met; 10 earned by rulesHold() static test covering neither/both/bucket-only/topic-only."
+          },
+          {
+            "dimensionId": "fn-if-reference-resolution",
+            "score": 8,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "All shared refs in Fn::If true branches; partition-based false branch; held at 8 because no cfn-lint/validate-template run."
+          },
+          {
+            "dimensionId": "least-privilege-preserved-both-modes",
+            "score": 9,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "Action sets unchanged; SourceArn = effective topic in both modes; no wildcards."
+          },
+          {
+            "dimensionId": "static-assertions-both-branches",
+            "score": 10,
+            "minScore": 7,
+            "pass": true,
+            "evidence": "Resolver honours resource/output Condition; 10 earned by partial-parameter and output-condition cases."
+          },
+          {
+            "dimensionId": "localstack-cross-stack-delivery",
+            "score": 9,
+            "minScore": 7,
+            "pass": true,
+            "evidence": "Queue-only stack from full-stack Outputs receives shared-topic publish; ordered teardown incl. retained bucket; two consecutive passing runs."
+          }
+        ],
+        "summary": "All pass; gap: no cfn-lint or validate-template run (tools not installed)."
+      },
+      "gateRun": [
+        "pnpm verify: pass",
+        "pnpm test:integration x2 (pinned localstack 2026.08.3, port 4666): pass both"
+      ]
+    },
+    {
+      "phaseId": "document-stack-deployment",
+      "status": "done",
+      "attempts": 2,
+      "compensationInvoked": false,
+      "notes": "Revision 1: returned to not-started, now depends on add-queue-only-stack-mode. Prior attempt 1 (2026-09-18T17:16:43Z) blocked at contract check with REPLAN_REQUIRED: every stack created its own bucket/topic. Attempt 2: already dirty at start: horizon-9 phase 1-5 files and featuresync memory/roadmap files. Changed: docs/deploy.md (new: topology full stack + queue-only per extra app, parameter/output tables, deploy + describe-stacks commands with CAPABILITY_NAMED_IAM, attach-role-policy for Publisher/per-app Reader, CLI --topic-arn/FEATURESYNC_TOPIC_ARN + createS3SnapshotSource wiring, DLQ rationale + inspect/redrive, Retain bucket deletion, 7-step real-AWS IAM recipe with expected results and cleanup); README.md (+Deploying to AWS section linking docs/deploy.md); docs/spec/change-notification.md (DLQ bullet links to deploy guide). Note: a full-mode stack also creates the queue for its own AppName, so the guide says queue-only stacks are for each additional app. Recipe not run (no real-AWS credentials here). No code changed; no gates run. VERIFY: grader 9/9/9/9, no 10s. Grader notes: recipe unrun on real AWS; CLI publish usage text omits --topic-arn; cleanup delete-objects fails on empty version list. Compensation: none declared; revert = delete docs/deploy.md, drop README section and spec link.",
+      "startedAt": "2026-09-18T18:03:43Z",
+      "baseRef": "a2a75a08669fa0bef60b3fea738e4627bdd00d95",
+      "baseDirty": true,
+      "unplannedFiles": [],
+      "completedAt": "2026-09-18T18:09:08Z",
+      "gateRun": [
+        "pnpm verify (AWS_* unset): pass",
+        "guide param/output names vs template: all match"
+      ],
+      "gradeResult": {
+        "phaseId": "document-stack-deployment",
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "topology-full-plus-queue-only",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "commands-match-template",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "policy-attachment-and-dlq-rationale",
+            "score": 9,
+            "minScore": 7,
+            "passed": true
+          },
+          {
+            "dimensionId": "manual-real-aws-verification-recipe",
+            "score": 9,
+            "minScore": 7,
+            "passed": true
+          }
+        ],
+        "summary": "All pass. Recipe not yet run on real AWS; CLI usage text omits --topic-arn."
+      }
+    }
+  ],
+  "amendments": [
+    {
+      "phaseId": "add-least-privilege-iam-policies",
+      "at": "2026-09-18T16:40:41Z",
+      "reason": "A GetObject request carries no s3:prefix key, so s3:ListBucket under StringLike s3:prefix never applies to GetObject and missing keys would still return 403. StringLikeIfExists keeps ListObjects limited to <env>/ while letting GetObject return 404. User chose this at the contract check.",
+      "changes": [
+        {
+          "field": "changes",
+          "before": "s3:ListBucket on the bucket ARN with an s3:prefix condition for <env>/ (StringLike)",
+          "after": "s3:ListBucket on the bucket ARN with StringLikeIfExists s3:prefix <env>/* (publisher always, reader under the pull parameter); decision notes it is unproven until the manual real-AWS recipe runs"
+        }
+      ]
+    }
+  ]
+}

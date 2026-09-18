@@ -11,6 +11,13 @@ entirely in memory — no network call per flag check. Everything runs in your o
 |---|---|
 | `@featuresync/core` | Domain model, rule evaluation and the in-memory flag client |
 
+## Deploying to AWS
+
+A CloudFormation template creates the snapshot bucket, change topic, a notification queue with a
+dead-letter queue per reading app, and least-privilege publisher and reader policies. Deploy one
+full stack for the shared bucket and topic, then one queue-only stack per additional reading app.
+See [docs/deploy.md](docs/deploy.md).
+
 ## Reproducible CI with a pinned snapshot
 
 `featuresync pull` downloads one published snapshot version, validates it, and writes it

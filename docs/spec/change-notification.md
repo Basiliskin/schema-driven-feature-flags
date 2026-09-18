@@ -91,7 +91,9 @@ next poll. The source applies these rules to every notification:
 - **Poison Message policy.** A message that cannot be parsed is deleted immediately; retrying it can
   never succeed. When loading the Snapshot fails, the message is left on the queue so SQS redelivers
   it. Configure a dead-letter queue with a `maxReceiveCount` (for example 5) on the queue's redrive
-  policy, or a Snapshot that keeps failing to load is retried forever.
+  policy, or a Snapshot that keeps failing to load is retried forever. The
+  [deployment stack](../deploy.md#why-the-dead-letter-queue-is-not-optional) creates this
+  dead-letter queue for every app's queue.
 - **Unsubscribe.** The function `subscribe` returns stops the queue and the poll timer at once. A load
   already in flight finishes but does not call `onChange`.
 

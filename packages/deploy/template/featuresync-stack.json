@@ -1,0 +1,497 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "FeatureSync deployment stack: snapshot bucket, change topic, and one app's notification queue with its dead-letter queue. In queue-only mode it attaches the queue to an existing bucket and topic.",
+  "Parameters": {
+    "AppName": {
+      "Type": "String",
+      "Description": "Name of the reading app that owns the notification queue.",
+      "AllowedPattern": "^[A-Za-z0-9_-]{1,40}$"
+    },
+    "Environment": {
+      "Type": "String",
+      "Description": "Environment key prefix in the snapshot bucket (production, staging, ...).",
+      "AllowedPattern": "^[^/]+$"
+    },
+    "MaxReceiveCount": {
+      "Type": "Number",
+      "Description": "Deliveries before a notification that keeps failing to load moves to the dead-letter queue.",
+      "Default": 5,
+      "MinValue": 1
+    },
+    "RawMessageDelivery": {
+      "Type": "String",
+      "Description": "Deliver the bare change notification instead of the SNS envelope; the reader accepts both.",
+      "Default": "true",
+      "AllowedValues": [
+        "true",
+        "false"
+      ]
+    },
+    "ReaderListBucket": {
+      "Type": "String",
+      "Description": "Also grant the Reader Policy prefix-scoped s3:ListBucket, so featuresync pull reports a missing version as SNAPSHOT_NOT_FOUND instead of ACCESS_DENIED.",
+      "Default": "false",
+      "AllowedValues": [
+        "true",
+        "false"
+      ]
+    },
+    "ExistingBucketName": {
+      "Type": "String",
+      "Description": "Queue-only mode: snapshot bucket created by an existing full-mode stack. Leave empty, together with ExistingTopicArn, to create the bucket, topic and Publisher Policy in this stack.",
+      "Default": ""
+    },
+    "ExistingTopicArn": {
+      "Type": "String",
+      "Description": "Queue-only mode: change topic ARN created by an existing full-mode stack. Set together with ExistingBucketName.",
+      "Default": ""
+    }
+  },
+  "Rules": {
+    "ExistingResourcesTogether": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Or": [
+              {
+                "Fn::And": [
+                  {
+                    "Fn::Equals": [
+                      {
+                        "Ref": "ExistingBucketName"
+                      },
+                      ""
+                    ]
+                  },
+                  {
+                    "Fn::Equals": [
+                      {
+                        "Ref": "ExistingTopicArn"
+                      },
+                      ""
+                    ]
+                  }
+                ]
+              },
+              {
+                "Fn::And": [
+                  {
+                    "Fn::Not": [
+                      {
+                        "Fn::Equals": [
+                          {
+                            "Ref": "ExistingBucketName"
+                          },
+                          ""
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "Fn::Not": [
+                      {
+                        "Fn::Equals": [
+                          {
+                            "Ref": "ExistingTopicArn"
+                          },
+                          ""
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Set ExistingBucketName and ExistingTopicArn together, or leave both empty."
+        }
+      ]
+    }
+  },
+  "Conditions": {
+    "GrantReaderListBucket": {
+      "Fn::Equals": [
+        {
+          "Ref": "ReaderListBucket"
+        },
+        "true"
+      ]
+    },
+    "CreateSharedResources": {
+      "Fn::And": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "ExistingBucketName"
+            },
+            ""
+          ]
+        },
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "ExistingTopicArn"
+            },
+            ""
+          ]
+        }
+      ]
+    }
+  },
+  "Resources": {
+    "SnapshotBucket": {
+      "Type": "AWS::S3::Bucket",
+      "Condition": "CreateSharedResources",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "SnapshotBucketPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Condition": "CreateSharedResources",
+      "Properties": {
+        "Bucket": {
+          "Ref": "SnapshotBucket"
+        },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "DenyInsecureTransport",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "s3:*",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "SnapshotBucket",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Sub": "${SnapshotBucket.Arn}/*"
+                }
+              ],
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "ChangeTopic": {
+      "Type": "AWS::SNS::Topic",
+      "Condition": "CreateSharedResources"
+    },
+    "NotificationDeadLetterQueue": {
+      "Type": "AWS::SQS::Queue",
+      "Properties": {
+        "QueueName": {
+          "Fn::Sub": "${AWS::StackName}-${AppName}-dlq"
+        },
+        "MessageRetentionPeriod": 1209600
+      }
+    },
+    "NotificationQueue": {
+      "Type": "AWS::SQS::Queue",
+      "Properties": {
+        "QueueName": {
+          "Fn::Sub": "${AWS::StackName}-${AppName}"
+        },
+        "RedrivePolicy": {
+          "deadLetterTargetArn": {
+            "Fn::GetAtt": [
+              "NotificationDeadLetterQueue",
+              "Arn"
+            ]
+          },
+          "maxReceiveCount": {
+            "Ref": "MaxReceiveCount"
+          }
+        }
+      }
+    },
+    "NotificationQueuePolicy": {
+      "Type": "AWS::SQS::QueuePolicy",
+      "Properties": {
+        "Queues": [
+          {
+            "Ref": "NotificationQueue"
+          }
+        ],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "AllowChangeTopicOnly",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "sns.amazonaws.com"
+              },
+              "Action": "sqs:SendMessage",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "NotificationQueue",
+                  "Arn"
+                ]
+              },
+              "Condition": {
+                "ArnEquals": {
+                  "aws:SourceArn": {
+                    "Fn::If": [
+                      "CreateSharedResources",
+                      {
+                        "Ref": "ChangeTopic"
+                      },
+                      {
+                        "Ref": "ExistingTopicArn"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "NotificationSubscription": {
+      "Type": "AWS::SNS::Subscription",
+      "DependsOn": "NotificationQueuePolicy",
+      "Properties": {
+        "TopicArn": {
+          "Fn::If": [
+            "CreateSharedResources",
+            {
+              "Ref": "ChangeTopic"
+            },
+            {
+              "Ref": "ExistingTopicArn"
+            }
+          ]
+        },
+        "Protocol": "sqs",
+        "Endpoint": {
+          "Fn::GetAtt": [
+            "NotificationQueue",
+            "Arn"
+          ]
+        },
+        "RawMessageDelivery": {
+          "Ref": "RawMessageDelivery"
+        }
+      }
+    },
+    "PublisherPolicy": {
+      "Type": "AWS::IAM::ManagedPolicy",
+      "Condition": "CreateSharedResources",
+      "Properties": {
+        "Description": "FeatureSync publisher (CLI publish/rollback) for one environment.",
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "ReadWriteEnvironmentKeys",
+              "Effect": "Allow",
+              "Action": [
+                "s3:GetObject",
+                "s3:PutObject"
+              ],
+              "Resource": {
+                "Fn::Sub": "${SnapshotBucket.Arn}/${Environment}/*"
+              }
+            },
+            {
+              "Sid": "ListEnvironmentKeys",
+              "Effect": "Allow",
+              "Action": "s3:ListBucket",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "SnapshotBucket",
+                  "Arn"
+                ]
+              },
+              "Condition": {
+                "StringLikeIfExists": {
+                  "s3:prefix": {
+                    "Fn::Sub": "${Environment}/*"
+                  }
+                }
+              }
+            },
+            {
+              "Sid": "PublishChangeNotifications",
+              "Effect": "Allow",
+              "Action": "sns:Publish",
+              "Resource": {
+                "Ref": "ChangeTopic"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "ReaderPolicy": {
+      "Type": "AWS::IAM::ManagedPolicy",
+      "Properties": {
+        "Description": "FeatureSync reading app for one environment and its notification queue.",
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "ReadEnvironmentKeys",
+              "Effect": "Allow",
+              "Action": "s3:GetObject",
+              "Resource": {
+                "Fn::If": [
+                  "CreateSharedResources",
+                  {
+                    "Fn::Sub": "${SnapshotBucket.Arn}/${Environment}/*"
+                  },
+                  {
+                    "Fn::Sub": "arn:${AWS::Partition}:s3:::${ExistingBucketName}/${Environment}/*"
+                  }
+                ]
+              }
+            },
+            {
+              "Fn::If": [
+                "GrantReaderListBucket",
+                {
+                  "Sid": "ListEnvironmentKeys",
+                  "Effect": "Allow",
+                  "Action": "s3:ListBucket",
+                  "Resource": {
+                    "Fn::If": [
+                      "CreateSharedResources",
+                      {
+                        "Fn::GetAtt": [
+                          "SnapshotBucket",
+                          "Arn"
+                        ]
+                      },
+                      {
+                        "Fn::Sub": "arn:${AWS::Partition}:s3:::${ExistingBucketName}"
+                      }
+                    ]
+                  },
+                  "Condition": {
+                    "StringLikeIfExists": {
+                      "s3:prefix": {
+                        "Fn::Sub": "${Environment}/*"
+                      }
+                    }
+                  }
+                },
+                {
+                  "Ref": "AWS::NoValue"
+                }
+              ]
+            },
+            {
+              "Sid": "ConsumeChangeNotifications",
+              "Effect": "Allow",
+              "Action": [
+                "sqs:ReceiveMessage",
+                "sqs:DeleteMessage"
+              ],
+              "Resource": {
+                "Fn::GetAtt": [
+                  "NotificationQueue",
+                  "Arn"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "Environment": {
+      "Value": {
+        "Ref": "Environment"
+      }
+    },
+    "SnapshotBucketName": {
+      "Value": {
+        "Fn::If": [
+          "CreateSharedResources",
+          {
+            "Ref": "SnapshotBucket"
+          },
+          {
+            "Ref": "ExistingBucketName"
+          }
+        ]
+      }
+    },
+    "ChangeTopicArn": {
+      "Value": {
+        "Fn::If": [
+          "CreateSharedResources",
+          {
+            "Ref": "ChangeTopic"
+          },
+          {
+            "Ref": "ExistingTopicArn"
+          }
+        ]
+      }
+    },
+    "NotificationQueueUrl": {
+      "Value": {
+        "Ref": "NotificationQueue"
+      }
+    },
+    "NotificationQueueArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "NotificationQueue",
+          "Arn"
+        ]
+      }
+    },
+    "NotificationDeadLetterQueueArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "NotificationDeadLetterQueue",
+          "Arn"
+        ]
+      }
+    },
+    "PublisherPolicyArn": {
+      "Condition": "CreateSharedResources",
+      "Value": {
+        "Ref": "PublisherPolicy"
+      }
+    },
+    "ReaderPolicyArn": {
+      "Value": {
+        "Ref": "ReaderPolicy"
+      }
+    }
+  }
+}
