@@ -2,17 +2,17 @@
   "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-01-local-first-core-runtime-roadmap.json",
   "roadmapTask": "Build a roadmap for the open-source schema-driven feature flag product (FeatureSync) described in docs/ (notes.md, notes-01.md, notes-02.md, playbooks/). Requirements: production-grade ready; DDD/SOLID/KISS/DRY; fully test-covered; LocalStack used only via environment config through the AWS SDK (no LocalStack-specific code paths).",
   "createdAt": "2026-09-18T06:12:11Z",
-  "updatedAt": "2026-09-18T06:14:18Z",
+  "updatedAt": "2026-09-18T06:48:00Z",
   "roadmapRevision": 0,
   "phases": [
     {
       "phaseId": "monorepo-quality-gates",
-      "status": "awaiting-verification",
+      "status": "done",
       "attempts": 1,
       "startedAt": "2026-09-18T06:12:11Z",
       "baseRef": "c46fb3a8f31882065d4d6a738aa3732e231c365f",
       "baseDirty": true,
-      "notes": "Already dirty at start: docs/roadmaps/ (untracked roadmap files). | Changed: package.json, pnpm-workspace.yaml, pnpm-lock.yaml, tsconfig.base.json, eslint.config.js, vitest.config.ts, .nvmrc, .gitignore, LICENSE, README.md, .github/workflows/ci.yml, packages/core/{package.json,tsconfig.json,tsconfig.build.json,src/index.ts,src/index.test.ts}. pnpm monorepo with strict TS 6, typed ESLint + import-x layer zones (domain<-app/infra, app<-infra), Vitest 5 v8 coverage at 100% thresholds, CI running pnpm verify on Node from .nvmrc. `pnpm verify` exits 0 locally; lint zones probed with throwaway violations (3/3 caught, removed). Unplanned files: .gitignore (node_modules/dist/coverage), lockfile, build tsconfig, smoke test so coverage has a target.",
+      "notes": "Already dirty at start: docs/roadmaps/ (untracked roadmap files). | Changed: package.json, pnpm-workspace.yaml, pnpm-lock.yaml, tsconfig.base.json, eslint.config.js, vitest.config.ts, .nvmrc, .gitignore, LICENSE, README.md, .github/workflows/ci.yml, packages/core/{package.json,tsconfig.json,tsconfig.build.json,src/index.ts,src/index.test.ts}. pnpm monorepo with strict TS 6, typed ESLint + import-x layer zones (domain<-app/infra, app<-infra), Vitest 5 v8 coverage at 100% thresholds, CI running pnpm verify on Node from .nvmrc. `pnpm verify` exits 0 locally; lint zones probed with throwaway violations (3/3 caught, removed). Unplanned files: .gitignore (node_modules/dist/coverage), lockfile, build tsconfig, smoke test so coverage has a target. | VERIFY: passed first grade, no healer retry. Compensation: none.",
       "amendments": [
         {
           "at": "2026-09-18T06:14:18Z",
@@ -58,17 +58,125 @@
         "packages/core/src/index.test.ts",
         "packages/core/tsconfig.build.json",
         "pnpm-lock.yaml"
-      ]
+      ],
+      "completedAt": "2026-09-18T06:15:58Z",
+      "gateRun": "pnpm verify: pass; probes (throwaway, removed): uncovered branch\u2192pnpm test exit 1, domain\u2192infrastructure import\u2192pnpm lint exit 1, type error\u2192pnpm typecheck exit 2",
+      "gradeResult": {
+        "phaseId": "monorepo-quality-gates",
+        "dimensionScores": [
+          {
+            "dimensionId": "gates-actually-fail",
+            "score": 9,
+            "pass": true,
+            "evidence": "vitest run --coverage with 100% v8 thresholds; three probes each turned their gate red; import-x zones cover domain<-app/infra and app<-infra; lint --max-warnings=0. Not 10: app<-infra zone unprobed, probes not kept as regression tests."
+          },
+          {
+            "dimensionId": "strict-typescript",
+            "score": 9,
+            "pass": true,
+            "evidence": "Base enables strict, noUncheckedIndexedAccess, exactOptionalPropertyTypes; core tsconfig and build tsconfig extend it, no override. Not 10: nothing enforces future packages extend base."
+          },
+          {
+            "dimensionId": "ci-parity",
+            "score": 9,
+            "pass": true,
+            "evidence": "ci.yml runs pnpm verify; setup-node uses .nvmrc (22); frozen lockfile; pnpm pinned via packageManager. Not 10: not yet confirmed green on real GitHub Actions."
+          }
+        ],
+        "overallPass": true
+      }
     },
     {
       "phaseId": "snapshot-domain-model",
-      "status": "not-started",
-      "attempts": 0
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-18T06:18:11Z",
+      "baseRef": "873b9437751346ab17a2abfdcfdc015634699898",
+      "baseDirty": true,
+      "notes": "Already dirty at start: all phase-1 files (uncommitted) and docs/roadmaps/. | Changed: packages/core/src/domain/{errors,rule,feature,snapshot-contract,define-feature,snapshot}.ts, packages/core/test/domain/{fixtures,snapshot.test,define-feature.test}.ts, packages/core/src/index.ts (public exports), packages/core/package.json + pnpm-lock.yaml (zod ^4.6.5). Zod snapshot contract (schemaVersion 1, strict objects, ISO createdAt, previousVersion<version), boolean/config features with ordered rules, parseSnapshot() -> Result with deeply frozen DeepReadonly Snapshot or SnapshotValidationError listing dotted/bracket paths; optional definitions check config default + rule values against feature schemas; defineFeature() validates default eagerly (FeatureDefinitionError) and infers key/config/context types (expectTypeOf + @ts-expect-error tests). Implementation-time run of typecheck+lint+test exited 0 (not the VERIFY gate). | VERIFY: passed first grade (all 9s), no healer retry. Compensation: none.",
+      "unplannedFiles": [
+        "packages/core/package.json",
+        "pnpm-lock.yaml",
+        "packages/core/src/index.ts"
+      ],
+      "completedAt": "2026-09-18T06:22:30Z",
+      "gateRun": "pnpm typecheck: pass; pnpm lint: pass; pnpm test (100% coverage): pass",
+      "gradeResult": {
+        "phaseId": "snapshot-domain-model",
+        "dimensionScores": [
+          {
+            "dimensionId": "contract-language-neutral",
+            "score": 9,
+            "pass": true,
+            "evidence": "JSON-only contract (schemaVersion literal 1, ISO createdAt string, z.json values, strict objects); snapshot.test.ts:28-30 round-trip. Not 10: no explicit test rejecting a wrong schemaVersion."
+          },
+          {
+            "dimensionId": "immutability-enforced",
+            "score": 9,
+            "pass": true,
+            "evidence": "Recursive freeze snapshot.ts:49-55 + DeepReadonly; tests 43-72 prove nested writes throw at runtime and fail to compile (@ts-expect-error). Not 10: no test for nested-array config defaults."
+          },
+          {
+            "dimensionId": "validation-errors-actionable",
+            "score": 9,
+            "pass": true,
+            "evidence": "Result with SnapshotValidationError {path,message}, never raw ZodError; snapshot.test.ts:118 asserts features.payment-flow.rules[0].value.maxAmount. Not 10: featureKey not a separate field."
+          },
+          {
+            "dimensionId": "domain-purity",
+            "score": 9,
+            "pass": true,
+            "evidence": "Domain imports only zod + siblings; createdAt is data; lint zones pass; grep finds no process/Date/fs. Not 10: zone config not independently reviewed by grader."
+          },
+          {
+            "dimensionId": "type-inference-tested",
+            "score": 9,
+            "pass": true,
+            "evidence": "expectTypeOf on key/config/context (define-feature.test.ts:33-49); @ts-expect-error for bad enum and unknown key (56,59). Not 10: no negative test for wrong context shape."
+          }
+        ],
+        "overallPass": true
+      }
     },
     {
       "phaseId": "rule-evaluation-engine",
-      "status": "not-started",
-      "attempts": 0
+      "status": "awaiting-verification",
+      "attempts": 1,
+      "startedAt": "2026-09-18T06:30:00Z",
+      "baseRef": "873b9437751346ab17a2abfdcfdc015634699898",
+      "baseDirty": true,
+      "notes": "Already dirty at start: phase-2 domain files, core package.json, index.ts, lockfile, docs/roadmaps/ (all uncommitted). | Changed (unstaged vs staged phase-2 index): packages/core/src/domain/evaluation/{operators,evaluate}.ts, packages/core/src/domain/rule.ts (conditions: scalar or one-key operator object from registry), packages/core/test/domain/evaluation/{vectors,evaluate}.test.ts, docs/spec/{evaluation-semantics.md,evaluation-vectors.json} (33 vectors, each cited in the spec), packages/core/src/index.ts (exports), packages/core/package.json + pnpm-lock.yaml (fast-check dev dep). Pure evaluate(feature, context, {contextSchema?}) -> {value, enabled, reason, ruleIndex?}; strict type-aware comparison; missing/non-scalar attributes never match; boolean fallback = on only when no rules; fast-check property tests for never-throws and determinism. Implementation-time typecheck+lint+test exited 0 (not the VERIFY gate).",
+      "amendments": [
+        {
+          "at": "2026-09-18T06:30:00Z",
+          "by": "execute",
+          "reason": "Snapshot conditions only accept scalars (implicit equals), so notEquals/in cannot be expressed. rule.ts's condition schema must accept a single-operator object derived from the operator registry; a bare scalar stays shorthand for equals. Same goal.",
+          "grounding": "packages/core/src/domain/rule.ts: conditionSchema = z.record(string, string|number|boolean).",
+          "before": {
+            "filesAffected": [
+              "packages/core/src/domain/evaluation/evaluate.ts",
+              "packages/core/src/domain/evaluation/operators.ts",
+              "packages/core/test/domain/evaluation/",
+              "docs/spec/evaluation-semantics.md"
+            ]
+          },
+          "after": {
+            "filesAffected": [
+              "packages/core/src/domain/evaluation/evaluate.ts",
+              "packages/core/src/domain/evaluation/operators.ts",
+              "packages/core/test/domain/evaluation/",
+              "docs/spec/evaluation-semantics.md",
+              "packages/core/src/domain/rule.ts",
+              "docs/spec/evaluation-vectors.json"
+            ]
+          }
+        }
+      ],
+      "unplannedFiles": [
+        "packages/core/src/index.ts",
+        "packages/core/package.json",
+        "pnpm-lock.yaml"
+      ]
     },
     {
       "phaseId": "in-memory-flag-client",

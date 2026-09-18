@@ -2,7 +2,7 @@
   "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-01-local-first-core-runtime-roadmap.json",
   "roadmapTask": "Build a roadmap for the open-source schema-driven feature flag product (FeatureSync) described in docs/ (notes.md, notes-01.md, notes-02.md, playbooks/). Requirements: production-grade ready; DDD/SOLID/KISS/DRY; fully test-covered; LocalStack used only via environment config through the AWS SDK (no LocalStack-specific code paths).",
   "createdAt": "2026-09-18T06:12:11Z",
-  "updatedAt": "2026-09-18T06:15:58Z",
+  "updatedAt": "2026-09-18T06:50:14Z",
   "roadmapRevision": 0,
   "phases": [
     {
@@ -88,13 +88,127 @@
     },
     {
       "phaseId": "snapshot-domain-model",
-      "status": "not-started",
-      "attempts": 0
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-18T06:18:11Z",
+      "baseRef": "873b9437751346ab17a2abfdcfdc015634699898",
+      "baseDirty": true,
+      "notes": "Already dirty at start: all phase-1 files (uncommitted) and docs/roadmaps/. | Changed: packages/core/src/domain/{errors,rule,feature,snapshot-contract,define-feature,snapshot}.ts, packages/core/test/domain/{fixtures,snapshot.test,define-feature.test}.ts, packages/core/src/index.ts (public exports), packages/core/package.json + pnpm-lock.yaml (zod ^4.6.5). Zod snapshot contract (schemaVersion 1, strict objects, ISO createdAt, previousVersion<version), boolean/config features with ordered rules, parseSnapshot() -> Result with deeply frozen DeepReadonly Snapshot or SnapshotValidationError listing dotted/bracket paths; optional definitions check config default + rule values against feature schemas; defineFeature() validates default eagerly (FeatureDefinitionError) and infers key/config/context types (expectTypeOf + @ts-expect-error tests). Implementation-time run of typecheck+lint+test exited 0 (not the VERIFY gate). | VERIFY: passed first grade (all 9s), no healer retry. Compensation: none.",
+      "unplannedFiles": [
+        "packages/core/package.json",
+        "pnpm-lock.yaml",
+        "packages/core/src/index.ts"
+      ],
+      "completedAt": "2026-09-18T06:22:30Z",
+      "gateRun": "pnpm typecheck: pass; pnpm lint: pass; pnpm test (100% coverage): pass",
+      "gradeResult": {
+        "phaseId": "snapshot-domain-model",
+        "dimensionScores": [
+          {
+            "dimensionId": "contract-language-neutral",
+            "score": 9,
+            "pass": true,
+            "evidence": "JSON-only contract (schemaVersion literal 1, ISO createdAt string, z.json values, strict objects); snapshot.test.ts:28-30 round-trip. Not 10: no explicit test rejecting a wrong schemaVersion."
+          },
+          {
+            "dimensionId": "immutability-enforced",
+            "score": 9,
+            "pass": true,
+            "evidence": "Recursive freeze snapshot.ts:49-55 + DeepReadonly; tests 43-72 prove nested writes throw at runtime and fail to compile (@ts-expect-error). Not 10: no test for nested-array config defaults."
+          },
+          {
+            "dimensionId": "validation-errors-actionable",
+            "score": 9,
+            "pass": true,
+            "evidence": "Result with SnapshotValidationError {path,message}, never raw ZodError; snapshot.test.ts:118 asserts features.payment-flow.rules[0].value.maxAmount. Not 10: featureKey not a separate field."
+          },
+          {
+            "dimensionId": "domain-purity",
+            "score": 9,
+            "pass": true,
+            "evidence": "Domain imports only zod + siblings; createdAt is data; lint zones pass; grep finds no process/Date/fs. Not 10: zone config not independently reviewed by grader."
+          },
+          {
+            "dimensionId": "type-inference-tested",
+            "score": 9,
+            "pass": true,
+            "evidence": "expectTypeOf on key/config/context (define-feature.test.ts:33-49); @ts-expect-error for bad enum and unknown key (56,59). Not 10: no negative test for wrong context shape."
+          }
+        ],
+        "overallPass": true
+      }
     },
     {
       "phaseId": "rule-evaluation-engine",
-      "status": "not-started",
-      "attempts": 0
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-18T06:30:00Z",
+      "baseRef": "873b9437751346ab17a2abfdcfdc015634699898",
+      "baseDirty": true,
+      "notes": "Already dirty at start: phase-2 domain files, core package.json, index.ts, lockfile, docs/roadmaps/ (all uncommitted). | Changed (unstaged vs staged phase-2 index): packages/core/src/domain/evaluation/{operators,evaluate}.ts, packages/core/src/domain/rule.ts (conditions: scalar or one-key operator object from registry), packages/core/test/domain/evaluation/{vectors,evaluate}.test.ts, docs/spec/{evaluation-semantics.md,evaluation-vectors.json} (33 vectors, each cited in the spec), packages/core/src/index.ts (exports), packages/core/package.json + pnpm-lock.yaml (fast-check dev dep). Pure evaluate(feature, context, {contextSchema?}) -> {value, enabled, reason, ruleIndex?}; strict type-aware comparison; missing/non-scalar attributes never match; boolean fallback = on only when no rules; fast-check property tests for never-throws and determinism. Implementation-time typecheck+lint+test exited 0 (not the VERIFY gate). | VERIFY: passed first grade (all 9s), no healer retry. Compensation: none.",
+      "amendments": [
+        {
+          "at": "2026-09-18T06:30:00Z",
+          "by": "execute",
+          "reason": "Snapshot conditions only accept scalars (implicit equals), so notEquals/in cannot be expressed. rule.ts's condition schema must accept a single-operator object derived from the operator registry; a bare scalar stays shorthand for equals. Same goal.",
+          "grounding": "packages/core/src/domain/rule.ts: conditionSchema = z.record(string, string|number|boolean).",
+          "before": {
+            "filesAffected": [
+              "packages/core/src/domain/evaluation/evaluate.ts",
+              "packages/core/src/domain/evaluation/operators.ts",
+              "packages/core/test/domain/evaluation/",
+              "docs/spec/evaluation-semantics.md"
+            ]
+          },
+          "after": {
+            "filesAffected": [
+              "packages/core/src/domain/evaluation/evaluate.ts",
+              "packages/core/src/domain/evaluation/operators.ts",
+              "packages/core/test/domain/evaluation/",
+              "docs/spec/evaluation-semantics.md",
+              "packages/core/src/domain/rule.ts",
+              "docs/spec/evaluation-vectors.json"
+            ]
+          }
+        }
+      ],
+      "unplannedFiles": [
+        "packages/core/src/index.ts",
+        "packages/core/package.json",
+        "pnpm-lock.yaml"
+      ],
+      "completedAt": "2026-09-18T06:50:14Z",
+      "gateRun": "pnpm typecheck: pass; pnpm lint: pass; pnpm test (100% coverage): pass",
+      "gradeResult": {
+        "phaseId": "rule-evaluation-engine",
+        "dimensionScores": [
+          {
+            "dimensionId": "semantics-fully-specified",
+            "score": 9,
+            "pass": true,
+            "evidence": "Spec cites vectors per rule: disabled (semantics.md:27), empty rules (:39), rule order (:33-35), missing/non-scalar attrs (:68-69), type strictness 5 vs 5-string (:76); vectors.test.ts:21 runs the same JSON. Not 10: INVALID_CONTEXT and unknown operator (:81) have no shared vector."
+          },
+          {
+            "dimensionId": "pure-and-deterministic",
+            "score": 9,
+            "pass": true,
+            "evidence": "evaluate.ts:33-75 no module state/I/O/randomness; fast-check determinism evaluate.test.ts:74-82, identity-independence :94-100, frozen input :102-111. Not 10: property test uses one fixed feature, does not generate features."
+          },
+          {
+            "dimensionId": "never-throws-on-bad-context",
+            "score": 9,
+            "pass": true,
+            "evidence": "isScalar guard (evaluate.ts:69), own-property lookup (:68), non-object context -> {} (:63-64), safeParse (:59) -> INVALID_CONTEXT; fc.anything() tests :74-92. Not 10: a context schema whose refine throws would still throw; untested."
+          },
+          {
+            "dimensionId": "open-closed-operators",
+            "score": 9,
+            "pass": true,
+            "evidence": "Registry operators.ts:17-21; evaluate.ts:72-75 dispatches via operators[name].matches, no switch; rule.ts schema derived from registry. Not 10: no test demonstrates adding an operator without edits."
+          }
+        ],
+        "overallPass": true
+      }
     },
     {
       "phaseId": "in-memory-flag-client",

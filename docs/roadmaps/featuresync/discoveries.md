@@ -3,3 +3,6 @@
 - 2026-09-18 | horizon 1 | localstack | docker/volume/ holds a LocalStack TLS private key; it is gitignored [.gitignore] → keep it ignored, never commit volume.
 - 2026-09-18 | horizon 1 | tooling | typescript-eslint 8.x refuses TypeScript 7; TS is pinned to ^6 [package.json] → keep TS 6 until typescript-eslint supports TS 7.
 - 2026-09-18 | horizon 1 | tooling | import-x no-restricted-paths only fires with file globs (dir/**/*) plus the TypeScript resolver [eslint.config.js] → new layers need zones in that form.
+- 2026-09-18 | horizon 1 | zod | z.json() reports a non-JSON value (e.g. NaN) at the value root, not the nested field [packages/core/src/domain/feature.ts] → field-level paths come only from registered feature schemas.
+- 2026-09-18 | horizon 1 | evaluation | Snapshot `when` values are a scalar (equals) or a one-key operator object built from the operator registry [packages/core/src/domain/rule.ts] → new operators (percentage) extend operators.ts only; SDKs must reject unknown operators as non-matching.
+- 2026-09-18 | horizon 1 | evaluation | Snapshot boolean features have no default: an enabled one is on with zero rules, off when rules exist and none match [docs/spec/evaluation-semantics.md] → revisit if an explicit boolean default is added to the contract.

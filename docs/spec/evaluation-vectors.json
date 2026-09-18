@@ -1,0 +1,819 @@
+{
+  "schemaVersion": 1,
+  "vectors": [
+    {
+      "name": "disabled-boolean-ignores-rules",
+      "feature": {
+        "type": "boolean",
+        "enabled": false,
+        "rules": [
+          {
+            "when": {},
+            "enabled": true
+          }
+        ]
+      },
+      "context": {},
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "DISABLED"
+      }
+    },
+    {
+      "name": "disabled-config-returns-default",
+      "feature": {
+        "type": "config",
+        "enabled": false,
+        "default": {
+          "limit": 1
+        },
+        "rules": [
+          {
+            "when": {},
+            "value": {
+              "limit": 2
+            }
+          }
+        ]
+      },
+      "context": {},
+      "expected": {
+        "value": {
+          "limit": 1
+        },
+        "enabled": false,
+        "reason": "DISABLED"
+      }
+    },
+    {
+      "name": "boolean-without-rules-is-on",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": []
+      },
+      "context": {},
+      "expected": {
+        "value": true,
+        "enabled": true,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "boolean-with-rules-and-no-match-is-off",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "plan": "pro"
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "plan": "free"
+      },
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "boolean-rule-match",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "plan": "pro"
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "plan": "pro"
+      },
+      "expected": {
+        "value": true,
+        "enabled": true,
+        "reason": "RULE_MATCH",
+        "ruleIndex": 0
+      }
+    },
+    {
+      "name": "rule-can-switch-off",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "plan": "free"
+            },
+            "enabled": false
+          }
+        ]
+      },
+      "context": {
+        "plan": "free"
+      },
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "RULE_MATCH",
+        "ruleIndex": 0
+      }
+    },
+    {
+      "name": "first-matching-rule-wins",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "plan": "pro"
+            },
+            "enabled": false
+          },
+          {
+            "when": {
+              "plan": "pro"
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "plan": "pro"
+      },
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "RULE_MATCH",
+        "ruleIndex": 0
+      }
+    },
+    {
+      "name": "later-rule-matches-when-earlier-does-not",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "plan": "free"
+            },
+            "enabled": true
+          },
+          {
+            "when": {
+              "country": "IL"
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "plan": "pro",
+        "country": "IL"
+      },
+      "expected": {
+        "value": true,
+        "enabled": true,
+        "reason": "RULE_MATCH",
+        "ruleIndex": 1
+      }
+    },
+    {
+      "name": "empty-when-always-matches",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {},
+            "enabled": true
+          }
+        ]
+      },
+      "context": {},
+      "expected": {
+        "value": true,
+        "enabled": true,
+        "reason": "RULE_MATCH",
+        "ruleIndex": 0
+      }
+    },
+    {
+      "name": "keys-combine-with-and-all-match",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "plan": "pro",
+              "country": "IL"
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "plan": "pro",
+        "country": "IL"
+      },
+      "expected": {
+        "value": true,
+        "enabled": true,
+        "reason": "RULE_MATCH",
+        "ruleIndex": 0
+      }
+    },
+    {
+      "name": "keys-combine-with-and-one-fails",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "plan": "pro",
+              "country": "IL"
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "plan": "pro",
+        "country": "US"
+      },
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "missing-attribute-does-not-match",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "plan": "pro"
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {},
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "missing-attribute-does-not-match-not-equals",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "plan": {
+                "notEquals": "free"
+              }
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {},
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "null-attribute-does-not-match",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "plan": {
+                "notEquals": "free"
+              }
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "plan": null
+      },
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "object-attribute-does-not-match",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "plan": {
+                "notEquals": "free"
+              }
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "plan": {
+          "name": "pro"
+        }
+      },
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "array-attribute-does-not-match",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "plan": {
+                "in": [
+                  "pro"
+                ]
+              }
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "plan": [
+          "pro"
+        ]
+      },
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "equals-is-type-strict-number-vs-string",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "age": 5
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "age": "5"
+      },
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "equals-is-type-strict-boolean-vs-string",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "isEmployee": true
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "isEmployee": "true"
+      },
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "equals-is-case-sensitive",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "country": "IL"
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "country": "il"
+      },
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "equals-compares-numbers-by-value",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "age": 18
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "age": 18.0
+      },
+      "expected": {
+        "value": true,
+        "enabled": true,
+        "reason": "RULE_MATCH",
+        "ruleIndex": 0
+      }
+    },
+    {
+      "name": "explicit-equals-operator",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "plan": {
+                "equals": "pro"
+              }
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "plan": "pro"
+      },
+      "expected": {
+        "value": true,
+        "enabled": true,
+        "reason": "RULE_MATCH",
+        "ruleIndex": 0
+      }
+    },
+    {
+      "name": "not-equals-matches-other-value",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "plan": {
+                "notEquals": "free"
+              }
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "plan": "pro"
+      },
+      "expected": {
+        "value": true,
+        "enabled": true,
+        "reason": "RULE_MATCH",
+        "ruleIndex": 0
+      }
+    },
+    {
+      "name": "not-equals-rejects-same-value",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "plan": {
+                "notEquals": "free"
+              }
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "plan": "free"
+      },
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "not-equals-matches-different-type",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "age": {
+                "notEquals": 5
+              }
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "age": "5"
+      },
+      "expected": {
+        "value": true,
+        "enabled": true,
+        "reason": "RULE_MATCH",
+        "ruleIndex": 0
+      }
+    },
+    {
+      "name": "in-matches-listed-value",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "country": {
+                "in": [
+                  "IL",
+                  "US"
+                ]
+              }
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "country": "US"
+      },
+      "expected": {
+        "value": true,
+        "enabled": true,
+        "reason": "RULE_MATCH",
+        "ruleIndex": 0
+      }
+    },
+    {
+      "name": "in-rejects-unlisted-value",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "country": {
+                "in": [
+                  "IL",
+                  "US"
+                ]
+              }
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "country": "DE"
+      },
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "in-is-type-strict",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "tier": {
+                "in": [
+                  1,
+                  2
+                ]
+              }
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "tier": "1"
+      },
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "non-object-context-has-no-attributes",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "plan": "pro"
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": "pro",
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "null-context-still-matches-empty-when",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {},
+            "enabled": true
+          }
+        ]
+      },
+      "context": null,
+      "expected": {
+        "value": true,
+        "enabled": true,
+        "reason": "RULE_MATCH",
+        "ruleIndex": 0
+      }
+    },
+    {
+      "name": "array-context-has-no-attributes",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "0": "pro"
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": [
+        "pro"
+      ],
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "config-without-match-returns-default",
+      "feature": {
+        "type": "config",
+        "enabled": true,
+        "default": {
+          "provider": "stripe"
+        },
+        "rules": [
+          {
+            "when": {
+              "plan": "enterprise"
+            },
+            "value": {
+              "provider": "adyen"
+            }
+          }
+        ]
+      },
+      "context": {
+        "plan": "pro"
+      },
+      "expected": {
+        "value": {
+          "provider": "stripe"
+        },
+        "enabled": true,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "config-rule-match-returns-rule-value",
+      "feature": {
+        "type": "config",
+        "enabled": true,
+        "default": {
+          "provider": "stripe"
+        },
+        "rules": [
+          {
+            "when": {
+              "plan": "enterprise"
+            },
+            "value": {
+              "provider": "adyen"
+            }
+          }
+        ]
+      },
+      "context": {
+        "plan": "enterprise"
+      },
+      "expected": {
+        "value": {
+          "provider": "adyen"
+        },
+        "enabled": true,
+        "reason": "RULE_MATCH",
+        "ruleIndex": 0
+      }
+    },
+    {
+      "name": "config-value-false-is-still-enabled",
+      "feature": {
+        "type": "config",
+        "enabled": true,
+        "default": true,
+        "rules": [
+          {
+            "when": {},
+            "value": false
+          }
+        ]
+      },
+      "context": {},
+      "expected": {
+        "value": false,
+        "enabled": true,
+        "reason": "RULE_MATCH",
+        "ruleIndex": 0
+      }
+    }
+  ]
+}
