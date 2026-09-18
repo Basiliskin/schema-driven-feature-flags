@@ -4,6 +4,7 @@ import { parseCurrentPointer, snapshotKeyFor, type CurrentPointer } from '../dom
 import { errorShape } from './s3-errors.js';
 import { isMissing, readObjectText, type S3Text } from './s3-read.js';
 import { S3SnapshotError } from './s3-snapshot-error.js';
+import type { NotificationQueue } from './sqs-notification-queue.js';
 
 /** Options for {@link createS3SnapshotSource}. */
 export interface S3SnapshotSourceOptions {
@@ -20,6 +21,12 @@ export interface S3SnapshotSourceOptions {
   readonly reconcileIntervalMs?: number;
   /** Receives S3 failures seen while polling. Defaults to `console.error`. */
   readonly logger?: Logger;
+  /**
+   * Change Notifications that trigger an immediate re-read of the current pointer, alongside polling.
+   * A notification is only a hint: the pointer decides which snapshot is delivered, so a rollback is
+   * delivered once `current.json` names the lower version.
+   */
+  readonly notificationQueue?: NotificationQueue;
 }
 
 interface LoadedSnapshot {
@@ -125,11 +132,16 @@ export function createS3SnapshotSource(options: S3SnapshotSourceOptions): Snapsh
     let stopped = false;
     let timer: NodeJS.Timeout | undefined;
     let lastReconciledAt = Date.now();
+    // Push and poll loads run one at a time, so an older snapshot is never delivered after a newer one.
+    let queue: Promise<void> = Promise.resolve();
 
-    const tick = async () => {
-      const reconciling = Date.now() - lastReconciledAt >= reconcileIntervalMs;
-      if (reconciling) lastReconciledAt = Date.now();
-      const pointerObject = await getPointerIfChanged(reconciling ? undefined : loaded?.etag);
+    const serially = (job: () => Promise<void>): Promise<void> => {
+      const run = queue.then(() => (stopped ? undefined : job()));
+      queue = run.catch(() => undefined);
+      return run;
+    };
+
+    const deliver = async (pointerObject: S3Text | undefined) => {
       if (pointerObject === undefined) return;
       const { version } = readPointer(pointerObject.text);
       if (loaded !== undefined && version === loaded.version) {
@@ -140,9 +152,19 @@ export function createS3SnapshotSource(options: S3SnapshotSourceOptions): Snapsh
       if (!stopped) onChange(snapshot);
     };
 
+    const tick = async () => {
+      const reconciling = Date.now() - lastReconciledAt >= reconcileIntervalMs;
+      if (reconciling) lastReconciledAt = Date.now();
+      await deliver(await getPointerIfChanged(reconciling ? undefined : loaded?.etag));
+    };
+
+    const push = async () => {
+      await deliver(await getObject(pointerKey, 'POINTER_NOT_FOUND'));
+    };
+
     const schedule = () => {
       timer = setTimeout(() => {
-        void tick()
+        void serially(tick)
           .catch((error: unknown) => {
             logger.error('Cannot poll the S3 snapshot pointer; keeping the active snapshot', error);
           })
@@ -152,10 +174,14 @@ export function createS3SnapshotSource(options: S3SnapshotSourceOptions): Snapsh
       }, pollIntervalMs);
     };
 
+    const stopQueue = options.notificationQueue?.start((notification) =>
+      notification.environment === environment ? serially(push) : Promise.resolve(),
+    );
     schedule();
     return () => {
       stopped = true;
       clearTimeout(timer);
+      stopQueue?.();
     };
   };
 

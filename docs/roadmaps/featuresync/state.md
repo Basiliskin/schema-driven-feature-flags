@@ -14,3 +14,5 @@
 - 2026-09-18 | horizon 6 | completed | 4 phases, 3 amendments, 0 overrides
 - 2026-09-18 | horizon 7 | planned | 3 phases (Change Notification contract, SNS notify in publisher, SQS Notification Queue reader); 3 deferred to horizon 8; gate passed, 1 major healed, 4 minor debt
 - 2026-09-18 | horizon 7 | completed | 3 phases, 3 amendments (test paths moved to test/), 0 overrides
+- 2026-09-18 | horizon 8 | planned | 4 phases (S3 source push detection, CLI --topic-arn, LocalStack SNS/SQS env, LocalStack push proof); gate passed, 1 major fixed, 0 debt
+- 2026-09-18 | horizon 8 | completed | 4 phases, 0 amendments, 0 overrides

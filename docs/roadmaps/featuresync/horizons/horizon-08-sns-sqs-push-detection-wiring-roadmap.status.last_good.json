@@ -1,0 +1,154 @@
+{
+  "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-08-sns-sqs-push-detection-wiring-roadmap.json",
+  "roadmapTask": "Plan horizon 8 of FeatureSync: wire SQS push detection into createS3SnapshotSource, add CLI --topic-arn/FEATURESYNC_TOPIC_ARN, prove publish -> SNS -> SQS -> onChange on LocalStack (per next-horizon-brief).",
+  "createdAt": "2026-09-18T15:43:33Z",
+  "updatedAt": "2026-09-18T16:13:58Z",
+  "roadmapRevision": 0,
+  "phases": [
+    {
+      "phaseId": "s3-source-push-detection",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-18T15:43:33Z",
+      "baseRef": "bb67cfa20816dc6c8c837158dca97fa5b2194a89",
+      "baseDirty": true,
+      "notes": "Already dirty at start: docs/roadmaps/featuresync/{decisions,discoveries,state}.md, next-horizon-brief.md, archive/*, horizons/horizon-06 last_good, horizons/horizon-08 roadmap json+md. Changed: packages/aws/src/infrastructure/s3-snapshot-source.ts, packages/aws/test/infrastructure/s3-snapshot-source.push.test.ts (new), docs/roadmaps/featuresync/decisions.md (+2 horizon-8 lines; file was already dirty). Adds optional notificationQueue; matching-env notifications re-read current.json unconditionally and deliver via a shared deliver(); push and poll loads run through one serial promise chain that skips jobs after Unsubscribe; push load failures rethrow for SQS redelivery; Unsubscribe clears timer and stops queue synchronously. Local typecheck/lint/test (with coverage) exited 0 while implementing; VERIFY must rerun. VERIFY: first grade failed serialized-load-ordering (7) and coverage-and-decisions (7). Healer: replaced race test with deferred pending-poll ordering test; appended Poison Message/options-field line to decisions.md. Re-graded those two only (9, 9); other four carried forward. compensation: null.",
+      "unplannedFiles": [],
+      "completedAt": "2026-09-18T15:57:09Z",
+      "gateRun": "pnpm verify (build, typecheck, lint, vitest --coverage 100% thresholds): pass; rerun after healer: pass",
+      "gradeResult": {
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "push-dedupe-and-rollback-confirmation",
+            "score": 8,
+            "minScore": 8,
+            "pass": true
+          },
+          {
+            "dimensionId": "serialized-load-ordering",
+            "score": 9,
+            "minScore": 8,
+            "pass": true
+          },
+          {
+            "dimensionId": "unsubscribe-stops-both",
+            "score": 9,
+            "minScore": 9,
+            "pass": true
+          },
+          {
+            "dimensionId": "poison-and-env-policy",
+            "score": 9,
+            "minScore": 8,
+            "pass": true
+          },
+          {
+            "dimensionId": "layer-and-port-respect",
+            "score": 9,
+            "minScore": 9,
+            "pass": true
+          },
+          {
+            "dimensionId": "coverage-and-decisions",
+            "score": 9,
+            "minScore": 8,
+            "pass": true
+          }
+        ]
+      }
+    },
+    {
+      "phaseId": "cli-topic-arn",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-18T15:59:19Z",
+      "baseRef": "bb67cfa20816dc6c8c837158dca97fa5b2194a89",
+      "baseDirty": true,
+      "notes": "Already dirty at start: docs/roadmaps/featuresync/{decisions,discoveries,state}.md, archive/*, horizons/horizon-06 last_good, horizon-08 roadmap/ledger files, packages/aws/src/infrastructure/s3-snapshot-source.ts, packages/aws/test/infrastructure/s3-snapshot-source.push.test.ts (phase 1). Changed: packages/cli/src/main.ts, packages/cli/test/main.test.ts, docs/roadmaps/featuresync/decisions.md (+1 horizon-8 line). Adds --topic-arn parse option; publisherFor resolves topicArn = flag ?? io.env.FEATURESYNC_TOPIC_ARN (omitted when neither), passes onNotifyError writing one stderr warning line; USAGE documents both. Tests: flag and env fallback for publish+rollback, flag precedence, neither set, notify failure (Error and non-Error) -> one warning, exit 0. pnpm verify exited 0 locally (first run hit an unrelated flaky core file-watch test; rerun green); VERIFY must rerun. VERIFY: passed first grade. compensation: null.",
+      "unplannedFiles": [],
+      "completedAt": "2026-09-18T16:02:35Z",
+      "gateRun": "pnpm verify (build, typecheck, lint, vitest --coverage 100% thresholds): pass",
+      "gradeResult": {
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "topic-arn-resolution",
+            "score": 9,
+            "minScore": 8,
+            "pass": true
+          },
+          {
+            "dimensionId": "both-commands-wired",
+            "score": 9,
+            "minScore": 8,
+            "pass": true
+          },
+          {
+            "dimensionId": "notify-failure-warning-exit0",
+            "score": 9,
+            "minScore": 9,
+            "pass": true
+          },
+          {
+            "dimensionId": "thin-cli-layer",
+            "score": 9,
+            "minScore": 8,
+            "pass": true
+          }
+        ]
+      }
+    },
+    {
+      "phaseId": "localstack-sns-sqs-env",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-18T16:03:55Z",
+      "baseRef": "bb67cfa20816dc6c8c837158dca97fa5b2194a89",
+      "baseDirty": true,
+      "notes": "Already dirty at start: phase 1-2 files (packages/aws s3-snapshot-source + push test, packages/cli main + test) and docs/roadmaps/featuresync memory/horizon files. Changed: docker/docker-compose.yml (SERVICES=s3,sns,sqs; healthcheck now requires s3, sns and sqs available/running), .env.example and .github/workflows/ci.yml localstack job env (+AWS_ENDPOINT_URL_SNS/SQS=http://localhost:4566). vitest.integration.config.ts NOT changed: it already forwards every AWS_* var from .env and process.env. Local .env (gitignored) also got the two vars. Local proof: another LocalStack (localstack-aws) holds 4566/443 on this machine, so compose was run under a temp project with port override 14566 -> up --wait exit 0, health s3/sns/sqs available; pnpm test:integration 9/9 against it; lint 0. Temp container removed. VERIFY: passed first grade. Grader notes: healthcheck regex relies on health JSON key order. compensation: null.",
+      "unplannedFiles": [],
+      "completedAt": "2026-09-18T16:07:52Z",
+      "gateRun": "pnpm verify: pass; compose up --wait (host port remapped to 14566, other LocalStack holds 4566): pass, s3/sns/sqs available; pnpm test:integration 9/9: pass",
+      "gradeResult": {
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "compose-services",
+            "score": 9,
+            "minScore": 8,
+            "pass": true
+          },
+          {
+            "dimensionId": "env-config-only",
+            "score": 9,
+            "minScore": 9,
+            "pass": true
+          },
+          {
+            "dimensionId": "ci-repeatable-fail-closed",
+            "score": 9,
+            "minScore": 8,
+            "pass": true
+          }
+        ]
+      }
+    },
+    {
+      "phaseId": "localstack-push-proof",
+      "status": "awaiting-verification",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-18T16:09:27Z",
+      "baseRef": "bb67cfa20816dc6c8c837158dca97fa5b2194a89",
+      "baseDirty": true,
+      "notes": "Already dirty at start: phase 1-3 files (packages/aws s3-snapshot-source + push test, packages/cli main + test, docker-compose, .env.example, ci.yml) and docs/roadmaps/featuresync memory/horizon files. Changed: packages/aws/integration/push-detection.localstack.test.ts (new), docs/spec/change-notification.md (+Consuming notifications section), docs/roadmaps/featuresync/discoveries.md (+1 line: publish after rollback fails VERSION_EXISTS). Test: per-test random topic/queue/policy/raw-delivery subscription, torn down in afterEach; throws if S3/SNS/SQS endpoint vars unset; pollIntervalMs 10min so only push delivers; publish second+third via push, rollback to second delivered, Unsubscribe then a further rollback (publish-after-rollback is impossible, see discovery) -> no onChange in a 3s window; waitTimeSeconds 1, vi.waitFor 10s. Local proof (other LocalStack holds 4566): temp compose project on 14566 with LOCALSTACK_HOST override so queue URLs use 14566; pnpm test:integration 10/10 three runs in a row + once after lint refactor; pnpm verify exit 0.",
+      "unplannedFiles": [
+        "docs/roadmaps/featuresync/discoveries.md"
+      ]
+    }
+  ]
+}

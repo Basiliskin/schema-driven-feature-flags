@@ -1,0 +1,613 @@
+{
+  "task": "Plan horizon 8 of FeatureSync: wire SQS push detection into createS3SnapshotSource, add CLI --topic-arn/FEATURESYNC_TOPIC_ARN, prove publish -> SNS -> SQS -> onChange on LocalStack (per next-horizon-brief).",
+  "analysis": {
+    "objective": "Finish the push part of the FeatureSync vision. createS3SnapshotSource.subscribe will take Change Notifications from the app's own SQS Notification Queue (fed by SNS), deduplicate them by pointer version, check rollbacks against current.json, and stop both push and polling with one Unsubscribe. The CLI gets a --topic-arn / FEATURESYNC_TOPIC_ARN option. The path publish -> SNS -> SQS -> onChange is proven end to end on LocalStack.",
+    "successDefinition": "(1) Horizon-7's NotificationQueue, SNS notifier and parser were confirmed against their planned interfaces during discovery; decisions on push placement, rollback policy, poison-message policy, CLI notify-failure exit code and public exports written to decisions.md. (2) createS3SnapshotSource accepts an optional Notification Queue; higher version triggers a load reusing readPointer/loadVersion/loaded; duplicate/equal version calls onChange zero extra times; lower-version delivered only after current.json confirms; poison policy applied; single synchronous Unsubscribe stops poll loop and queue, no onChange after it; concurrent push and poll loads never deliver older after newer; without a queue polling unchanged. (3) CLI publish/rollback pass topic ARN from --topic-arn or FEATURESYNC_TOPIC_ARN; none given means no notify; notify failure warns and follows decided exit code; no business logic in CLI. (4) docker-compose SERVICES=s3,sns,sqs; LocalStack test creates topic, queue, subscription, publishes via real publisher, onChange receives new Snapshot, covers rollback and Unsubscribe; runs in existing CI integration job. (5) typecheck, lint, 100% coverage unit tests and integration suite pass; docs/spec/change-notification.md describes consumption semantics.",
+    "assumptions": [
+      "Scope is exactly the brief: three deferred horizon-7 phases (s3-source-push-detection, cli-topic-arn, localstack-push-proof) plus a first check horizon-7 shipped as planned; production bar.",
+      "Horizon 7 shipped the Change Notification contract, SNS notify in S3SnapshotPublisher (Promise<number>, onNotifyError / console.warn default) and an SQS Notification Queue reader shaped roughly start(handler) -> stop.",
+      "The core SnapshotSource port stays unchanged: subscribe?(onChange) returns a synchronous Unsubscribe; push errors handled inside @featuresync/aws.",
+      "Push is additive to polling and reconciliation; polling remains the safety net.",
+      "The user provisions SNS topic, SQS queue, subscription and queue policy; FeatureSync consumes a queue URL and topic ARN.",
+      "Default policies: lower version confirmed against current.json; unparseable message deleted immediately; handler-failed message left for redelivery/DLQ.",
+      "CLI keeps exit code 0 with a warning on notify failure.",
+      "@aws-sdk/client-sns and client-sqs are optional peer+dev deps loaded by dynamic import()."
+    ],
+    "risks": [
+      "NotificationQueue interface may not fit createS3SnapshotSource (sync stop, handler errors, delete-vs-handle order).",
+      "LocalStack may deliver SNS->SQS messages in only one RawMessageDelivery shape, unlike AWS.",
+      "A push-triggered load can race a poll/reconcile load in the shared loaded closure.",
+      "No poison-message policy yet: deleting early loses changes; never deleting loops without a DLQ.",
+      "publish/rollback may no longer return Promise<number> with onNotifyError.",
+      "IAM least-privilege for sns/sqs cannot be verified on LocalStack Community.",
+      "Extracting a shared loaded-state holder could grow into a refactor threatening 100% branch coverage.",
+      "Timing tests (long-poll + setTimeout poll loop) may be flaky.",
+      "Adding sns,sqs to LocalStack may need queue policy and AWS_ENDPOINT_URL_SNS/SQS; must be env config only per horizon-1 decision.",
+      "Exporting parseChangeNotification/NotificationQueue publicly would break the horizon-7 rule that index.ts exports no domain symbols unless recorded."
+    ],
+    "outOfScope": [
+      "Provisioning SNS/SQS/subscriptions/policies (IaC) \u2014 user owns infrastructure in their account.",
+      "Automatic per-instance queue creation \u2014 brief defers it; needs own lifecycle/IAM design.",
+      "IAM least-privilege checks on real AWS \u2014 no real-AWS test account.",
+      "NestJS-specific push wiring \u2014 brief keeps it out; generic subscribe already reaches Nest.",
+      "Replacing or removing polling/reconciliation \u2014 push is additive.",
+      "DLQ implementation or redrive tooling \u2014 user infrastructure.",
+      "HTTP/webhook subscriptions \u2014 horizon-7 decision requires own SQS queue only.",
+      "Dashboard/UI and non-TS SDKs \u2014 later vision slices.",
+      "Automatic skip-ahead for orphaned snapshots \u2014 horizon-4 decision makes it manual."
+    ],
+    "domainShape": "business",
+    "domainShapeReason": "The work is about when a Change Notification causes a new Snapshot version to be delivered: version dedupe, rollback confirmation and poison-message policy are snapshot-versioning rules.",
+    "ubiquitousLanguage": [
+      {
+        "term": "Change Notification",
+        "meaning": "The small SNS message sent after publish/rollback naming environment and new pointer version; a signal only, S3 stays source of truth."
+      },
+      {
+        "term": "Notification Queue",
+        "meaning": "The app's own SQS queue subscribed to the SNS topic; the @featuresync/aws reader starts it with a handler and stops it."
+      },
+      {
+        "term": "Snapshot",
+        "meaning": "The immutable, versioned JSON of flag and config values in S3, validated by core."
+      },
+      {
+        "term": "Current Pointer",
+        "meaning": "current.json per environment naming the live Snapshot version; the authority to confirm pushed versions and rollbacks."
+      },
+      {
+        "term": "Push Detection",
+        "meaning": "A Change Notification triggering createS3SnapshotSource to load and deliver a new Snapshot via onChange, alongside polling."
+      },
+      {
+        "term": "Rollback Confirmation",
+        "meaning": "Checking a lower-version Change Notification against the Current Pointer before delivering the older Snapshot."
+      },
+      {
+        "term": "Poison Message",
+        "meaning": "A queue message that cannot be parsed or keeps failing its handler; deleted or left for redelivery/DLQ per policy."
+      },
+      {
+        "term": "Unsubscribe",
+        "meaning": "The single synchronous function returned by subscribe that stops both poll loop and Notification Queue; no onChange after it."
+      },
+      {
+        "term": "Build and CI tooling",
+        "meaning": "Bounded context / subsystem this horizon touches."
+      },
+      {
+        "term": "Snapshot delivery (@featuresync/aws source)",
+        "meaning": "Bounded context / subsystem this horizon touches."
+      },
+      {
+        "term": "Snapshot publishing CLI (@featuresync/cli)",
+        "meaning": "Bounded context / subsystem this horizon touches."
+      }
+    ]
+  },
+  "discoveryFindings": [
+    {
+      "area": "SQS queue interface",
+      "finding": "NotificationQueue is { start(onNotification: (n: ChangeNotification) => Promise<void>): () => void }; stop is synchronous and aborts the in-flight ReceiveMessage via AbortController; long-polls WaitTimeSeconds 20, MaxNumberOfMessages 10; retries after 1s on receive failure.",
+      "filePath": "packages/aws/src/infrastructure/sqs-notification-queue.ts",
+      "implication": "Fits a synchronous Unsubscribe as-is; no interface change. Unsubscribe calls stopQueue() and clearTimeout(timer)."
+    },
+    {
+      "area": "SQS handler semantics",
+      "finding": "Handler runs first, message deleted after; handler throw is logged and message left for redelivery; unparseable message logged and deleted immediately; failed delete only logged; batch handled sequentially.",
+      "filePath": "packages/aws/src/infrastructure/sqs-notification-queue.ts",
+      "implication": "Poison-message policy already built in. The source's push handler must throw on load failure to get redelivery or swallow to ack \u2014 record the choice in decisions.md."
+    },
+    {
+      "area": "SQS stop edge",
+      "finding": "After abort, a handler already running still finishes; stop does not wait for it; the loop checks stopped() only between messages.",
+      "filePath": "packages/aws/src/infrastructure/sqs-notification-queue.ts",
+      "implication": "The source's own stopped flag must guard onChange for push loads; unit-test no onChange after Unsubscribe with a push load in flight."
+    },
+    {
+      "area": "Parser / raw delivery",
+      "finding": "parseChangeNotification(body) returns {ok,value}|{ok:false,error:{reason:INVALID_JSON|UNSUPPORTED_ENVELOPE|INVALID_NOTIFICATION}}; accepts raw body and SNS envelope; checks snapshotKey == env/snapshots/v.json; does not check environment matches the source.",
+      "filePath": "packages/aws/src/domain/change-notification.ts",
+      "implication": "The source should ack-and-ignore notifications for another environment. LocalStack test should cover at least the envelope shape."
+    },
+    {
+      "area": "S3 source internals",
+      "finding": "createS3SnapshotSource closures: getPointerIfChanged(etag), readPointer(text), loadVersion(pointerObject, version) setting shared loaded {etag,version,snapshot}. tick() conditional GET, early return on same version, loads and calls onChange if not stopped; setTimeout rescheduling; no guard against concurrent loads.",
+      "filePath": "packages/aws/src/infrastructure/s3-snapshot-source.ts",
+      "implication": "Push trigger reuses tick-like logic with a pointer read. A serialization guard (promise chain) is needed so an older version is never delivered after a newer one."
+    },
+    {
+      "area": "S3 source options",
+      "finding": "S3SnapshotSourceOptions: bucket, environment, client, pollIntervalMs, reconcileIntervalMs, logger; no queue option; loaded shared by load() and subscribe.",
+      "filePath": "packages/aws/src/infrastructure/s3-snapshot-source.ts",
+      "implication": "Add optional notificationQueue?: NotificationQueue (inject the port, not a queueUrl). Without it, behaviour unchanged."
+    },
+    {
+      "area": "Rollback on source",
+      "finding": "tick delivers whatever version the pointer names, including a lower one after rollback; no higher-version requirement.",
+      "filePath": "packages/aws/src/infrastructure/s3-snapshot-source.ts",
+      "implication": "Re-reading current.json on every notification already confirms rollbacks. Ordering guard must be by load sequence, not version number, or it blocks rollbacks."
+    },
+    {
+      "area": "SNS notifier / publisher",
+      "finding": "Publisher options topicArn?: string and onNotifyError?: NotifyErrorHandler (default one-line console.warn); publish/rollback return Promise<number>; notify failure never fails publish.",
+      "filePath": "packages/aws/src/infrastructure/s3-snapshot-publisher.ts",
+      "implication": "Matches horizon-7 plan. CLI only passes topicArn and an onNotifyError writing to io.err; exit code 0."
+    },
+    {
+      "area": "Public exports",
+      "finding": "index.ts exports createSqsNotificationQueue, NotificationHandler, NotificationQueue, SqsNotificationQueueOptions, ChangeNotification type, NotifyErrorHandler/NotifyFailure; not parseChangeNotification or the SNS notifier.",
+      "filePath": "packages/aws/src/index.ts",
+      "implication": "Exports mostly done; only S3SnapshotSourceOptions gains the queue field."
+    },
+    {
+      "area": "Peer deps",
+      "finding": "client-sns and client-sqs already optional peers (^3.1135.0) and devDeps; client-s3 required peer imported statically in the source; SQS queue loads SDK by dynamic import().",
+      "filePath": "packages/aws/package.json",
+      "implication": "No package.json change. The source imports only the NotificationQueue type."
+    },
+    {
+      "area": "CLI",
+      "finding": "publisherFor(io, values) calls io.createPublisher({bucket, validate}); parseArgs options env, bucket, to, version, out; bucket falls back to FEATURESYNC_BUCKET via io.env; no notify-failure reporting; USAGE lists no topic option.",
+      "filePath": "packages/cli/src/main.ts",
+      "implication": "Add 'topic-arn' option, topicArn = values['topic-arn'] ?? io.env.FEATURESYNC_TOPIC_ARN, onNotifyError writing to io.err, update USAGE. Small single-file phase."
+    },
+    {
+      "area": "LocalStack compose",
+      "finding": "docker-compose localstack/localstack:2026.08.3 with SERVICES=s3 only, requires LOCALSTACK_AUTH_TOKEN; .env.example sets only AWS_ENDPOINT_URL_S3, AWS_REGION and keys.",
+      "filePath": "docker/docker-compose.yml",
+      "implication": "SERVICES=s3,sns,sqs and AWS_ENDPOINT_URL_SNS / AWS_ENDPOINT_URL_SQS in .env.example and CI env; otherwise clients hit real AWS."
+    },
+    {
+      "area": "Integration fixtures",
+      "finding": "3 *.localstack.test.ts files (source, publisher, fetcher); random bucket per test, cleanup afterEach/afterAll, throw if AWS_ENDPOINT_URL_S3 unset; vitest.integration.config.ts passes AWS_* env, 30s timeouts.",
+      "filePath": "packages/aws/vitest.integration.config.ts",
+      "implication": "New push test follows the pattern: random topic/queue/subscription, queue policy, teardown, SNS/SQS endpoint guard, short waitTimeSeconds."
+    },
+    {
+      "area": "CI",
+      "finding": "Integration job checks LOCALSTACK_AUTH_TOKEN, runs docker compose up --wait then pnpm test:integration; where AWS_ENDPOINT_URL_S3 is set in the job was not confirmed.",
+      "filePath": ".github/workflows/ci.yml",
+      "implication": "Add SNS/SQS endpoints wherever the job sets AWS_ENDPOINT_URL_S3; new test is picked up by the include glob."
+    },
+    {
+      "area": "Spec doc",
+      "finding": "docs/spec/change-notification.md covers 'The message is only a hint', 'Message', 'Delivery shapes'; no consumer-side semantics (dedup, poison, Unsubscribe, options).",
+      "filePath": "docs/spec/change-notification.md",
+      "implication": "Add a 'Consuming notifications' section."
+    },
+    {
+      "area": "Core port",
+      "finding": "SnapshotSource is { load(): Promise<unknown>; subscribe?(onChange): Unsubscribe }, Unsubscribe = () => void.",
+      "filePath": "packages/core/src/application/snapshot-source.port.ts",
+      "implication": "No core change; push wiring stays in @featuresync/aws."
+    }
+  ],
+  "requiredMaterials": [
+    {
+      "name": "LOCALSTACK_AUTH_TOKEN CI secret",
+      "kind": "credential",
+      "whyNeeded": "Starts LocalStack with S3, SNS and SQS in the CI integration job (localstack-sns-sqs-env, localstack-push-proof).",
+      "acquisitionNote": "Already provisioned as a GitHub Actions secret; the job fails, never skips, without it."
+    }
+  ],
+  "phases": [
+    {
+      "id": "s3-source-push-detection",
+      "order": 0,
+      "name": "Add Notification Queue push detection to S3 source",
+      "goal": "createS3SnapshotSource accepts an optional notificationQueue. On each Change Notification it re-reads the Current Pointer (current.json) and delivers the Snapshot it names through onChange, alongside polling. One synchronous Unsubscribe stops both the poll loop and the Notification Queue.",
+      "rationale": "Horizon 7 shipped the SNS notifier and an SQS Notification Queue reader, but no Snapshot source uses them yet, so apps still see changes only when polling runs. Plugging the existing NotificationQueue port into the S3 source makes push detection work with no change to the core SnapshotSource port.",
+      "filesAffected": [
+        "packages/aws/src/infrastructure/s3-snapshot-source.ts",
+        "packages/aws/test/infrastructure/s3-snapshot-source.push.test.ts",
+        "docs/roadmaps/featuresync/decisions.md"
+      ],
+      "changes": [
+        "Add optional notificationQueue?: NotificationQueue to S3SnapshotSourceOptions (type-only import). Without it, polling behaviour stays exactly as it is now.",
+        "In subscribe, start the queue with a handler that ignores (acks) notifications for another environment. For a matching environment it re-reads current.json through the existing getPointerIfChanged/readPointer/loadVersion closures, skips when the pointer version equals loaded.version, and otherwise delivers the Snapshot. Because the Current Pointer is re-read every time, a lower-version rollback is delivered only once current.json confirms it (Rollback Confirmation).",
+        "Run push loads and poll loads one after another through a single promise chain, ordered by load sequence rather than version number, so an older Snapshot is never delivered after a newer one and rollbacks are not blocked.",
+        "Make the handler rethrow when a load fails, so the queue leaves the message for redelivery or the dead-letter queue (DLQ). Unparseable messages keep the queue's existing delete-immediately behaviour (Poison Message policy).",
+        "Make Unsubscribe call stopQueue() and clearTimeout(timer) synchronously and set the stopped flag. A push load that is already running must not call onChange after Unsubscribe.",
+        "Add unit tests with a fake NotificationQueue covering: a higher version, a duplicate or equal version, a rollback, another environment, a load failure that rethrows, a push load in flight during Unsubscribe, a push racing a poll, and no queue. Keep 100% coverage.",
+        "As a step inside this phase, record in decisions.md the push placement, the rollback policy (confirm against the Current Pointer), the Poison Message policy (rethrow on load failure) and the public-export decision (only the options field changes)."
+      ],
+      "boundedContext": "Snapshot delivery (@featuresync/aws source)",
+      "layer": "infrastructure",
+      "blastRadius": "medium",
+      "inputs": [
+        "packages/aws/src/infrastructure/sqs-notification-queue.ts (NotificationQueue port)",
+        "packages/aws/src/domain/change-notification.ts (ChangeNotification type)"
+      ],
+      "expectedResult": "s3-snapshot-source.push.test.ts passes at 100% coverage. It proves that push delivers a newer Snapshot, deduplicates by version, confirms rollbacks against the Current Pointer, and delivers no onChange after Unsubscribe.",
+      "dependsOn": [],
+      "rubric": [
+        {
+          "id": "push-dedupe-and-rollback-confirmation",
+          "label": "Version dedupe and Rollback Confirmation",
+          "ruleStatement": "Every Change Notification for the matching environment makes the source re-read current.json. It delivers a Snapshot only when the pointer version differs from loaded.version, so a lower-version rollback is delivered because current.json confirms it, not because the notification says so.",
+          "passCriteria": [
+            "s3-snapshot-source.push.test.ts has a test where a notification carries a version equal to the loaded version and asserts that onChange is never called",
+            "It has a test where current.json points to a lower version (rollback) and asserts that onChange receives that older Snapshot exactly once",
+            "It has a test where the notification's version differs from current.json and asserts that the version from current.json is the one delivered",
+            "The handler in s3-snapshot-source.ts calls the existing readPointer/getPointerIfChanged closures and does not trust the notification's version field alone"
+          ],
+          "failureExamples": [
+            "The handler dedupes with notification.version > loaded.version, so rollbacks are silently dropped",
+            "The handler loads the Snapshot named in the notification without re-reading current.json, so a stale out-of-order notification delivers an outdated Snapshot",
+            "It uses getPointerIfChanged with an ETag that the poll loop already updated, so a push after a poll returns 'unchanged' and the confirmed rollback never fires (a plausible miss from sharing ETag state)"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "serialized-load-ordering",
+          "label": "Push and poll loads run in one serial chain",
+          "ruleStatement": "Push loads and poll loads run one at a time through a single promise chain, in load-sequence order, so an older Snapshot is never delivered after a newer one.",
+          "passCriteria": [
+            "The source has one shared promise chain (or mutex) that both the poll tick and the queue handler append to",
+            "A test with a fake queue fires a push while a poll load is still pending (a deferred promise) and asserts that onChange versions arrive in load order with no older-after-newer delivery",
+            "No version-number guard in the source blocks a confirmed rollback"
+          ],
+          "failureExamples": [
+            "Push and poll each call loadVersion on their own, so a slow poll resolves after a fast push and overwrites it with an older Snapshot",
+            "The chain is serialized but a rejected load breaks it (no catch between links), so every later load is skipped"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "unsubscribe-stops-both",
+          "label": "One synchronous Unsubscribe stops push and polling",
+          "ruleStatement": "The Unsubscribe that subscribe returns synchronously calls stopQueue(), clears the poll timer and sets the stopped flag. A push load already in flight must not call onChange after that.",
+          "passCriteria": [
+            "The Unsubscribe body calls stopQueue() and clearTimeout(timer) without awaiting anything",
+            "A test starts a push load, calls Unsubscribe before the load resolves, then resolves it and asserts onChange was not called",
+            "A test asserts that the fake queue's stop function was called exactly once and that advancing fake timers triggers no further poll reads"
+          ],
+          "failureExamples": [
+            "Unsubscribe clears the timer but forgets stopQueue, so SQS long-polling keeps running",
+            "The stopped flag is checked before the await on loadVersion but not after it, so an in-flight push still calls onChange (the typical honest race miss)"
+          ],
+          "minScore": 9
+        },
+        {
+          "id": "poison-and-env-policy",
+          "label": "Load-failure rethrow and environment filter",
+          "ruleStatement": "Notifications for another environment are acked without any S3 read. A load failure rethrows so the queue keeps the message for redelivery or the DLQ. Unparseable messages keep the queue's existing delete-immediately behaviour.",
+          "passCriteria": [
+            "A test sends another environment's notification and asserts that the handler resolves and no S3 GetObject or readPointer call happened",
+            "A test makes loadVersion reject and asserts that the handler promise rejects with that error",
+            "sqs-notification-queue.ts parse/delete behaviour is unchanged (empty diff, or its tests are untouched and still pass)"
+          ],
+          "failureExamples": [
+            "The handler catches load errors and logs them, so the message is deleted and the change is lost until the next poll",
+            "The environment check compares against the bucket prefix instead of the configured environment, so real notifications get filtered out"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "layer-and-port-respect",
+          "label": "Infrastructure layer respects the NotificationQueue port",
+          "ruleStatement": "The source depends on the NotificationQueue port only by type and does not change the core SnapshotSource port or the public exports beyond the options field.",
+          "passCriteria": [
+            "s3-snapshot-source.ts uses 'import type { NotificationQueue }' and has no import from @aws-sdk/client-sqs or client-sns",
+            "packages/core SnapshotSource interface has no diff",
+            "pnpm lint passes with the ESLint layer zones unchanged",
+            "Without notificationQueue, the existing s3-snapshot-source tests pass unchanged"
+          ],
+          "failureExamples": [
+            "It imports createSqsNotificationQueue as a value to build a default queue inside the source, which pulls client-sqs into the source",
+            "It adds an onPush callback to the core SnapshotSource interface"
+          ],
+          "minScore": 9
+        },
+        {
+          "id": "coverage-and-decisions",
+          "label": "100% coverage and recorded decisions",
+          "ruleStatement": "The aws package stays at 100% line, branch, function and statement coverage, and decisions.md records the push placement, rollback, poison and export decisions.",
+          "passCriteria": [
+            "pnpm --filter @featuresync/aws test --coverage reports 100 for all four metrics",
+            "decisions.md has an entry that names push placement, Rollback Confirmation against the Current Pointer, rethrow on load failure, and 'only the options field changes'"
+          ],
+          "failureExamples": [
+            "The branch where stopped is set after an await is never covered, so branch coverage is 99.x%",
+            "The decisions entry covers rollback but leaves out the Poison Message policy"
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "If the rollback or race tests fail, make the push path re-read current.json with its own unconditional readPointer (not an ETag shared with polling), and check the stopped flag after every await inside the single serial promise chain."
+    },
+    {
+      "id": "cli-topic-arn",
+      "name": "Add --topic-arn option to CLI publish and rollback",
+      "order": 1,
+      "goal": "featuresync publish and rollback read the SNS topic ARN from --topic-arn or FEATURESYNC_TOPIC_ARN, pass it to the S3 publisher, and report a failed Change Notification as a warning on stderr with exit code 0.",
+      "rationale": "The publisher can already send Change Notifications when it gets a topicArn, but the CLI has no way to pass one. The CLI must stay a thin wrapper with no business logic.",
+      "filesAffected": [
+        "packages/cli/src/main.ts",
+        "packages/cli/test/main.test.ts",
+        "docs/roadmaps/featuresync/decisions.md"
+      ],
+      "changes": [
+        "Add a 'topic-arn' string option to parseArgs. Resolve topicArn = values['topic-arn'] ?? io.env.FEATURESYNC_TOPIC_ARN, and pass nothing when neither is set so no notification is sent.",
+        "Pass topicArn and an onNotifyError that writes one line to io.err into io.createPublisher inside publisherFor.",
+        "Add --topic-arn and FEATURESYNC_TOPIC_ARN to USAGE.",
+        "Add tests for the flag, the env fallback, the flag taking priority over the env var, the case where neither is set, and a notify failure that writes a warning with exit code 0.",
+        "As a step inside this phase, record in decisions.md that a notify failure in the CLI gives exit code 0 with a warning."
+      ],
+      "boundedContext": "Snapshot publishing CLI (@featuresync/cli)",
+      "layer": "interface",
+      "blastRadius": "small",
+      "inputs": [
+        "packages/aws/src/infrastructure/s3-snapshot-publisher.ts (topicArn, onNotifyError options)"
+      ],
+      "expectedResult": "main.test.ts passes at 100% coverage. It shows that --topic-arn or FEATURESYNC_TOPIC_ARN reaches createPublisher, and that a notify failure writes a warning to stderr with exit 0.",
+      "dependsOn": [],
+      "rubric": [
+        {
+          "id": "topic-arn-resolution",
+          "label": "Flag, env fallback and precedence",
+          "ruleStatement": "topicArn resolves as --topic-arn ?? io.env.FEATURESYNC_TOPIC_ARN, and it is left undefined when neither is set.",
+          "passCriteria": [
+            "main.test.ts asserts that the createPublisher spy receives topicArn from the flag",
+            "A test sets only FEATURESYNC_TOPIC_ARN and asserts the env value reaches createPublisher",
+            "A test sets both and asserts the flag wins",
+            "A test with neither set asserts topicArn is undefined (the key is absent or undefined, not an empty string)"
+          ],
+          "failureExamples": [
+            "It reads process.env directly instead of io.env, so the tests cannot inject the variable",
+            "It uses || with a default of '' and passes an empty topicArn, which makes the publisher try an SNS call"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "both-commands-wired",
+          "label": "publish and rollback both carry topicArn",
+          "ruleStatement": "Both the publish and rollback commands pass topicArn and onNotifyError through publisherFor.",
+          "passCriteria": [
+            "There are tests for the rollback command as well as publish that assert topicArn reaches createPublisher",
+            "topicArn is wired in publisherFor only, not duplicated in each command"
+          ],
+          "failureExamples": [
+            "Only publish passes topicArn, so rollbacks never notify subscribers"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "notify-failure-warning-exit0",
+          "label": "Notify failure is a warning with exit 0",
+          "ruleStatement": "A failed Change Notification writes exactly one warning line to io.err and the command still exits 0. A failed notify never fails a publish.",
+          "passCriteria": [
+            "A test makes the fake publisher call onNotifyError and asserts exit code 0 and exactly one stderr line containing the error message",
+            "stdout still holds the normal success output"
+          ],
+          "failureExamples": [
+            "onNotifyError rethrows or sets process.exitCode = 1",
+            "The warning prints the whole error object, stack trace included, across many lines"
+          ],
+          "minScore": 9
+        },
+        {
+          "id": "thin-cli-layer",
+          "label": "CLI stays thin",
+          "ruleStatement": "main.ts only parses args and env and forwards options. It contains no SNS or client logic.",
+          "passCriteria": [
+            "main.ts has no import from @aws-sdk/client-sns and no ARN parsing or validation logic",
+            "The ESLint layer zones pass",
+            "USAGE lists --topic-arn and FEATURESYNC_TOPIC_ARN",
+            "packages/cli coverage is 100% for all metrics"
+          ],
+          "failureExamples": [
+            "It validates the ARN format with a regex in the CLI, which is business logic in the interface layer",
+            "It builds an SNSClient inside main.ts to send the notification"
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "If the env-fallback test fails, read the variable from the injected io.env (not process.env), use ?? rather than ||, and wire it once in publisherFor so publish and rollback share it."
+    },
+    {
+      "id": "localstack-sns-sqs-env",
+      "order": 2,
+      "name": "Add SNS and SQS to LocalStack and CI",
+      "goal": "Local runs and the CI integration job start LocalStack with S3, SNS and SQS, and send the AWS SDK SNS and SQS clients to it using only standard endpoint env vars.",
+      "rationale": "LocalStack currently starts only S3. Without the SNS and SQS endpoint env vars, the push test would call real AWS. Horizon 1 decided that LocalStack is reached only through env config, never through a code branch.",
+      "filesAffected": [
+        "docker/docker-compose.yml",
+        ".env.example",
+        ".github/workflows/ci.yml",
+        "packages/aws/vitest.integration.config.ts"
+      ],
+      "changes": [
+        "Set SERVICES=s3,sns,sqs in docker-compose.",
+        "Add AWS_ENDPOINT_URL_SNS and AWS_ENDPOINT_URL_SQS to .env.example and to the CI integration job, next to where AWS_ENDPOINT_URL_S3 is set (ci.yml line ~24).",
+        "Pass the new env vars through vitest.integration.config.ts."
+      ],
+      "boundedContext": "Build and CI tooling",
+      "layer": "cross-cutting",
+      "blastRadius": "small",
+      "inputs": [
+        "EXTERNAL: LOCALSTACK_AUTH_TOKEN secret in CI (already required)"
+      ],
+      "expectedResult": "docker compose up --wait starts LocalStack with S3, SNS and SQS healthy, and the CI integration job exports AWS_ENDPOINT_URL_SNS and AWS_ENDPOINT_URL_SQS.",
+      "dependsOn": [],
+      "rubric": [
+        {
+          "id": "compose-services",
+          "label": "LocalStack starts S3, SNS and SQS",
+          "ruleStatement": "docker-compose sets SERVICES=s3,sns,sqs, and docker compose up --wait reports LocalStack as healthy.",
+          "passCriteria": [
+            "docker/docker-compose.yml has SERVICES=s3,sns,sqs",
+            "docker compose up --wait exits 0, and curl localhost:4566/_localstack/health shows s3, sns and sqs as available or running"
+          ],
+          "failureExamples": [
+            "SNS is added but SQS is forgotten",
+            "The healthcheck still probes only S3, so --wait succeeds before SNS is ready"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "env-config-only",
+          "label": "Endpoints come from env only",
+          "ruleStatement": "The SNS and SQS clients reach LocalStack only through AWS_ENDPOINT_URL_SNS and AWS_ENDPOINT_URL_SQS. No source code branches on LocalStack.",
+          "passCriteria": [
+            "grep for 'localstack' or '4566' in packages/*/src returns nothing",
+            "No endpoint: option is added to the SNSClient or SQSClient constructors",
+            "The variables are set in .env.example next to AWS_ENDPOINT_URL_S3"
+          ],
+          "failureExamples": [
+            "It adds a generic AWS_ENDPOINT_URL override in code, or an if (process.env.LOCALSTACK) branch, to make SNS work"
+          ],
+          "minScore": 9
+        },
+        {
+          "id": "ci-repeatable-fail-closed",
+          "label": "CI exports the vars and fails without the token",
+          "ruleStatement": "The CI integration job exports both new endpoint vars and still fails (never skips) when LOCALSTACK_AUTH_TOKEN is missing.",
+          "passCriteria": [
+            "ci.yml integration job env has AWS_ENDPOINT_URL_SNS and AWS_ENDPOINT_URL_SQS next to AWS_ENDPOINT_URL_S3",
+            "The existing token-missing step still exits non-zero, with no if: condition added that skips the job",
+            "vitest.integration.config.ts passes both vars through"
+          ],
+          "failureExamples": [
+            "The vars are added to the unit job instead of the integration job",
+            "The vars are exported in ci.yml but vitest.integration.config.ts's env allowlist drops them, so the tests see undefined"
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "If the integration tests call real AWS or see undefined endpoints, make sure the vars are set in the integration job's env block and forwarded by vitest.integration.config.ts, not only listed in .env.example."
+    },
+    {
+      "id": "localstack-push-proof",
+      "order": 3,
+      "name": "Test publish to onChange push path on LocalStack",
+      "goal": "Prove on LocalStack the full path publish -> SNS -> SQS -> createS3SnapshotSource onChange, including rollback and Unsubscribe, and document the consumer-side rules.",
+      "rationale": "Unit tests use fakes. Only a real SNS-to-SQS delivery shows that the envelope shape, the queue subscription and the source wiring actually work together. The spec must also tell users how notifications are consumed.",
+      "filesAffected": [
+        "packages/aws/integration/push-detection.localstack.test.ts",
+        "docs/spec/change-notification.md"
+      ],
+      "changes": [
+        "Create a random bucket, SNS topic, SQS queue, queue policy and subscription for each test, and tear them down in afterEach/afterAll. Throw if the SNS or SQS endpoint env var is not set.",
+        "Publish through the real S3SnapshotPublisher with topicArn. Use a very long pollIntervalMs so that only push can deliver, and assert that onChange receives the new Snapshot. Then roll back and assert the older Snapshot is delivered. Then Unsubscribe and assert no further onChange.",
+        "Use a short waitTimeSeconds and bounded waits (under the 30s timeout), not fixed sleeps.",
+        "Add a 'Consuming notifications' section to docs/spec/change-notification.md covering version dedupe, Rollback Confirmation, the Poison Message policy (a load failure leaves the message for redelivery, so users must configure a dead-letter queue with a max receive count to stop endless retries), environment filtering, Unsubscribe, and the notificationQueue option."
+      ],
+      "boundedContext": "Snapshot delivery (@featuresync/aws source)",
+      "layer": "infrastructure",
+      "blastRadius": "medium",
+      "inputs": [
+        "createS3SnapshotSource notificationQueue option (from s3-source-push-detection)",
+        "AWS_ENDPOINT_URL_SNS/SQS env and SERVICES=s3,sns,sqs (from localstack-sns-sqs-env)",
+        "packages/aws/src/infrastructure/s3-snapshot-publisher.ts",
+        "EXTERNAL: LOCALSTACK_AUTH_TOKEN secret in CI (already required)"
+      ],
+      "expectedResult": "push-detection.localstack.test.ts passes in pnpm test:integration and in the CI integration job, covering push delivery, rollback and Unsubscribe.",
+      "dependsOn": [
+        "s3-source-push-detection",
+        "localstack-sns-sqs-env"
+      ],
+      "rubric": [
+        {
+          "id": "real-end-to-end-push",
+          "label": "Real publish -> SNS -> SQS -> onChange",
+          "ruleStatement": "The test publishes through the real S3SnapshotPublisher with topicArn and receives the new Snapshot via push only.",
+          "passCriteria": [
+            "push-detection.localstack.test.ts uses the real publisher and createSqsNotificationQueue with no fakes",
+            "pollIntervalMs is set far beyond the test timeout, so only push can deliver",
+            "It asserts that onChange received the published Snapshot's version"
+          ],
+          "failureExamples": [
+            "It uses a short pollIntervalMs, so the test passes through polling even if the SNS->SQS wiring is broken",
+            "The subscription does not set RawMessageDelivery to match what the queue parser expects, so the envelope does not parse (an honest envelope-shape miss)"
+          ],
+          "minScore": 9
+        },
+        {
+          "id": "rollback-and-unsubscribe-live",
+          "label": "Rollback and Unsubscribe proven live",
+          "ruleStatement": "After a rollback the older Snapshot is delivered, and after Unsubscribe a further publish produces no onChange.",
+          "passCriteria": [
+            "The test asserts that onChange receives the rolled-back older version",
+            "After Unsubscribe it publishes again, waits a bounded window, and asserts the onChange call count did not change"
+          ],
+          "failureExamples": [
+            "It checks Unsubscribe only by asserting that the function exists or returns, without publishing again afterwards"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "isolation-and-teardown",
+          "label": "Per-test resources and cleanup",
+          "ruleStatement": "Each test creates a random bucket, topic, queue, queue policy and subscription and tears them down. It throws when the endpoint env vars are missing.",
+          "passCriteria": [
+            "Resource names include a random suffix",
+            "afterEach/afterAll delete the subscription, queue, topic and bucket",
+            "The test throws (does not skip) when AWS_ENDPOINT_URL_SNS or AWS_ENDPOINT_URL_SQS is unset"
+          ],
+          "failureExamples": [
+            "The queue policy that allows sns.amazonaws.com SendMessage is missing, so delivery silently fails on stricter LocalStack versions",
+            "It uses describe.skipIf on missing env vars, which breaks the fail-never-skip rule"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "bounded-waits-deterministic",
+          "label": "Bounded waits, no fixed sleeps",
+          "ruleStatement": "The test waits with a short waitTimeSeconds and poll-until helpers, and stays under the 30s timeout.",
+          "passCriteria": [
+            "No bare setTimeout sleep is used to wait for delivery; it waits with vi.waitFor or a deadline loop",
+            "waitTimeSeconds is 1 to 2",
+            "The test passes three times in a row with pnpm test:integration"
+          ],
+          "failureExamples": [
+            "It waits with await sleep(5000), which is flaky under CI load",
+            "The default 20s waitTimeSeconds makes Unsubscribe plus teardown exceed the timeout"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "consumer-spec-section",
+          "label": "Consuming notifications documented",
+          "ruleStatement": "docs/spec/change-notification.md has a 'Consuming notifications' section covering dedupe, Rollback Confirmation, the Poison Message policy with DLQ guidance, environment filtering, Unsubscribe and the notificationQueue option.",
+          "passCriteria": [
+            "The section exists and names all six topics",
+            "The DLQ guidance mentions maxReceiveCount"
+          ],
+          "failureExamples": [
+            "It documents the rethrow but never tells users to configure a DLQ, which leaves endless retries possible"
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "If onChange never fires on LocalStack, check the queue policy that allows SNS SendMessage, and check that the subscription's RawMessageDelivery setting matches the envelope the queue parser expects."
+    }
+  ],
+  "successCriteria": [
+    "(1) Horizon-7's NotificationQueue, SNS notifier and parser were confirmed against their planned interfaces during discovery; decisions on push placement, rollback policy, poison-message policy, CLI notify-failure exit code and public exports written to decisions.md. (2) createS3SnapshotSource accepts an optional Notification Queue; higher version triggers a load reusing readPointer/loadVersion/loaded; duplicate/equal version calls onChange zero extra times; lower-version delivered only after current.json confirms; poison policy applied; single synchronous Unsubscribe stops poll loop and queue, no onChange after it; concurrent push and poll loads never deliver older after newer; without a queue polling unchanged. (3) CLI publish/rollback pass topic ARN from --topic-arn or FEATURESYNC_TOPIC_ARN; none given means no notify; notify failure warns and follows decided exit code; no business logic in CLI. (4) docker-compose SERVICES=s3,sns,sqs; LocalStack test creates topic, queue, subscription, publishes via real publisher, onChange receives new Snapshot, covers rollback and Unsubscribe; runs in existing CI integration job. (5) typecheck, lint, 100% coverage unit tests and integration suite pass; docs/spec/change-notification.md describes consumption semantics.",
+    "Add Notification Queue push detection to S3 source: s3-snapshot-source.push.test.ts passes at 100% coverage. It proves that push delivers a newer Snapshot, deduplicates by version, confirms rollbacks against the Current Pointer, and delivers no onChange after Unsubscribe.",
+    "Add --topic-arn option to CLI publish and rollback: main.test.ts passes at 100% coverage. It shows that --topic-arn or FEATURESYNC_TOPIC_ARN reaches createPublisher, and that a notify failure writes a warning to stderr with exit 0.",
+    "Add SNS and SQS to LocalStack and CI: docker compose up --wait starts LocalStack with S3, SNS and SQS healthy, and the CI integration job exports AWS_ENDPOINT_URL_SNS and AWS_ENDPOINT_URL_SQS.",
+    "Test publish to onChange push path on LocalStack: push-detection.localstack.test.ts passes in pnpm test:integration and in the CI integration job, covering push delivery, rollback and Unsubscribe."
+  ],
+  "deferred": [
+    "Provisioning SNS/SQS/subscriptions/policies (IaC) \u2014 user owns infrastructure in their account.",
+    "Automatic per-instance queue creation \u2014 brief defers it; needs own lifecycle/IAM design.",
+    "IAM least-privilege checks on real AWS \u2014 no real-AWS test account.",
+    "NestJS-specific push wiring \u2014 brief keeps it out; generic subscribe already reaches Nest.",
+    "Replacing or removing polling/reconciliation \u2014 push is additive.",
+    "DLQ implementation or redrive tooling \u2014 user infrastructure.",
+    "HTTP/webhook subscriptions \u2014 horizon-7 decision requires own SQS queue only.",
+    "Dashboard/UI and non-TS SDKs \u2014 later vision slices.",
+    "Automatic skip-ahead for orphaned snapshots \u2014 horizon-4 decision makes it manual.",
+    "Separate 'verify horizon-7 interfaces' phase: discovery already confirmed NotificationQueue, parser, publisher and exports match the plan (no work remains).",
+    "Extracting the shared loaded state into its own holder module: a promise chain inside the existing closure is enough (YAGNI ceremony; coverage risk).",
+    "Exporting parseChangeNotification or the SNS notifier publicly: no consumer needs them (YAGNI: no current need).",
+    "package.json peer-dependency changes: client-sns/client-sqs are already optional peers and devDeps (already exists).",
+    "Core SnapshotSource port changes: existing subscribe/Unsubscribe shape already fits.",
+    "A queueUrl convenience option on the source: injecting a NotificationQueue already works (YAGNI: no second need).",
+    "Separate LocalStack test for the RawMessageDelivery=true shape: parser unit tests cover both shapes and the envelope shape is proven end to end (low value)."
+  ],
+  "revision": 0
+}

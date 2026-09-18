@@ -62,3 +62,38 @@ Wrapped in an SNS envelope — the message is a JSON **string** in `Message`:
 
 Any other envelope type (`SubscriptionConfirmation`, `UnsubscribeConfirmation`) is rejected, as is an
 envelope whose `Message` is not a string.
+
+## Consuming notifications
+
+Pass a queue to the S3 source to receive changes as soon as they are published, instead of waiting
+for the next poll:
+
+```ts
+const source = createS3SnapshotSource({
+  bucket: 'flags',
+  environment: 'production',
+  notificationQueue: createSqsNotificationQueue({ queueUrl }),
+});
+```
+
+Polling keeps running next to the queue, so a lost or delayed notification is still picked up on the
+next poll. The source applies these rules to every notification:
+
+- **Environment filtering.** A notification for another environment is acknowledged and dropped
+  without reading S3, so one topic can serve every environment.
+- **Rollback Confirmation.** The notification is only a hint. For a matching environment the source
+  re-reads `current.json` and loads the Snapshot the Current Pointer names, not the one in the
+  message. A rollback to a lower version is delivered because the pointer confirms it; a stale or
+  out-of-order notification delivers whatever is current.
+- **Version dedupe.** The Snapshot is delivered only when the pointer's version differs from the one
+  already loaded, so a redelivered or duplicate notification calls `onChange` at most once. Push and
+  poll loads run one at a time, so an older Snapshot is never delivered after a newer one.
+- **Poison Message policy.** A message that cannot be parsed is deleted immediately; retrying it can
+  never succeed. When loading the Snapshot fails, the message is left on the queue so SQS redelivers
+  it. Configure a dead-letter queue with a `maxReceiveCount` (for example 5) on the queue's redrive
+  policy, or a Snapshot that keeps failing to load is retried forever.
+- **Unsubscribe.** The function `subscribe` returns stops the queue and the poll timer at once. A load
+  already in flight finishes but does not call `onChange`.
+
+The queue needs a policy that lets the topic's ARN call `sqs:SendMessage`, and the subscription may use
+either delivery shape above.

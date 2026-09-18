@@ -54,7 +54,8 @@ const USAGE = [
   '  featuresync publish --env <env> [--bucket <bucket>] <file>',
   '  featuresync rollback --env <env> --to <version> [--bucket <bucket>]',
   '  featuresync pull --env <env> --version <version> --out <file> [--bucket <bucket>]',
-  'The bucket defaults to FEATURESYNC_BUCKET.',
+  'publish and rollback accept [--topic-arn <arn>] to send a change notification.',
+  'The bucket defaults to FEATURESYNC_BUCKET and the topic ARN to FEATURESYNC_TOPIC_ARN.',
 ].join('\n');
 
 class UsageError extends Error {}
@@ -99,16 +100,25 @@ async function runValidate(io: CliIo, positionals: readonly string[]): Promise<E
 interface PublisherArgs {
   readonly env?: string | undefined;
   readonly bucket?: string | undefined;
+  readonly 'topic-arn'?: string | undefined;
 }
 
 const bucketFor = (io: CliIo, values: PublisherArgs): string =>
   requireValue(values.bucket ?? io.env['FEATURESYNC_BUCKET'], '--bucket or FEATURESYNC_BUCKET');
 
-const publisherFor = (io: CliIo, values: PublisherArgs): S3SnapshotPublisher =>
-  io.createPublisher({
+const publisherFor = (io: CliIo, values: PublisherArgs): S3SnapshotPublisher => {
+  const topicArn = values['topic-arn'] ?? io.env['FEATURESYNC_TOPIC_ARN'];
+  return io.createPublisher({
     bucket: bucketFor(io, values),
     validate: validateSnapshot,
+    ...(topicArn === undefined ? {} : { topicArn }),
+    onNotifyError: (error, { environment, version }) => {
+      io.err(
+        `Warning: change notification for ${environment} version ${String(version)} failed (${error instanceof Error ? error.message : String(error)})`,
+      );
+    },
   });
+};
 
 async function runPublish(io: CliIo, values: PublisherArgs, positionals: readonly string[]): Promise<ExitCode> {
   const env = requireValue(values.env, '--env');
@@ -211,6 +221,7 @@ export async function main(argv: readonly string[], io: CliIo = nodeIo): Promise
         to: { type: 'string' },
         version: { type: 'string' },
         out: { type: 'string' },
+        'topic-arn': { type: 'string' },
       },
     });
     const [command, ...rest] = positionals;

@@ -231,6 +231,61 @@ describe('featuresync rollback', () => {
   });
 });
 
+describe('change notification topic', () => {
+  const PUBLISH = ['publish', '--env', 'production', 'valid.json'];
+  const ROLLBACK = ['rollback', '--env', 'production', '--to', '3'];
+  const ENV = { FEATURESYNC_BUCKET: 'env-bucket', FEATURESYNC_TOPIC_ARN: 'arn:env' };
+
+  it.each([
+    ['publish', PUBLISH],
+    ['rollback', ROLLBACK],
+  ])('%s passes --topic-arn to the publisher', async (_command, argv) => {
+    const h = harness();
+
+    await main([...argv, '--topic-arn', 'arn:flag'], h.io);
+    expect(h.createPublisher.mock.calls[0]?.[0].topicArn).toBe('arn:flag');
+  });
+
+  it.each([
+    ['publish', PUBLISH],
+    ['rollback', ROLLBACK],
+  ])('%s falls back to FEATURESYNC_TOPIC_ARN', async (_command, argv) => {
+    const h = harness(ENV);
+
+    await main(argv, h.io);
+    expect(h.createPublisher.mock.calls[0]?.[0].topicArn).toBe('arn:env');
+  });
+
+  it('prefers --topic-arn over FEATURESYNC_TOPIC_ARN', async () => {
+    const h = harness(ENV);
+
+    await main([...PUBLISH, '--topic-arn', 'arn:flag'], h.io);
+    expect(h.createPublisher.mock.calls[0]?.[0].topicArn).toBe('arn:flag');
+  });
+
+  it('sends no topic when neither the flag nor the variable is set', async () => {
+    const h = harness();
+
+    await main(PUBLISH, h.io);
+    expect(h.createPublisher.mock.calls[0]?.[0]).not.toHaveProperty('topicArn');
+  });
+
+  it.each([
+    ['an Error', new Error('sns down'), 'sns down'],
+    ['a non-Error value', 'throttled', 'throttled'],
+  ])('reports a failed notification with %s as one warning and still exits 0', async (_kind, error, message) => {
+    const h = harness(ENV);
+    h.publisher.publish.mockImplementation(() => {
+      h.createPublisher.mock.calls[0]?.[0].onNotifyError?.(error, { environment: 'production', version: 7 });
+      return Promise.resolve(7);
+    });
+
+    expect(await main(PUBLISH, h.io)).toBe(EXIT_OK);
+    expect(h.err).toEqual([`Warning: change notification for production version 7 failed (${message})`]);
+    expect(h.out).toEqual(['Published production version 7']);
+  });
+});
+
 describe('command line errors', () => {
   it('rejects an unknown command', async () => {
     const h = harness();

@@ -12,12 +12,16 @@ services:
       # LocalStack configuration: https://docs.localstack.cloud/references/configuration/
       - DEBUG=${DEBUG:-0}
       - PERSISTENCE=${PERSISTENCE:-0}
-      - SERVICES=s3
+      - SERVICES=s3,sns,sqs
     volumes:
       - '${LOCALSTACK_VOLUME_DIR:-./volume}:/var/lib/localstack'
       - '/var/run/docker.sock:/var/run/docker.sock'
     healthcheck:
-      test: ['CMD', 'curl', '-fsS', 'http://localhost:4566/_localstack/health']
+      test:
+        - CMD-SHELL
+        - >-
+          curl -fsS http://localhost:4566/_localstack/health
+          | grep -Eq '"s3": "(available|running)".*"sns": "(available|running)".*"sqs": "(available|running)"'
       interval: 5s
       timeout: 3s
       retries: 20
