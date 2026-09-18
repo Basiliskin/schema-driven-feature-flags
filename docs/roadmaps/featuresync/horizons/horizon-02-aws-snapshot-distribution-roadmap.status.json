@@ -2,7 +2,7 @@
   "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-02-aws-snapshot-distribution-roadmap.json",
   "roadmapTask": "Plan horizon 2 of FeatureSync (docs/roadmaps/featuresync): AWS S3 snapshot distribution — reading only (no publisher), polling first (SNS later); LocalStack only via AWS SDK env config; 100% coverage.",
   "createdAt": "2026-09-18T07:38:57Z",
-  "updatedAt": "2026-09-18T07:49:55Z",
+  "updatedAt": "2026-09-18T07:58:40Z",
   "roadmapRevision": 0,
   "phases": [
     {
@@ -116,8 +116,94 @@
     },
     {
       "phaseId": "s3-snapshot-source-load",
-      "status": "not-started",
-      "attempts": 0
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-18T07:52:05Z",
+      "baseRef": "2096a4bd09346b12a2443345213745145e036218",
+      "baseDirty": true,
+      "notes": "Already dirty at start: docs/roadmaps/featuresync/ (horizon-02 memory + ledger), docs/spec/s3-layout.md, packages/aws/ (phase 2 files), pnpm-lock.yaml. | Changed: packages/aws/src/infrastructure/{s3-snapshot-source.ts,s3-snapshot-error.ts}, packages/aws/src/index.ts, packages/aws/test/infrastructure/s3-snapshot-source.load.test.ts, package.json (verify builds core first, per amendment). load() fetches <env>/current.json, validates via parseCurrentPointer (+ environment must match), fetches the derived snapshot key, returns raw JSON; unchanged pointer ETag returns the cached snapshot (1 GetObject); 404/403/NoSuchKey/AccessDenied -> *_NOT_FOUND, else REQUEST_FAILED; empty body -> INVALID_JSON. index.ts now exports only createS3SnapshotSource + S3SnapshotError (+ types); the pointer parser is no longer public. Local pnpm verify (from a deleted core dist) exit 0, 168 tests; rubric greps clean. Core file-watch rename test failed once, then passed 3 isolated runs (flaky, untouched). | Grade: no 10→9 demotions (typed-error-mapping 10 earned by explicit empty-Body handling). Grader flagged LoadedSnapshot.version stored but never read; it is kept for the polling phase per the contract. Compensation: none defined (revert = drop packages/aws/src/infrastructure + test, restore index.ts and root verify script).",
+      "unplannedFiles": [],
+      "amendments": [
+        {
+          "at": "2026-09-18T07:55:27Z",
+          "by": "execute",
+          "reason": "Typing the adapter against core SnapshotSource needs core dist/index.d.ts, but CI runs pnpm verify without building core, so root verify must build core first (package.json). load() never logs (it rejects), so the logger option would be dead code; it moves to the polling phase.",
+          "grounding": "discoveries.md horizon 2 ci entry: CI runs pnpm verify with no build step and dist/ is gitignored; packages/core/src/application/logger.port.ts Logger has only error().",
+          "before": {
+            "filesAffected": [
+              "packages/aws/src/infrastructure/s3-snapshot-source.ts",
+              "packages/aws/src/infrastructure/s3-snapshot-error.ts",
+              "packages/aws/src/index.ts",
+              "packages/aws/test/infrastructure/s3-snapshot-source.load.test.ts"
+            ],
+            "changes": [
+              "Accept options: bucket, environment, optional injected S3Client (default new S3Client({}), configured only from standard AWS SDK env/shared config, no endpoint or LocalStack branch), optional Logger defaulting to a package-local console logger (core does not export consoleLogger).",
+              "Add S3SnapshotError with a reason union (POINTER_NOT_FOUND, SNAPSHOT_NOT_FOUND, INVALID_POINTER, INVALID_JSON, REQUEST_FAILED) and a cause; map NoSuchKey and AccessDenied (403) to the *_NOT_FOUND reasons.",
+              "Make load() use only GetObject and never call parseSnapshot; keep the pointer ETag and version in closure state for the polling phase.",
+              "Unit-test every branch with a fake S3 client to 100% coverage; export createS3SnapshotSource and S3SnapshotError from src/index.ts."
+            ]
+          },
+          "after": {
+            "filesAffected": [
+              "packages/aws/src/infrastructure/s3-snapshot-source.ts",
+              "packages/aws/src/infrastructure/s3-snapshot-error.ts",
+              "packages/aws/src/index.ts",
+              "packages/aws/test/infrastructure/s3-snapshot-source.load.test.ts",
+              "package.json"
+            ],
+            "changes": [
+              "Accept options: bucket, environment, optional injected S3Client (default new S3Client({}), configured only from standard AWS SDK env/shared config, no endpoint or LocalStack branch). No logger option: load() rejects rather than logs; a logger arrives with polling.",
+              "Add S3SnapshotError with a reason union (POINTER_NOT_FOUND, SNAPSHOT_NOT_FOUND, INVALID_POINTER, INVALID_JSON, REQUEST_FAILED) and a cause; map NoSuchKey and AccessDenied (403) to the *_NOT_FOUND reasons.",
+              "Make load() use only GetObject and never call parseSnapshot; keep the pointer ETag and version in closure state for the polling phase.",
+              "Unit-test every branch with a fake S3 client to 100% coverage; export createS3SnapshotSource and S3SnapshotError from src/index.ts.",
+              "Root package.json verify builds @featuresync/core before typecheck so the type-only import of SnapshotSource resolves in CI."
+            ]
+          }
+        }
+      ],
+      "completedAt": "2026-09-18T07:58:40Z",
+      "gateRun": "verify (core build+typecheck+lint+test --coverage, from deleted core dist): pass; pnpm -r build: pass; lcov s3-snapshot-source.ts FN 5/5 LN 33/33 BR 26/26, s3-snapshot-error.ts 100%, index.ts 0 instrumentable lines (not excluded); rubric greps clean",
+      "gradeResult": {
+        "phaseId": "s3-snapshot-source-load",
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "pointer-then-snapshot-flow",
+            "score": 9,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "Derived key via snapshotKeyFor, 2 ordered GetObject, rollback + ETag-reuse tests; no parseSnapshot. Not 10: stored version never read."
+          },
+          {
+            "dimensionId": "typed-error-mapping",
+            "score": 10,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "Name + $metadata 403/404 for pointer and snapshot, cause asserted. 10 over 9: empty/missing Body handled explicitly as INVALID_JSON and tested."
+          },
+          {
+            "dimensionId": "getobject-only-no-endpoint-branch",
+            "score": 9,
+            "minScore": 9,
+            "pass": true,
+            "evidence": "Only GetObjectCommand; new S3Client({}) default tested; injected client tested; greps clean."
+          },
+          {
+            "dimensionId": "port-conformance-layering",
+            "score": 9,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "Return typed SnapshotSource from core public entry; no deep imports; index exports only the two symbols + types; no logger per amendment."
+          },
+          {
+            "dimensionId": "load-coverage-verify",
+            "score": 9,
+            "minScore": 9,
+            "pass": true,
+            "evidence": "100% on both source files, index not excluded, mocked S3Client, no ignores, verify green from clean core dist."
+          }
+        ]
+      }
     }
   ]
 }

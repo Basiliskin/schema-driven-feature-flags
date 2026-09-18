@@ -7,4 +7,4 @@
 - 2026-09-18 | horizon 2 | Is a LOCALSTACK_AUTH_TOKEN GitHub secret available, and how should CI behave on fork PRs without it?
 - 2026-09-18 | horizon 2 | Does mapping 403 AccessDenied to *_NOT_FOUND hide real permission/credential errors?
 - 2026-09-18 | horizon 2 | Should the current pointer keep both version and snapshotKey, or drop the redundant snapshotKey?
-- 2026-09-18 | horizon 2 | Can packages/aws typecheck/lint/test without building core first (core exports dist only)?
+- 2026-09-18 | horizon 2 | Can packages/aws typecheck/lint/test without building core first (core exports dist only)? — resolved

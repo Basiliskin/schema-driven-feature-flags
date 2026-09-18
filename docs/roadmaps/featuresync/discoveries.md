@@ -17,3 +17,5 @@
 - 2026-09-18 | horizon 2 | iam | app role is GetObject-only; without ListBucket S3 returns 403 not 404 for a missing key [docs/notes.md] → error mapping must treat 403 as possibly-missing.
 - 2026-09-18 | horizon 2 | layout | notes.md sketches <env>/current.json + <env>/snapshots/<n>.json and SNS msg {environment, version, snapshotKey}; no S3 spec existed [docs/notes.md] → new docs/spec/s3-layout.md.
 - 2026-09-18 | horizon 2 | ci | CI runs pnpm verify with no build step and dist/ is gitignored [.github/workflows/ci.yml] → a runtime import of @featuresync/core from aws fails typecheck until core is built first.
+- 2026-09-18 | horizon 2 | tests | core file-watch rename test failed once under full pnpm verify, passed 3 isolated runs [packages/core/test/infrastructure/file-snapshot-source.test.ts] → flaky under load; widen its settle time.
+- 2026-09-18 | horizon 2 | ci | root verify now builds @featuresync/core first [package.json] → sibling packages may type-import core; runtime imports also resolve after build.

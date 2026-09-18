@@ -2,7 +2,7 @@
   "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-02-aws-snapshot-distribution-roadmap.json",
   "roadmapTask": "Plan horizon 2 of FeatureSync (docs/roadmaps/featuresync): AWS S3 snapshot distribution — reading only (no publisher), polling first (SNS later); LocalStack only via AWS SDK env config; 100% coverage.",
   "createdAt": "2026-09-18T07:38:57Z",
-  "updatedAt": "2026-09-18T07:46:57Z",
+  "updatedAt": "2026-09-18T07:52:05Z",
   "roadmapRevision": 0,
   "phases": [
     {
@@ -60,21 +60,68 @@
     },
     {
       "phaseId": "aws-package-current-pointer",
-      "status": "awaiting-verification",
+      "status": "done",
       "attempts": 1,
       "startedAt": "2026-09-18T07:45:31Z",
       "baseRef": "7f8da0634e2b4c587e1759c647b6c9109ec215b0",
       "baseDirty": true,
-      "notes": "Already dirty at start: docs/roadmaps/featuresync/ (horizon-02 memory + ledger), docs/spec/s3-layout.md. | Changed: packages/aws/{package.json,tsconfig.json,tsconfig.build.json,src/index.ts,src/domain/current-pointer.ts,test/domain/current-pointer.test.ts}, pnpm-lock.yaml. Adds @featuresync/aws with zod parseCurrentPointer (INVALID_POINTER + path/message issues, never throws) and snapshotKeyFor as the only key template; index.ts barrel needed so exports to dist/index.js resolve. Domain file imports only zod (no core import, see CI build-order discovery). Local pnpm verify + pnpm -r build exit 0; aws/src 100% coverage.",
+      "notes": "Already dirty at start: docs/roadmaps/featuresync/ (horizon-02 memory + ledger), docs/spec/s3-layout.md. | Changed: packages/aws/{package.json,tsconfig.json,tsconfig.build.json,src/index.ts,src/domain/current-pointer.ts,test/domain/current-pointer.test.ts}, pnpm-lock.yaml. Adds @featuresync/aws with zod parseCurrentPointer (INVALID_POINTER + path/message issues, never throws) and snapshotKeyFor as the only key template; index.ts barrel needed so exports to dist/index.js resolve. Domain file imports only zod (no core import, see CI build-order discovery). Local pnpm verify + pnpm -r build exit 0; aws/src 100% coverage. | Verified: no compensation (new package, revert = remove packages/aws).",
       "unplannedFiles": [
         "packages/aws/src/index.ts",
         "pnpm-lock.yaml"
-      ]
+      ],
+      "completedAt": "2026-09-18T07:49:55Z",
+      "gateRun": "verify (typecheck+lint+test --coverage): pass; pnpm -r build: pass; lcov current-pointer.ts 100%; rubric greps clean",
+      "gradeResult": {
+        "phaseId": "aws-package-current-pointer",
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "package-shape-parity",
+            "score": 9,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "name @featuresync/aws, core workspace:*, client-s3 peer+dev only, dist-only exports, scripts match core; tsconfig.build src only."
+          },
+          {
+            "dimensionId": "pointer-validation-rules",
+            "score": 10,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "Beyond 9: zod path/message asserted exactly; traversal key and env with / rejected; int().positive(); safeParse never throws."
+          },
+          {
+            "dimensionId": "key-derivation-single-source",
+            "score": 9,
+            "minScore": 7,
+            "pass": true,
+            "evidence": "Template only in snapshotKeyFor; refine uses it; (prod,7) test present."
+          },
+          {
+            "dimensionId": "full-coverage-verify",
+            "score": 9,
+            "minScore": 9,
+            "pass": true,
+            "evidence": "Root verify runs aws tests; lcov current-pointer.ts FN 4/4 LN 9/9 BR 2/2; no ignore comments."
+          },
+          {
+            "dimensionId": "domain-purity",
+            "score": 9,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "Imports only zod; no env/log; eslint.config.js unchanged, lint passes."
+          }
+        ]
+      }
     },
     {
       "phaseId": "s3-snapshot-source-load",
-      "status": "not-started",
-      "attempts": 0
+      "status": "in-progress",
+      "attempts": 1,
+      "startedAt": "2026-09-18T07:52:05Z",
+      "baseRef": "2096a4bd09346b12a2443345213745145e036218",
+      "baseDirty": true,
+      "notes": "Already dirty at start: docs/roadmaps/featuresync/ (horizon-02 memory + ledger), docs/spec/s3-layout.md, packages/aws/ (phase 2 files), pnpm-lock.yaml."
     }
   ]
 }
