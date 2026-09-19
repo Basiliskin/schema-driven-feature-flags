@@ -90,6 +90,19 @@ importers:
         specifier: ^4.10.1
         version: 4.10.1
 
+  packages/dashboard:
+    dependencies:
+      '@featuresync/aws':
+        specifier: workspace:*
+        version: link:../aws
+      '@featuresync/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      '@aws-sdk/client-s3':
+        specifier: ^3.1135.0
+        version: 3.1135.0
+
   packages/deploy: {}
 
   packages/nestjs:

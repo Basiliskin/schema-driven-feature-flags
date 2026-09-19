@@ -30,3 +30,6 @@
 - 2026-09-18 | horizon 9 | 403→*_NOT_FOUND mapping unchanged; publisher and pull principals get s3:ListBucket, StringLikeIfExists s3:prefix <env>/* — because only real AWS proves it (LocalStack skips IAM).
 - 2026-09-18 | horizon 9 | CI proves policies only by static assertion tests; no LocalStack IAM-deny test — because localstack 2026.08.3 with ENFORCE_IAM=1 let a Reader Policy user PutObject (freemium token).
 - 2026-09-18 | horizon 9 | Multiple reading apps share one full stack (bucket, topic, publisher policy) and each deploys a queue-only stack via ExistingBucketName/ExistingTopicArn — not one full stack per app (user chose replan).
+- 2026-09-19 | horizon 10 | The dashboard is a node:http server-rendered UI bound to 127.0.0.1 with no framework; all writes go through S3SnapshotPublisher — because the single-writer rule and 100% coverage must hold.
+- 2026-09-19 | horizon 10 | Dashboard POSTs are protected by one Origin/Host check (no CSRF token); publish accepts pasted snapshot JSON only — because the user chose the simpler option at preview.
+- 2026-09-19 | horizon 10 | The dashboard lists versions 1..current from the Current Pointer, never ListObjectsV2 — because listing needs IAM changes and readers never list the bucket.

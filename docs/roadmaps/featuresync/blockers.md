@@ -8,9 +8,14 @@
 - 2026-09-18 | horizon 2 | Does mapping 403 AccessDenied to *_NOT_FOUND hide real permission/credential errors? — resolved by decision 2026-09-18
 - 2026-09-18 | horizon 2 | Should the current pointer keep both version and snapshotKey, or drop the redundant snapshotKey? — resolved by decision 2026-09-18
 - 2026-09-18 | horizon 2 | Can packages/aws typecheck/lint/test without building core first (core exports dist only)? — resolved
-- 2026-09-18 | horizon 7 | Does the horizon-7 NotificationQueue interface (start(handler) -> stop) fit what createS3SnapshotSource needs: sync stop, handler errors, delete-after-handle order?
-- 2026-09-18 | horizon 7 | Does LocalStack deliver SNS->SQS messages in both RawMessageDelivery shapes the way AWS does?
-- 2026-09-18 | horizon 7 | Poison or repeatedly failing messages: delete after N failures, or leave to a user-configured DLQ?
-- 2026-09-18 | horizon 7 | Can a push-triggered load race a concurrent poll/reconcile load in the shared loaded closure?
-- 2026-09-18 | horizon 7 | Did horizon 7 keep publish/rollback returning Promise<number> with onNotifyError plus a console.warn default?
+- 2026-09-18 | horizon 7 | Does the horizon-7 NotificationQueue interface (start(handler) -> stop) fit what createS3SnapshotSource needs: sync stop, handler errors, delete-after-handle order? — resolved by decision 2026-09-18
+- 2026-09-18 | horizon 7 | Does LocalStack deliver SNS->SQS messages in both RawMessageDelivery shapes the way AWS does? — resolved by decision 2026-09-18
+- 2026-09-18 | horizon 7 | Poison or repeatedly failing messages: delete after N failures, or leave to a user-configured DLQ? — resolved by decision 2026-09-18
+- 2026-09-18 | horizon 7 | Can a push-triggered load race a concurrent poll/reconcile load in the shared loaded closure? — resolved by decision 2026-09-18
+- 2026-09-18 | horizon 7 | Did horizon 7 keep publish/rollback returning Promise<number> with onNotifyError plus a console.warn default? — resolved by decision 2026-09-18
 - 2026-09-18 | horizon 9 | How does a 2nd reading app get its own queue on the shared bucket/topic? Template has no queue-only/existing-topic mode; blocks document-stack-deployment (REPLAN). — resolved
+- 2026-09-19 | horizon 10 | Does the single Origin/Host check hold for a missing Origin header, DNS rebinding against 127.0.0.1, or a proxied localhost?
+- 2026-09-19 | horizon 10 | How often do operators hit VERSION_EXISTS after a rollback in real use — does the horizon-4 versioning decision need revisiting?
+- 2026-09-19 | horizon 10 | Is 1..current version browsing usable for many versions, or is pagination needed?
+- 2026-09-19 | horizon 10 | Can hand-written HTML strings keep 100% branch coverage as the dashboard grows?
+- 2026-09-19 | horizon 10 | Do operators need in-browser flag editing, or is pasted/uploaded JSON enough?

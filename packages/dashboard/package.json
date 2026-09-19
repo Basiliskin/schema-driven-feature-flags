@@ -1,0 +1,28 @@
+{
+  "name": "@featuresync/dashboard",
+  "version": "0.0.0",
+  "description": "Locally-run dashboard to browse, publish and roll back FeatureSync snapshots.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "featuresync-dashboard": "dist/bin.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
+  },
+  "dependencies": {
+    "@featuresync/aws": "workspace:*",
+    "@featuresync/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "@aws-sdk/client-s3": "^3.1135.0"
+  },
+  "devDependencies": {
+    "@aws-sdk/client-s3": "^3.1135.0"
+  }
+}

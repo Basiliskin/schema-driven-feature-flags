@@ -18,6 +18,11 @@ export {
   type S3SnapshotFetcherOptions,
 } from './infrastructure/s3-snapshot-fetcher.js';
 export {
+  createS3CurrentPointerReader,
+  type S3CurrentPointerReader,
+  type S3CurrentPointerReaderOptions,
+} from './infrastructure/s3-current-pointer-reader.js';
+export {
   createSqsNotificationQueue,
   type NotificationHandler,
   type NotificationQueue,

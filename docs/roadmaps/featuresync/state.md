@@ -20,3 +20,5 @@
 - 2026-09-18 | horizon 9 | planned | 5 phases (CloudFormation deployment stack, publisher/reader IAM policies, policy assertion tests, LocalStack deploy proof, deploy guide); gate passed, 2 major healed, 8 minor debt
 - 2026-09-18 | horizon 9 | replanned | revise-phases, 1 phase added + 1 revised — stacks created a bucket/topic each; added queue-only mode, docs now depend on it
 - 2026-09-18 | horizon 9 | completed | 6 phases, 1 amendment, 0 overrides
+- 2026-09-19 | horizon 10 | planned | 5 phases (aws current-pointer reader, dashboard browse + publish/rollback use cases, 127.0.0.1 HTTP server, start command + LocalStack proof); gate passed, 0 healed, 5 minor debt
+- 2026-09-19 | horizon 10 | completed | 5 phases; 3 amendments, 0 overrides — local dashboard first slice (browse, publish, rollback) via featuresync-dashboard

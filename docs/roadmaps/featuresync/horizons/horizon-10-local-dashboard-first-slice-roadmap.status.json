@@ -1,0 +1,291 @@
+{
+  "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-10-local-dashboard-first-slice-roadmap.json",
+  "roadmapTask": "Horizon 10 of FeatureSync: first slice of a locally-run @featuresync/dashboard — browse flags and snapshot versions, publish pasted snapshot JSON and roll back, all writes via the existing @featuresync/aws publisher; production-ready with 100% coverage.",
+  "createdAt": "2026-09-19T05:05:49Z",
+  "updatedAt": "2026-09-19T09:17:56Z",
+  "roadmapRevision": 0,
+  "phases": [
+    {
+      "phaseId": "add-current-pointer-reader",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-19T05:05:49Z",
+      "baseRef": "ea11738aa2ade11d05fe8ee82ae52ba4d248c98f",
+      "baseDirty": true,
+      "notes": "Pre-existing dirty paths: docs/roadmaps/featuresync/{blockers,decisions,discoveries,state}.md, horizon-10 roadmap .json/.md, next-horizon-brief.md. Changed: packages/aws/src/infrastructure/s3-current-pointer-reader.ts (new), packages/aws/src/index.ts, packages/aws/test/infrastructure/s3-current-pointer-reader.test.ts (new), packages/aws/integration/s3-current-pointer-reader.localstack.test.ts (new). Adds createS3CurrentPointerReader({bucket,client?}).read(env) -> version | undefined (404/NoSuchKey only); 403 -> S3FetchError ACCESS_DENIED; malformed/foreign pointer -> S3SnapshotError INVALID_JSON/INVALID_POINTER (keeps S3FetchError at 6 reasons). Targeted unit test, tsc, eslint passed during implementation; LocalStack not run. VERIFY: entry-point export test updated; healer fix extracted isAccessDenied + parseJsonObject into s3-read.ts shared by reader/fetcher/source; full sheet re-graded (fix touched files beyond the reader).",
+      "amendments": [
+        {
+          "phaseId": "add-current-pointer-reader",
+          "at": "2026-09-19T05:05:49Z",
+          "reason": "aws unit tests live under packages/aws/test/infrastructure/, not colocated in src/ (horizon-7 convention); same goal.",
+          "changes": [
+            {
+              "field": "filesAffected",
+              "before": "packages/aws/src/infrastructure/s3-current-pointer-reader.test.ts",
+              "after": "packages/aws/test/infrastructure/s3-current-pointer-reader.test.ts"
+            }
+          ]
+        }
+      ],
+      "unplannedFiles": [
+        "packages/aws/src/infrastructure/s3-read.ts",
+        "packages/aws/src/infrastructure/s3-snapshot-fetcher.ts",
+        "packages/aws/src/infrastructure/s3-snapshot-source.ts",
+        "packages/aws/test/infrastructure/s3-snapshot-source.load.test.ts"
+      ],
+      "completedAt": "2026-09-19T05:33:34Z",
+      "gateRun": "pnpm verify: pass; pnpm test:integration (LocalStack, SNS/CFN/IAM/STS endpoints from .env.example since local .env lacks them): pass",
+      "gradeResult": {
+        "phaseId": "add-current-pointer-reader",
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "missing-vs-error-semantics",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "reuse-not-copy",
+            "score": 8,
+            "minScore": 7,
+            "passed": true
+          },
+          {
+            "dimensionId": "public-export-surface",
+            "score": 8,
+            "minScore": 7,
+            "passed": true
+          },
+          {
+            "dimensionId": "localstack-lifecycle-proof",
+            "score": 8,
+            "minScore": 7,
+            "passed": true
+          }
+        ],
+        "summary": "Pass after healer retry; first grade failed reuse-not-copy 6/7 (copied parseJson/isAccessDenied). Remaining nit: <env>/current.json template inlined 4x."
+      }
+    },
+    {
+      "phaseId": "add-environment-browse-use-cases",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-19T05:36:27Z",
+      "baseRef": "ea11738aa2ade11d05fe8ee82ae52ba4d248c98f",
+      "baseDirty": true,
+      "notes": "Pre-existing dirty paths (phase 1 uncommitted + roadmap docs): docs/roadmaps/featuresync/blockers.md docs/roadmaps/featuresync/decisions.md docs/roadmaps/featuresync/discoveries.md docs/roadmaps/featuresync/horizons/horizon-10-local-dashboard-first-slice-roadmap.json docs/roadmaps/featuresync/horizons/horizon-10-local-dashboard-first-slice-roadmap.md docs/roadmaps/featuresync/horizons/horizon-10-local-dashboard-first-slice-roadmap.status.json docs/roadmaps/featuresync/horizons/horizon-10-local-dashboard-first-slice-roadmap.status.last_good.json docs/roadmaps/featuresync/next-horizon-brief.md docs/roadmaps/featuresync/state.md packages/aws/integration/s3-current-pointer-reader.localstack.test.ts packages/aws/src/index.ts packages/aws/src/infrastructure/s3-current-pointer-reader.ts packages/aws/src/infrastructure/s3-read.ts packages/aws/src/infrastructure/s3-snapshot-fetcher.ts packages/aws/src/infrastructure/s3-snapshot-source.ts packages/aws/test/infrastructure/s3-current-pointer-reader.test.ts packages/aws/test/infrastructure/s3-snapshot-source.load.test.ts  Changed: packages/dashboard/{package.json,tsconfig.json,tsconfig.build.json} (new, mirror cli), src/application/browse-environment.ts (new), test/application/browse-environment.test.ts (new), pnpm-lock.yaml (workspace link). browseEnvironment(ports, env) -> empty | published {currentVersion, versions 1..n, current}; viewSnapshotVersion(ports, env, n) -> not-available on reason SNAPSHOT_NOT_FOUND (structural match, no aws import), else rethrow; contents valid {flags: key,type,enabled,defaultValue,ruleCount} via core parseSnapshot or invalid {issues}. One eslint-disable for deliberate non-Error rejections in tests. Dashboard unit 100% coverage, typecheck, eslint, build (no tests in dist) passed during implementation; root verify not run (dashboard joins the root build chain in phase 5).",
+      "amendments": [
+        {
+          "phaseId": "add-environment-browse-use-cases",
+          "at": "2026-09-19T05:36:27Z",
+          "reason": "Unit tests live under packages/<pkg>/test/ in this repo (cli, aws), not colocated in src/; same goal.",
+          "changes": [
+            {
+              "field": "filesAffected",
+              "before": "packages/dashboard/src/application/browse-environment.test.ts",
+              "after": "packages/dashboard/test/application/browse-environment.test.ts"
+            }
+          ]
+        }
+      ],
+      "unplannedFiles": [
+        "pnpm-lock.yaml"
+      ],
+      "completedAt": "2026-09-19T05:43:17Z",
+      "gateRun": "pnpm verify: pass; pnpm --filter @featuresync/dashboard build: pass; grep application/ for aws/sdk/infrastructure: none",
+      "gradeResult": {
+        "phaseId": "add-environment-browse-use-cases",
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "application-layer-purity",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "empty-and-gap-states",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "flag-definitions-via-core",
+            "score": 9,
+            "minScore": 7,
+            "passed": true
+          },
+          {
+            "dimensionId": "package-scaffold-parity",
+            "score": 9,
+            "minScore": 7,
+            "passed": true
+          }
+        ],
+        "summary": "Pass first attempt, all 9s; no defects found."
+      }
+    },
+    {
+      "phaseId": "add-publish-rollback-use-cases",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-19T05:49:52Z",
+      "baseRef": "ea11738aa2ade11d05fe8ee82ae52ba4d248c98f",
+      "baseDirty": true,
+      "notes": "Pre-existing dirty paths: phases 1-2 uncommitted work (packages/aws, packages/dashboard, pnpm-lock.yaml) + horizon-10 roadmap docs and featuresync memory files. Changed: packages/dashboard/src/application/{error-messages,publish-snapshot}.ts (new), packages/dashboard/test/application/{error-messages,publish-snapshot}.test.ts (new). publishSnapshot(ports, env, jsonText) / rollbackSnapshot(ports, env, n) -> WriteOutcome success{version,message,warning?} | failure{message,issues}. Port openWriter(onNotifyError) is opened per request so notify failures stay per-call; invalid JSON never reaches the writer and is not echoed. error-messages.ts: Record<S3PublishErrorReason|S3FetchErrorReason,string> maps (type-only import from @featuresync/aws), structural name+reason matching, INVALID_SNAPSHOT/INVALID_POINTER issues as path: message lines, generic fallback only for non-aws errors. Dashboard typecheck, eslint, unit 100% coverage, build passed during implementation; root verify not run.",
+      "unplannedFiles": [],
+      "amendments": [
+        {
+          "phaseId": "add-publish-rollback-use-cases",
+          "at": "2026-09-19T05:52:08Z",
+          "reason": "Unit tests live under packages/<pkg>/test/ in this repo, not colocated in src/; same goal. Horizon amendment budget now 3/3.",
+          "changes": [
+            {
+              "field": "filesAffected",
+              "before": "packages/dashboard/src/application/publish-snapshot.test.ts, packages/dashboard/src/application/error-messages.test.ts",
+              "after": "packages/dashboard/test/application/publish-snapshot.test.ts, packages/dashboard/test/application/error-messages.test.ts"
+            }
+          ]
+        }
+      ],
+      "completedAt": "2026-09-19T05:54:35Z",
+      "gateRun": "pnpm verify: pass; dashboard vitest 100% coverage threshold: pass; pnpm --filter @featuresync/dashboard build: pass; grep application/ for PutObject/@aws-sdk/infrastructure: none",
+      "gradeResult": {
+        "phaseId": "add-publish-rollback-use-cases",
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "single-writer-port",
+            "score": 9,
+            "minScore": 9,
+            "passed": true
+          },
+          {
+            "dimensionId": "complete-reason-map",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "no-secret-leak",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "notify-warning-outcome",
+            "score": 9,
+            "minScore": 7,
+            "passed": true
+          }
+        ],
+        "summary": "Pass first attempt, all 9s. Nits: no test that openWriter is opened once per request; reason-map test enumerates map keys, relying on tsc for drift."
+      }
+    },
+    {
+      "phaseId": "add-dashboard-http-server",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-19T06:04:58Z",
+      "baseRef": "ea11738aa2ade11d05fe8ee82ae52ba4d248c98f",
+      "baseDirty": true,
+      "notes": "Pre-existing dirty paths: phases 1-3 uncommitted work (packages/aws, packages/dashboard application+test, package scaffold, pnpm-lock.yaml) + horizon-10 roadmap docs and featuresync memory files. Changed (all new): packages/dashboard/src/infrastructure/{http-server,aws-adapters,http-server.test,aws-adapters.test}.ts, views/{escape,layout,home-page,environment-page,version-page,snapshot-contents,error-page}.ts. startDashboardServer({ports,port,logError?}) -> {url,close} listens on 127.0.0.1; routes GET / (?env= -> 303), GET /env/:env, GET /env/:env/versions/:n, POST publish (form field snapshot), POST rollback (form field version); 404 unknown, 405+Allow wrong method, 400 bad version/percent-encoding, 413 body >1MiB. Same-origin check once in dispatch before any POST handler: Origin must equal http://127.0.0.1:<bound port>, else (no Origin) Host must match; 'null'/localhost/other port rejected. Unexpected errors -> logError (default console.error) + 500 page with describeFailure message only. Rollback note always on the environment page. escapeHtml for all dynamic text + attributes. createAwsDashboardPorts({bucket,topicArn?,client?}) wires pointer reader, fetcher, per-request publisher with parseSnapshot validation. Tests colocated in src/infrastructure as the contract names (no amendment: horizon budget 3/3 spent; vitest/build exclude *.test.ts). Dashboard tests 78 pass, dashboard src 100% coverage, tsc, eslint, build passed during implementation; root pnpm verify not run (dashboard joins root chain in phase 5).",
+      "unplannedFiles": [
+        "packages/dashboard/src/infrastructure/aws-adapters.test.ts"
+      ],
+      "completedAt": "2026-09-19T06:12:14Z",
+      "gateRun": "pnpm verify: pass; pnpm --filter @featuresync/dashboard build: pass",
+      "gradeResult": {
+        "phaseId": "add-dashboard-http-server",
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "origin-check-every-post",
+            "score": 9,
+            "minScore": 9,
+            "passed": true
+          },
+          {
+            "dimensionId": "html-escaping",
+            "score": 9,
+            "minScore": 9,
+            "passed": true
+          },
+          {
+            "dimensionId": "loopback-bind-and-routes",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "adapter-wiring-layer",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "rollback-caveat-and-no-leak",
+            "score": 9,
+            "minScore": 7,
+            "passed": true
+          }
+        ],
+        "summary": "Pass first attempt, all 9s. Nits: 413 does not drain/destroy the remaining request stream; flag.type rendered unescaped (schema enum); aws-adapters.test.ts outside filesAffected."
+      }
+    },
+    {
+      "phaseId": "add-dashboard-start-command",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-19T09:07:53Z",
+      "baseRef": "ea11738aa2ade11d05fe8ee82ae52ba4d248c98f",
+      "baseDirty": true,
+      "notes": "Pre-existing dirty paths: phases 1-4 uncommitted work (packages/aws, packages/dashboard, pnpm-lock.yaml) + horizon-10 roadmap docs and featuresync memory files. Changed: packages/dashboard/src/{main,bin}.ts (new), packages/dashboard/test/{main,bin}.test.ts (new), packages/dashboard/integration/dashboard.localstack.test.ts (new), packages/dashboard/vitest.integration.config.ts (new, copy of aws), packages/dashboard/package.json (bin featuresync-dashboard, test:integration), packages/dashboard/tsconfig.json (include integration + config), package.json (dashboard build in verify and test:integration; dashboard LocalStack run in test:integration only), README.md (Local dashboard section). main(argv, io) resolves --bucket|FEATURESYNC_BUCKET, --topic-arn|FEATURESYNC_TOPIC_ARN, --port (default 4455, 0..65535), prints URL, exit 1 + usage on bad config, exit 1 on listen failure; open server keeps process alive. LocalStack test: empty env, publish v1+v2, browse list + version page, rollback to 1 (v2 hidden, still in bucket), cross-origin POST 403. Implementation-time: pnpm verify pass; pnpm test:integration pass (aws 14, dashboard 2) with SNS/SQS/CFN/IAM/STS endpoints from .env.example since local .env lacks them.",
+      "unplannedFiles": [
+        "packages/dashboard/package.json",
+        "packages/dashboard/tsconfig.json",
+        "packages/dashboard/test/main.test.ts",
+        "packages/dashboard/test/bin.test.ts"
+      ],
+      "completedAt": "2026-09-19T09:17:56Z",
+      "gateRun": "pnpm verify: pass; pnpm test:integration (LocalStack; SNS/SQS/CFN/IAM/STS endpoints from .env.example since local .env lacks them): pass",
+      "gradeResult": {
+        "phaseId": "add-dashboard-start-command",
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "config-errors-clear",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "verify-vs-integration-wiring",
+            "score": 9,
+            "minScore": 9,
+            "passed": true
+          },
+          {
+            "dimensionId": "e2e-localstack-flow",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "readme-usage",
+            "score": 7,
+            "minScore": 6,
+            "passed": true
+          }
+        ],
+        "summary": "Pass first attempt. Nits: README omits VERSION_EXISTS code and that 4455 is the default; unknown-option message is raw parseArgs text; e2e does not assert 127.0.0.1 bind."
+      }
+    }
+  ]
+}

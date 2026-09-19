@@ -2,7 +2,7 @@ import { S3Client } from '@aws-sdk/client-s3';
 import type { Logger, SnapshotSource, Unsubscribe } from '@featuresync/core';
 import { parseCurrentPointer, snapshotKeyFor, type CurrentPointer } from '../domain/current-pointer.js';
 import { errorShape } from './s3-errors.js';
-import { isMissing, readObjectText, type S3Text } from './s3-read.js';
+import { isMissing, parseJsonObject, readObjectText, type S3Text } from './s3-read.js';
 import { S3SnapshotError } from './s3-snapshot-error.js';
 import type { NotificationQueue } from './sqs-notification-queue.js';
 
@@ -91,19 +91,8 @@ export function createS3SnapshotSource(options: S3SnapshotSourceOptions): Snapsh
     }
   };
 
-  const parseJson = (key: string, text: string | undefined): unknown => {
-    if (text === undefined || text === '') {
-      throw new S3SnapshotError('INVALID_JSON', key, new Error('Object body is empty'));
-    }
-    try {
-      return JSON.parse(text);
-    } catch (error) {
-      throw new S3SnapshotError('INVALID_JSON', key, error);
-    }
-  };
-
   const readPointer = (text: string | undefined): CurrentPointer => {
-    const pointer = parseCurrentPointer(parseJson(pointerKey, text));
+    const pointer = parseCurrentPointer(parseJsonObject(pointerKey, text));
     if (!pointer.ok) throw new S3SnapshotError('INVALID_POINTER', pointerKey, pointer.error);
     if (pointer.value.environment !== environment) {
       throw new S3SnapshotError(
@@ -117,7 +106,7 @@ export function createS3SnapshotSource(options: S3SnapshotSourceOptions): Snapsh
 
   const loadVersion = async (pointerObject: S3Text, version: number): Promise<unknown> => {
     const snapshotKey = snapshotKeyFor(environment, version);
-    const snapshot = parseJson(snapshotKey, (await getObject(snapshotKey, 'SNAPSHOT_NOT_FOUND')).text);
+    const snapshot = parseJsonObject(snapshotKey, (await getObject(snapshotKey, 'SNAPSHOT_NOT_FOUND')).text);
     loaded = pointerObject.etag === undefined ? undefined : { etag: pointerObject.etag, version, snapshot };
     return snapshot;
   };

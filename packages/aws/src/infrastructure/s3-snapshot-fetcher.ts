@@ -1,7 +1,6 @@
 import { S3Client } from '@aws-sdk/client-s3';
 import { environmentSchema, snapshotKeyFor, versionSchema } from '../domain/current-pointer.js';
-import { errorShape } from './s3-errors.js';
-import { isNotFound, readObjectText } from './s3-read.js';
+import { isAccessDenied, isNotFound, readObjectText } from './s3-read.js';
 
 /** Why a pinned snapshot could not be fetched. */
 export type S3FetchErrorReason =
@@ -43,11 +42,6 @@ export interface FetchedSnapshot {
 export interface S3SnapshotFetcher {
   fetch(environment: string, version: number): Promise<FetchedSnapshot>;
 }
-
-const isAccessDenied = (error: unknown): boolean => {
-  const { name, status } = errorShape(error);
-  return name === 'AccessDenied' || status === 403;
-};
 
 const failureReason = (error: unknown): S3FetchErrorReason => {
   if (isNotFound(error)) return 'SNAPSHOT_NOT_FOUND';

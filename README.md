@@ -32,6 +32,22 @@ The bucket comes from `--bucket <bucket>` or `FEATURESYNC_BUCKET`. `pull` exits 
 1 if the snapshot is invalid, and 3 for usage, access, missing-version or I/O errors. It needs only
 `s3:GetObject` on `<env>/snapshots/*` (see [docs/spec/s3-layout.md](docs/spec/s3-layout.md#read-access)).
 
+## Local dashboard
+
+`featuresync-dashboard` serves a small web page on your own machine for browsing an environment's
+flags and snapshot versions, publishing a pasted snapshot, and rolling back. It writes through the
+same publisher as the CLI, with your own AWS credentials:
+
+```sh
+featuresync-dashboard --bucket my-flags --port 4455
+# FeatureSync dashboard for bucket my-flags at http://127.0.0.1:4455
+```
+
+The bucket comes from `--bucket <bucket>` or `FEATURESYNC_BUCKET`, and `--topic-arn <arn>` or
+`FEATURESYNC_TOPIC_ARN` sends a change notification after each write. It listens only on
+127.0.0.1 and accepts changes only from its own pages. After a rollback, newer versions stay in the
+bucket and block the next publish until you remove them by hand; the environment page explains how.
+
 ## Development
 
 Requires Node 22 (see `.nvmrc`) and pnpm.

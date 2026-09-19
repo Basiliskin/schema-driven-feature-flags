@@ -1,5 +1,6 @@
 import { GetObjectCommand, type S3Client } from '@aws-sdk/client-s3';
 import { errorShape } from './s3-errors.js';
+import { S3SnapshotError } from './s3-snapshot-error.js';
 
 export interface S3Text {
   readonly text: string | undefined;
@@ -28,7 +29,21 @@ export const isNotFound = (error: unknown): boolean => {
 
 // With GetObject-only permissions S3 answers 403 rather than 404 for a missing key.
 export const isMissing = (error: unknown): boolean => {
-  if (isNotFound(error)) return true;
+  return isNotFound(error) || isAccessDenied(error);
+};
+
+export const isAccessDenied = (error: unknown): boolean => {
   const { name, status } = errorShape(error);
   return name === 'AccessDenied' || status === 403;
+};
+
+export const parseJsonObject = (key: string, text: string | undefined): unknown => {
+  if (text === undefined || text === '') {
+    throw new S3SnapshotError('INVALID_JSON', key, new Error('Object body is empty'));
+  }
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new S3SnapshotError('INVALID_JSON', key, error);
+  }
 };
