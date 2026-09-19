@@ -214,6 +214,56 @@ describe('createS3SnapshotPublisher', () => {
       await expectReason(publisher.publish('production', snapshot), 'REQUEST_FAILED', 'production/current.json');
       expect(puts()).toEqual([]);
     });
+
+    describe('with an expected current version', () => {
+      it('publishes the next version when the pointer is at the expected version, reading it once', async () => {
+        const { publisher, sent } = publisherOver({ 'production/current.json': current(5, '"etag-5"') });
+
+        await expect(publisher.publish('production', snapshot, { expectedCurrentVersion: 5 })).resolves.toBe(6);
+
+        expect(sent.map(({ command, key }) => `${command} ${key}`)).toEqual([
+          'GetObject production/current.json',
+          'PutObject production/snapshots/6.json',
+          'PutObject production/current.json',
+        ]);
+        expect(sent[2]?.input).toMatchObject({ IfMatch: '"etag-5"' });
+      });
+
+      it('throws CONFLICT without writing when the pointer has moved past the expected version', async () => {
+        const { publisher, sent, puts } = publisherOver({ 'production/current.json': current(5) });
+
+        const error = await expectReason(
+          publisher.publish('production', snapshot, { expectedCurrentVersion: 4 }),
+          'CONFLICT',
+          'production/current.json',
+        );
+
+        expect((error.cause as Error).message).toBe('Expected current version 4, found 5');
+        expect(puts()).toHaveLength(0);
+        expect(sent.filter(({ key }) => key === 'production/current.json')).toHaveLength(1);
+      });
+
+      it('throws CONFLICT without writing when an expectation is given but nothing has been published', async () => {
+        const { publisher, puts } = publisherOver({});
+
+        const error = await expectReason(
+          publisher.publish('production', snapshot, { expectedCurrentVersion: 0 }),
+          'CONFLICT',
+          'production/current.json',
+        );
+
+        expect((error.cause as Error).message).toBe('Expected current version 0, found none');
+        expect(puts()).toHaveLength(0);
+      });
+
+      it('publishes as before when the options carry no expectation', async () => {
+        const { publisher, puts } = publisherOver({ 'production/current.json': current(2) });
+
+        await expect(publisher.publish('production', snapshot, {})).resolves.toBe(3);
+
+        expect(puts().map(({ key }) => key)).toEqual(['production/snapshots/3.json', 'production/current.json']);
+      });
+    });
   });
 
   describe('rollback', () => {

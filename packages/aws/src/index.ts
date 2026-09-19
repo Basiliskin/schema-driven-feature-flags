@@ -3,6 +3,7 @@ export { createS3SnapshotSource, type S3SnapshotSourceOptions } from './infrastr
 export {
   createS3SnapshotPublisher,
   S3PublishError,
+  type PublishOptions,
   type NotifyErrorHandler,
   type NotifyFailure,
   type S3PublishErrorReason,

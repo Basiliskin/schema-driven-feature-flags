@@ -59,9 +59,18 @@ export interface S3SnapshotPublisherOptions {
   readonly onNotifyError?: NotifyErrorHandler;
 }
 
+/** Options for {@link S3SnapshotPublisher.publish}. */
+export interface PublishOptions {
+  /**
+   * The version the caller built this snapshot on. When the Current Pointer is at any other version, or
+   * absent, publish throws `CONFLICT` before writing anything.
+   */
+  readonly expectedCurrentVersion?: number;
+}
+
 export interface S3SnapshotPublisher {
   /** Writes the snapshot as the next version and makes it current. Resolves to the new version. */
-  publish(environment: string, snapshot: unknown): Promise<number>;
+  publish(environment: string, snapshot: unknown, options?: PublishOptions): Promise<number>;
   /** Points `current.json` back at an existing lower version. Resolves to that version. */
   rollback(environment: string, targetVersion: number): Promise<number>;
 }
@@ -173,10 +182,21 @@ export function createS3SnapshotPublisher(options: S3SnapshotPublisherOptions): 
       'CONFLICT',
     );
 
-  const publish = async (environment: string, snapshot: unknown): Promise<number> => {
+  const checkExpectedVersion = (env: string, current: ReadPointer | undefined, expected: number | undefined): void => {
+    if (expected === undefined || expected === current?.pointer.version) return;
+    const found = current === undefined ? 'none' : String(current.pointer.version);
+    throw new S3PublishError(
+      'CONFLICT',
+      `${env}/current.json`,
+      new Error(`Expected current version ${String(expected)}, found ${found}`),
+    );
+  };
+
+  const publish = async (environment: string, snapshot: unknown, publishOptions?: PublishOptions): Promise<number> => {
     const env = checkEnvironment(environment);
     checkSnapshot(`${env}/snapshots`, snapshot);
     const current = await readPointer(env);
+    checkExpectedVersion(env, current, publishOptions?.expectedCurrentVersion);
     const version = nextSnapshotVersion(current?.pointer);
     await put(snapshotKeyFor(env, version), JSON.stringify(snapshot), { IfNoneMatch: '*' }, 'VERSION_EXISTS');
     await writePointer(env, version, current?.etag);

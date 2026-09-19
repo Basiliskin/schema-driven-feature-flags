@@ -22,3 +22,5 @@
 - 2026-09-18 | horizon 9 | completed | 6 phases, 1 amendment, 0 overrides
 - 2026-09-19 | horizon 10 | planned | 5 phases (aws current-pointer reader, dashboard browse + publish/rollback use cases, 127.0.0.1 HTTP server, start command + LocalStack proof); gate passed, 0 healed, 5 minor debt
 - 2026-09-19 | horizon 10 | completed | 5 phases; 3 amendments, 0 overrides — local dashboard first slice (browse, publish, rollback) via featuresync-dashboard
+- 2026-09-19 | horizon 11 | planned | 6 phases (Flag Edit domain function, publisher expectedCurrentVersion CAS, edit use case, edit forms, POST route, LocalStack proof); gate passed, 1 major fixed, 1 minor debt
+- 2026-09-19 | horizon 11 | completed | 6 phases; 1 amendment, 0 overrides — in-browser flag editing (enabled + config default) with expected-version CAS, proven on LocalStack

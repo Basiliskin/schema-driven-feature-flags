@@ -3,6 +3,8 @@ import {
   CreateBucketCommand,
   DeleteBucketCommand,
   DeleteObjectsCommand,
+  GetObjectCommand,
+  HeadObjectCommand,
   ListObjectsV2Command,
   S3Client,
 } from '@aws-sdk/client-s3';
@@ -29,6 +31,37 @@ const snapshot = (version: number, enabled: boolean) => ({
   reason: `publish ${String(version)}`,
   features: { 'new-dashboard': { type: 'boolean', enabled } },
 });
+
+const editableSnapshot = {
+  schemaVersion: 1,
+  environment: ENVIRONMENT,
+  version: 1,
+  createdAt: '2026-09-19T06:00:00.000Z',
+  createdBy: 'integration',
+  previousVersion: null,
+  reason: 'seed',
+  features: {
+    'new-dashboard': { type: 'boolean', enabled: true },
+    checkout: {
+      type: 'config',
+      enabled: true,
+      default: { provider: 'stripe' },
+      rules: [{ when: { plan: 'pro' }, value: { provider: 'adyen' } }],
+    },
+  },
+};
+
+const METADATA_PATHS = ['createdAt', 'createdBy', 'previousVersion', 'reason', 'version'];
+
+const differingPaths = (before: unknown, after: unknown, prefix = ''): string[] => {
+  const isObject = (value: unknown): value is Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value);
+  if (!isObject(before) || !isObject(after)) {
+    return JSON.stringify(before) === JSON.stringify(after) ? [] : [prefix];
+  }
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  return [...keys].flatMap((key) => differingPaths(before[key], after[key], prefix === '' ? key : `${prefix}.${key}`));
+};
 
 const listKeys = async (bucket: string) => {
   const { Contents = [] } = await s3.send(new ListObjectsV2Command({ Bucket: bucket }));
@@ -76,6 +109,36 @@ describe('featuresync-dashboard against LocalStack', () => {
     await s3.send(new DeleteBucketCommand({ Bucket: bucket }));
   });
 
+  const snapshotText = async (version: number) => {
+    const object = await s3.send(
+      new GetObjectCommand({ Bucket: bucket, Key: `${ENVIRONMENT}/snapshots/${String(version)}.json` }),
+    );
+    return (object.Body as { transformToString: () => Promise<string> }).transformToString();
+  };
+
+  const currentPointerText = async () => {
+    const object = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: `${ENVIRONMENT}/current.json` }));
+    return (object.Body as { transformToString: () => Promise<string> }).transformToString();
+  };
+
+  const snapshotExists = async (version: number) => {
+    try {
+      await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: `${ENVIRONMENT}/snapshots/${String(version)}.json` }));
+      return true;
+    } catch (error) {
+      if ((error as { name?: unknown }).name === 'NotFound') return false;
+      throw error;
+    }
+  };
+
+  const seed = async (snapshotBody: unknown) => {
+    const published = await post(`/env/${ENVIRONMENT}/publish`, { snapshot: JSON.stringify(snapshotBody) });
+    expect(published.status).toBe(200);
+  };
+
+  const disableNewDashboard = (baseVersion: number) =>
+    post(`/env/${ENVIRONMENT}/features/new-dashboard`, { baseVersion: String(baseVersion), field: 'enabled' });
+
   afterAll(() => {
     s3.destroy();
   });
@@ -122,5 +185,103 @@ describe('featuresync-dashboard against LocalStack', () => {
 
     expect(response.status).toBe(403);
     expect(await listKeys(bucket)).toEqual([]);
+  });
+
+  it('publishes an enabled edit as version 2 that differs only in that field and the metadata', async () => {
+    await seed(editableSnapshot);
+
+    const edited = await disableNewDashboard(1);
+
+    expect(edited.status).toBe(200);
+    expect(await edited.text()).toContain('Published version 2 to integration.');
+    const before = JSON.parse(await snapshotText(1)) as typeof editableSnapshot;
+    const after = JSON.parse(await snapshotText(2)) as typeof editableSnapshot;
+    expect(differingPaths(before, after).sort()).toEqual(
+      ['features.new-dashboard.enabled', ...METADATA_PATHS].sort(),
+    );
+    expect(after.features['new-dashboard']).toEqual({ type: 'boolean', enabled: false });
+    expect(after.features['new-dashboard']).not.toHaveProperty('rules');
+    expect(after.features.checkout).toEqual(before.features.checkout);
+    expect(after).toMatchObject({ version: 2, previousVersion: 1, createdBy: 'dashboard' });
+  });
+
+  it('publishes a config default edit and leaves the other features unchanged', async () => {
+    await seed(editableSnapshot);
+
+    const edited = await post(`/env/${ENVIRONMENT}/features/checkout`, {
+      baseVersion: '1',
+      field: 'default',
+      default: '{"provider":"paypal"}',
+    });
+
+    expect(edited.status).toBe(200);
+    const before = JSON.parse(await snapshotText(1)) as typeof editableSnapshot;
+    const after = JSON.parse(await snapshotText(2)) as typeof editableSnapshot;
+    expect(after.features.checkout.default).toEqual({ provider: 'paypal' });
+    expect(differingPaths(before, after).sort()).toEqual(['features.checkout.default.provider', ...METADATA_PATHS].sort());
+    expect(after.features['new-dashboard']).toEqual(before.features['new-dashboard']);
+    expect(after.features.checkout.rules).toEqual(before.features.checkout.rules);
+  });
+
+  it('refuses a second sequential edit on the same base with the reload message', async () => {
+    await seed(editableSnapshot);
+
+    const first = await disableNewDashboard(1);
+    const second = await post(`/env/${ENVIRONMENT}/features/checkout`, {
+      baseVersion: '1',
+      field: 'enabled',
+    });
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(422);
+    expect(await second.text()).toContain('Someone else published version 2 meanwhile — reload and redo your edit.');
+    expect((await listKeys(bucket)).sort()).toEqual(
+      [`${ENVIRONMENT}/current.json`, `${ENVIRONMENT}/snapshots/1.json`, `${ENVIRONMENT}/snapshots/2.json`].sort(),
+    );
+    expect(JSON.parse(await currentPointerText())).toMatchObject({ version: 2 });
+  });
+
+  it('publishes exactly one of two concurrent edits on the same base', async () => {
+    await seed(editableSnapshot);
+
+    const responses = await Promise.all([
+      disableNewDashboard(1),
+      post(`/env/${ENVIRONMENT}/features/checkout`, { baseVersion: '1', field: 'enabled' }),
+    ]);
+    const replies = await Promise.all(
+      responses.map(async (response) => ({ status: response.status, html: await response.text() })),
+    );
+
+    expect(replies.map(({ status }) => status).sort()).toEqual([200, 422]);
+    const winner = replies[0]?.status === 200 ? 'new-dashboard' : 'checkout';
+    const loser = replies.find(({ status }) => status === 422);
+    expect(loser?.html).toContain('reload and redo your edit.');
+    expect((await listKeys(bucket)).sort()).toEqual(
+      [`${ENVIRONMENT}/current.json`, `${ENVIRONMENT}/snapshots/1.json`, `${ENVIRONMENT}/snapshots/2.json`].sort(),
+    );
+    expect(await snapshotExists(2)).toBe(true);
+    expect(await snapshotExists(3)).toBe(false);
+    expect(JSON.parse(await currentPointerText())).toMatchObject({ version: 2 });
+    const published = JSON.parse(await snapshotText(2)) as typeof editableSnapshot;
+    expect(published.features[winner].enabled).toBe(false);
+    expect(published.features[winner === 'checkout' ? 'new-dashboard' : 'checkout'].enabled).toBe(true);
+  });
+
+  it('refuses an edit on a rolled-back version and writes nothing', async () => {
+    await seed(editableSnapshot);
+    await seed({ ...editableSnapshot, version: 2, previousVersion: 1, reason: 'second' });
+    const rolledBack = await post(`/env/${ENVIRONMENT}/rollback`, { version: '1' });
+    expect(rolledBack.status).toBe(200);
+    const keysBefore = (await listKeys(bucket)).sort();
+    const pointerBefore = await currentPointerText();
+
+    const edited = await disableNewDashboard(1);
+
+    expect(edited.status).toBe(422);
+    expect(await edited.text()).toContain(
+      'Version 2 already exists because of an earlier rollback. Editing from a rolled-back version is not supported yet; paste-publish the snapshot instead.',
+    );
+    expect((await listKeys(bucket)).sort()).toEqual(keysBefore);
+    expect(await currentPointerText()).toBe(pointerBefore);
   });
 });

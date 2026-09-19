@@ -67,4 +67,14 @@ describe('createAwsDashboardPorts', () => {
     expect(send).toHaveBeenCalled();
     send.mockRestore();
   });
+
+  it('reads the clock from the system', () => {
+    const ports = createAwsDashboardPorts({ bucket: 'flags', client: fakeClient({}) });
+    const before = Date.now();
+
+    const now = ports.now().getTime();
+
+    expect(now).toBeGreaterThanOrEqual(before);
+    expect(now).toBeLessThanOrEqual(Date.now());
+  });
 });

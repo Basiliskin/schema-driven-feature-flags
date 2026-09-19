@@ -1,21 +1,23 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { browseEnvironment, viewSnapshotVersion, type BrowsePorts } from '../application/browse-environment.js';
+import { browseEnvironment, viewSnapshotVersion } from '../application/browse-environment.js';
+import { editFeature, type EditFeaturePorts } from '../application/edit-feature.js';
 import { describeFailure } from '../application/error-messages.js';
+import type { FlagEdit } from '../domain/flag-edit.js';
 import {
   publishSnapshot,
   rollbackSnapshot,
   type WriteOutcome,
-  type WritePorts,
 } from '../application/publish-snapshot.js';
 import { renderEnvironmentPage } from './views/environment-page.js';
 import { renderErrorPage } from './views/error-page.js';
 import { environmentPath } from './views/escape.js';
+import type { EditDraft } from './views/feature-edit-form.js';
 import { renderHomePage } from './views/home-page.js';
 import type { Notice } from './views/layout.js';
 import { renderVersionPage } from './views/version-page.js';
 
-export type DashboardPorts = BrowsePorts & WritePorts;
+export type DashboardPorts = EditFeaturePorts;
 
 export interface DashboardServerOptions {
   readonly ports: DashboardPorts;
@@ -95,6 +97,41 @@ const outcomeNotices = (outcome: WriteOutcome): Notice[] => {
 
 const writeStatus = (outcome: WriteOutcome): number => (outcome.kind === 'success' ? 200 : 422);
 
+const BASE_VERSION_MESSAGE = 'The edit form is out of date; reload the page and redo your edit.';
+const FIELD_MESSAGE = 'Choose whether to save the enabled flag or the default value.';
+
+type EditRequest =
+  | { readonly ok: true; readonly baseVersion: number; readonly edit: FlagEdit }
+  | { readonly ok: false; readonly message: string };
+
+const parseEditForm = (key: string, fields: URLSearchParams): EditRequest => {
+  const baseVersion = fields.get('baseVersion');
+  if (baseVersion === null || !/^[1-9]\d{0,8}$/.test(baseVersion)) return { ok: false, message: BASE_VERSION_MESSAGE };
+  const field = fields.get('field');
+  if (field === 'enabled') {
+    return { ok: true, baseVersion: Number(baseVersion), edit: { kind: 'enabled', key, enabled: fields.has('enabled') } };
+  }
+  if (field === 'default') {
+    return {
+      ok: true,
+      baseVersion: Number(baseVersion),
+      edit: { kind: 'default', key, defaultJson: fields.get('default') ?? '' },
+    };
+  }
+  return { ok: false, message: FIELD_MESSAGE };
+};
+
+const editDraftOf = (key: string, fields: URLSearchParams, message: string, issues: readonly string[]): EditDraft => {
+  const defaultJson = fields.get('default');
+  return {
+    key,
+    enabled: fields.has('enabled'),
+    ...(defaultJson === null ? {} : { defaultJson }),
+    message,
+    issues,
+  };
+};
+
 function createDashboardRequestHandler(
   ports: DashboardPorts,
   expectedOrigin: () => string,
@@ -150,6 +187,25 @@ function createDashboardRequestHandler(
           const outcome = await rollbackSnapshot(ports, environment, version);
           const view = await browseEnvironment(ports, environment);
           send(response, writeStatus(outcome), renderEnvironmentPage(view, { notices: outcomeNotices(outcome) }));
+        },
+      };
+    }
+    if (segments.length === 4 && segments[2] === 'features') {
+      const key = decodeSegment(segments[3] as string);
+      return {
+        method: 'POST',
+        handle: async (request, response) => {
+          const fields = await readForm(request);
+          const parsed = parseEditForm(key, fields);
+          const outcome: WriteOutcome = parsed.ok
+            ? await editFeature(ports, environment, parsed.baseVersion, parsed.edit)
+            : { kind: 'failure', message: parsed.message, issues: [] };
+          const view = await browseEnvironment(ports, environment);
+          const state = {
+            notices: outcomeNotices(outcome),
+            ...(outcome.kind === 'failure' ? { editDraft: editDraftOf(key, fields, outcome.message, outcome.issues) } : {}),
+          };
+          send(response, writeStatus(outcome), renderEnvironmentPage(view, state));
         },
       };
     }

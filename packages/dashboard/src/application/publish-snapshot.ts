@@ -2,7 +2,7 @@ import type { NotifyErrorHandler, NotifyFailure } from '@featuresync/aws';
 import { describeFailure, INVALID_JSON_MESSAGE, NOTIFY_FAILED_WARNING } from './error-messages.js';
 
 export interface SnapshotWriter {
-  publish(environment: string, snapshot: unknown): Promise<number>;
+  publish(environment: string, snapshot: unknown, options?: { expectedCurrentVersion?: number }): Promise<number>;
   rollback(environment: string, targetVersion: number): Promise<number>;
 }
 
@@ -15,7 +15,7 @@ export type WriteOutcome =
   | { readonly kind: 'success'; readonly version: number; readonly message: string; readonly warning?: string }
   | { readonly kind: 'failure'; readonly message: string; readonly issues: readonly string[] };
 
-async function write(
+export async function write(
   ports: WritePorts,
   run: (writer: SnapshotWriter) => Promise<number>,
   describeSuccess: (version: number) => string,

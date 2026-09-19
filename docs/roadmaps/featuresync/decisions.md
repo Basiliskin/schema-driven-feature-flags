@@ -33,3 +33,6 @@
 - 2026-09-19 | horizon 10 | The dashboard is a node:http server-rendered UI bound to 127.0.0.1 with no framework; all writes go through S3SnapshotPublisher — because the single-writer rule and 100% coverage must hold.
 - 2026-09-19 | horizon 10 | Dashboard POSTs are protected by one Origin/Host check (no CSRF token); publish accepts pasted snapshot JSON only — because the user chose the simpler option at preview.
 - 2026-09-19 | horizon 10 | The dashboard lists versions 1..current from the Current Pointer, never ListObjectsV2 — because listing needs IAM changes and readers never list the bucket.
+- 2026-09-19 | horizon 11 | Dashboard flag edits publish via S3SnapshotPublisher.publish(env, snapshot, {expectedCurrentVersion: base}); a mismatch throws CONFLICT before any write — because concurrent edits — see horizon-11 roadmap.md
+- 2026-09-19 | horizon 11 | Flag edits apply to the raw stored snapshot JSON (not parseSnapshot's normalized copy), validate with parseSnapshot, set version/previousVersion/createdAt; createdBy is 'dashboard' — — see horizon-11 roadmap.md
+- 2026-09-19 | horizon 11 | Edit POSTs re-render the environment page (200 notice / 422 with draft), no redirect; forms only on the environment page — because it matches publish/rollback and edits always start from the Current Pointer.

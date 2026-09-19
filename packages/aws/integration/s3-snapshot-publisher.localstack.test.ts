@@ -3,6 +3,7 @@ import {
   CreateBucketCommand,
   DeleteBucketCommand,
   DeleteObjectsCommand,
+  GetObjectCommand,
   HeadObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
@@ -114,6 +115,25 @@ describe('createS3SnapshotPublisher against LocalStack', () => {
     expect(rejected[0]).toBeInstanceOf(S3PublishError);
     expect(['CONFLICT', 'VERSION_EXISTS']).toContain((rejected[0] as S3PublishError).reason);
     await expect(load()).resolves.toBeDefined();
+  });
+
+  it('refuses a publish built on a stale version and leaves the bucket untouched', async () => {
+    await publisher().publish(ENVIRONMENT, snapshot('first'));
+    const readPointer = async () => {
+      const { Body } = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: `${ENVIRONMENT}/current.json` }));
+      return Body?.transformToString();
+    };
+    const pointerBefore = await readPointer();
+
+    const error = await rejection(
+      publisher().publish(ENVIRONMENT, snapshot('stale'), { expectedCurrentVersion: 2 }),
+    );
+
+    expect(error).toMatchObject({ name: 'S3PublishError', reason: 'CONFLICT' });
+    await expect(readPointer()).resolves.toBe(pointerBefore);
+    expect(
+      await rejection(s3.send(new HeadObjectCommand({ Bucket: bucket, Key: `${ENVIRONMENT}/snapshots/2.json` }))),
+    ).toMatchObject({ $metadata: { httpStatusCode: 404 } });
   });
 
   it('writes nothing when the snapshot is invalid', async () => {

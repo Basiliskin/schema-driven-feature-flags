@@ -58,3 +58,20 @@ export function describeFailure(error: unknown): FailureDescription {
   if (fetchReason !== undefined) return { message: FETCH_ERROR_MESSAGES[fetchReason], issues: [] };
   return { message: UNEXPECTED_ERROR_MESSAGE, issues: [] };
 }
+
+export const EDIT_CONFLICT = (currentVersion?: number): string =>
+  currentVersion === undefined
+    ? 'Someone else published a new version meanwhile — reload and redo your edit.'
+    : `Someone else published version ${String(currentVersion)} meanwhile — reload and redo your edit.`;
+
+export const EDIT_AFTER_ROLLBACK = (nextVersion: number): string =>
+  `Version ${String(nextVersion)} already exists because of an earlier rollback. Editing from a rolled-back version is not supported yet; paste-publish the snapshot instead.`;
+
+export const UNKNOWN_FEATURE_MESSAGE = (key: string): string => `The snapshot has no feature named "${key}".`;
+
+export const DEFAULT_NOT_EDITABLE_MESSAGE = (key: string): string =>
+  `"${key}" is a boolean feature; only config features have an editable default.`;
+
+export const INVALID_DEFAULT_JSON_MESSAGE = 'The default value is not valid JSON.';
+
+export const EDITED_SNAPSHOT_INVALID_MESSAGE = 'The edited snapshot is not valid.';

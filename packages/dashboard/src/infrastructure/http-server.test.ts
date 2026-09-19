@@ -21,6 +21,8 @@ const VALID = snapshotText({
   'checkout-limits': { type: 'config', enabled: false, default: { max: 3 } },
 });
 
+const NOW = new Date('2026-09-19T12:00:00.000Z');
+
 interface Fakes {
   readonly ports: DashboardPorts;
   readonly writer: { publish: ReturnType<typeof vi.fn>; rollback: ReturnType<typeof vi.fn> };
@@ -37,6 +39,7 @@ const fakes = (overrides: Partial<DashboardPorts> = {}, writer: Partial<Snapshot
     writer: fakeWriter,
     openWriter,
     ports: {
+      now: () => NOW,
       readCurrentVersion: () => Promise.resolve(3),
       fetchSnapshotText: () => Promise.resolve(VALID),
       openWriter,
@@ -325,6 +328,209 @@ describe('startDashboardServer', () => {
 
       expect(reply.status).toBe(400);
       expect(writer.rollback).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /env/:env/features/:key', () => {
+    const published = (writer: Fakes['writer']) => writer.publish.mock.calls[0] as [string, Snapshot, unknown];
+    type Snapshot = { version: number; createdAt: string; createdBy: string; features: Record<string, Record<string, unknown>> };
+    const publishError = (reason: string) => Object.assign(new Error(reason), { name: 'S3PublishError', reason });
+
+    it('publishes the edit against the submitted base version and re-renders with the new version', async () => {
+      const fetchSnapshotText = vi.fn(() => Promise.resolve(VALID));
+      const { ports, writer } = fakes({ fetchSnapshotText }, { publish: () => Promise.resolve(2) });
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'POST', '/env/production/features/new-dashboard', {
+        body: form({ baseVersion: '1', field: 'enabled', enabled: 'on' }),
+      });
+
+      expect(reply.status).toBe(200);
+      expect(reply.body).toContain('Published version 2 to production.');
+      expect(fetchSnapshotText).toHaveBeenCalledWith('production', 1);
+      const [environment, snapshot, options] = published(writer);
+      expect(environment).toBe('production');
+      expect(options).toEqual({ expectedCurrentVersion: 1 });
+      expect(snapshot.version).toBe(2);
+      expect(snapshot.createdAt).toBe(NOW.toISOString());
+      expect(snapshot.createdBy).toBe('dashboard');
+      expect(snapshot.features['new-dashboard']?.enabled).toBe(true);
+    });
+
+    it('treats field=enabled without an enabled field as unchecked, meaning false', async () => {
+      const { ports, writer } = fakes();
+      const dashboard = await start(ports);
+
+      await call(dashboard, 'POST', '/env/production/features/new-dashboard', {
+        body: form({ baseVersion: '3', field: 'enabled' }),
+      });
+
+      expect(published(writer)[1].features['new-dashboard']?.enabled).toBe(false);
+    });
+
+    it('publishes an edited config default', async () => {
+      const { ports, writer } = fakes();
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'POST', '/env/production/features/checkout-limits', {
+        body: form({ baseVersion: '3', field: 'default', default: '{"max": 5}' }),
+      });
+
+      expect(reply.status).toBe(200);
+      expect(published(writer)[1].features['checkout-limits']?.default).toEqual({ max: 5 });
+    });
+
+    it('URL-decodes the feature key before handing it to the edit', async () => {
+      const { ports } = fakes();
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'POST', '/env/production/features/a%2Fb', {
+        body: form({ baseVersion: '3', field: 'enabled', enabled: 'on' }),
+      });
+
+      expect(reply.status).toBe(422);
+      expect(reply.body).toContain('The snapshot has no feature named &quot;a/b&quot;.');
+    });
+
+    it.each([{ field: 'enabled' }, { baseVersion: 'abc', field: 'enabled' }, { baseVersion: '0', field: 'enabled' }])(
+      'answers 422 asking for a reload for base version in %o without opening a writer',
+      async (fields) => {
+        const { ports, openWriter } = fakes();
+        const dashboard = await start(ports);
+
+        const reply = await call(dashboard, 'POST', '/env/production/features/new-dashboard', { body: form(fields) });
+
+        expect(reply.status).toBe(422);
+        expect(reply.body).toContain('The edit form is out of date; reload the page and redo your edit.');
+        expect(openWriter).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([{}, { field: 'rules' }])('answers 422 for a missing or unknown field %o', async (fields) => {
+      const { ports, openWriter } = fakes();
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'POST', '/env/production/features/new-dashboard', {
+        body: form({ baseVersion: '3', ...fields }),
+      });
+
+      expect(reply.status).toBe(422);
+      expect(reply.body).toContain('Choose whether to save the enabled flag or the default value.');
+      expect(openWriter).not.toHaveBeenCalled();
+    });
+
+    it('answers 422 for an unknown feature key', async () => {
+      const { ports, openWriter } = fakes();
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'POST', '/env/production/features/missing', {
+        body: form({ baseVersion: '3', field: 'enabled', enabled: 'on' }),
+      });
+
+      expect(reply.status).toBe(422);
+      expect(reply.body).toContain('The snapshot has no feature named &quot;missing&quot;.');
+      expect(openWriter).not.toHaveBeenCalled();
+    });
+
+    it('re-renders invalid default JSON as an escaped draft next to its feature', async () => {
+      const { ports, openWriter } = fakes();
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'POST', '/env/production/features/checkout-limits', {
+        body: form({ baseVersion: '3', field: 'default', default: '</textarea><script>x' }),
+      });
+
+      expect(reply.status).toBe(422);
+      expect(reply.body).toContain('The default value is not valid JSON.');
+      expect(reply.body).toContain('<textarea name="default" rows="4">&lt;/textarea&gt;&lt;script&gt;x</textarea>');
+      expect(reply.body).not.toContain('<script>x');
+      expect(openWriter).not.toHaveBeenCalled();
+    });
+
+    it('treats a missing default as empty, invalid JSON', async () => {
+      const { ports, openWriter } = fakes();
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'POST', '/env/production/features/checkout-limits', {
+        body: form({ baseVersion: '3', field: 'default' }),
+      });
+
+      expect(reply.status).toBe(422);
+      expect(reply.body).toContain('The default value is not valid JSON.');
+      expect(openWriter).not.toHaveBeenCalled();
+    });
+
+    it('keeps the unchecked checkbox in the draft after a failed enabled edit', async () => {
+      const { ports } = fakes({}, { publish: () => Promise.reject(publishError('CONFLICT')) });
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'POST', '/env/production/features/new-dashboard', {
+        body: form({ baseVersion: '3', field: 'enabled' }),
+      });
+
+      expect(reply.status).toBe(422);
+      expect(reply.body).toContain('<input type="checkbox" name="enabled"> Enabled');
+    });
+
+    it('tells the operator to reload and redo the edit when someone else published meanwhile', async () => {
+      const { ports, writer } = fakes(
+        { readCurrentVersion: () => Promise.resolve(7) },
+        { publish: () => Promise.reject(publishError('CONFLICT')) },
+      );
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'POST', '/env/production/features/new-dashboard', {
+        body: form({ baseVersion: '3', field: 'enabled', enabled: 'on' }),
+      });
+
+      expect(reply.status).toBe(422);
+      expect(reply.body).toContain('Someone else published version 7 meanwhile — reload and redo your edit.');
+      expect(published(writer)[2]).toEqual({ expectedCurrentVersion: 3 });
+    });
+
+    it('explains the rollback leftover when the next version already exists', async () => {
+      const { ports } = fakes({}, { publish: () => Promise.reject(publishError('VERSION_EXISTS')) });
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'POST', '/env/production/features/new-dashboard', {
+        body: form({ baseVersion: '3', field: 'enabled', enabled: 'on' }),
+      });
+
+      expect(reply.status).toBe(422);
+      expect(reply.body).toContain('Version 4 already exists because of an earlier rollback.');
+      expect(reply.body).toContain('paste-publish the snapshot instead');
+    });
+
+    it('rejects a foreign Origin, or a foreign Host without Origin, before opening a writer', async () => {
+      const { ports, openWriter } = fakes();
+      const dashboard = await start(ports);
+      const body = form({ baseVersion: '3', field: 'enabled', enabled: 'on' });
+
+      const foreign = await call(dashboard, 'POST', '/env/production/features/new-dashboard', {
+        body,
+        headers: { origin: 'http://evil.example' },
+      });
+      const hostOnly = await call(dashboard, 'POST', '/env/production/features/new-dashboard', {
+        body,
+        sameOrigin: false,
+        headers: { host: 'evil.example' },
+      });
+
+      expect(foreign.status).toBe(403);
+      expect(hostOnly.status).toBe(403);
+      expect(openWriter).not.toHaveBeenCalled();
+    });
+
+    it('answers 405 to GET and 400 to a malformed key', async () => {
+      const { ports } = fakes();
+      const dashboard = await start(ports);
+
+      const get = await call(dashboard, 'GET', '/env/production/features/new-dashboard');
+      expect(get.status).toBe(405);
+      expect(get.headers.allow).toBe('POST');
+
+      const malformed = await call(dashboard, 'POST', '/env/production/features/%E0', { body: form({}) });
+      expect(malformed.status).toBe(400);
     });
   });
 

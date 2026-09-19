@@ -1,0 +1,785 @@
+{
+  "task": "Horizon 11 of FeatureSync: in-browser flag editing in the local dashboard — operators edit a feature's enabled flag and a config feature's default value instead of pasting a whole snapshot JSON; each edit publishes a new snapshot version via S3SnapshotPublisher with a compare-and-swap on the expected current version. Production-ready, 100% coverage.",
+  "analysis": {
+    "objective": "Let an operator in the local FeatureSync dashboard (packages/dashboard) change a feature's values in the browser, starting from the snapshot at the Current Pointer: turn a boolean feature's `enabled` on or off, and edit a config feature's `enabled` and `default` value. Each edit is published as a new immutable snapshot version through the existing S3SnapshotPublisher, so the operator no longer has to paste a whole snapshot JSON.",
+    "successDefinition": "An Operator on the environment page (the current version only; older version pages stay read-only) can flip a Feature's enabled flag or replace a config Feature's default JSON and submit it. The dashboard publishes version n+1, whose body differs from version n only in the edited field and the version/previousVersion/createdAt/createdBy/reason metadata. The success notice ('Published version N') appears on the re-rendered environment page with status 200; there is no redirect. The publish is a compare-and-swap: the edit carries its Base Version as expectedCurrentVersion, and S3SnapshotPublisher checks it against the same pointer read whose ETag guards the conditional pointer write. When two edits are submitted at the same time on the same base, exactly one succeeds. The other writes nothing and is re-rendered with status 422, the Operator's draft kept, and a message like 'Someone else published version N meanwhile — reload and redo your edit'. An edit made after a Rollback (when the next version number already exists) is refused, writes nothing, and shows a clear VERSION_EXISTS explanation; the real fix is deferred. The CLI, paste-publish and rollback behave exactly as before. All new code has 100% unit coverage, and LocalStack cases prove that a mismatched expectation writes nothing.",
+    "assumptions": [
+      "'Flag values' means each feature's `enabled` flag (boolean and config features) and a config feature's `default` JSON value, the fields in packages/core/src/domain/feature.ts. Editing targeting rules is a later slice.",
+      "An edit always starts from the snapshot the Current Pointer names. Publishing it creates version current+1 through S3SnapshotPublisher.publish, so snapshot immutability and the single-writer rule still hold.",
+      "Horizon-10 decisions stay binding: plain node:http with server-rendered HTML strings and no framework, one Origin/Host check with no CSRF token, versions listed only from the Current Pointer, and no ListObjectsV2.",
+      "Edits use plain HTML forms, one feature and one submit per edit. Client-side JavaScript is not needed. This keeps branch coverage and the security surface small.",
+      "A config `default` is entered as JSON text and checked with JSON.parse plus parseSnapshot. The dashboard has no access to the app's Zod definitions, so an edit is checked only against the snapshot schema, not against the app-side typed definition.",
+      "Concurrent edits are handled by a compare-and-swap publish: the edit passes its Base Version as expectedCurrentVersion, and S3SnapshotPublisher refuses (CONFLICT, nothing written) unless the pointer it reads — whose ETag guards the conditional pointer write — still names it (user request at preview).",
+      "The pure snapshot edit function can live in the dashboard's domain or application layer, or in core if planning finds it reusable. Core's public API only grows if that is justified."
+    ],
+    "risks": [
+      "Edit after rollback: publish writes current+1, so after a rollback that version may already exist and the edit fails with VERSION_EXISTS. This is the known horizon-4/horizon-10 limitation and an open blocker. Editing makes publishing much more frequent, so operators will hit it more often. The plan must at least surface it clearly. Reopening the horizon-4 decision is out of scope.",
+      "Security: edit forms add more state-changing POSTs that rely on the single Origin/Host check. The open blocker about a missing Origin header, DNS rebinding and proxied localhost applies directly, and the edit forms widen that exposure without any new protection.",
+      "Coverage cost: per-feature forms, validation re-rendering and error branches in hand-written HTML strings may make 100% branch coverage expensive (open blocker).",
+      "A lost update or stale overwrite if the based-on-version check is missing or wrong: an operator edits an old view and silently reverts another publish.",
+      "Round-trip fidelity: parseSnapshot applies defaults such as `rules: []`. If the edit republishes the parsed snapshot instead of the stored JSON, fields could change that the operator did not touch. The diff-only-in-edited-field test must guard against this.",
+      "A config default can be valid JSON yet have the wrong shape for the app's typed definition. The dashboard cannot catch this, and the app may then fail to load the snapshot or fall back to its default.",
+      "Scope drift toward rule editing, adding or deleting features, or a diff preview. The brief recommended safer publishing and a diff, and the user chose editing instead."
+    ],
+    "outOfScope": [
+      "Editing targeting rules and conditions: the rule and condition schema needs a much richer form UI. This slice covers values only.",
+      "Adding, deleting or renaming features: this changes the snapshot's structure and must be kept consistent with app definitions. It is a separate slice.",
+      "Fixing publish or edit after rollback (reopening the horizon-4 versioning decision): the user explicitly passed over this focus. It is only surfaced as a risk.",
+      "Hardening the dashboard (CSRF tokens, DNS-rebinding defence, auth): the user explicitly passed over this focus, and the horizon-10 decision on the Origin/Host check is binding.",
+      "Snapshot file upload, diff views and evaluation preview (the brief's 'safer publishing' theme): the user did not choose them.",
+      "A UI framework, client-side bundle or build step: the horizon-10 decision requires plain node:http and HTML strings.",
+      "Batch or multi-feature draft editing with a single publish: this needs session or draft state. The slice publishes one edit at a time.",
+      "Pagination, ListObjectsV2 or IAM policy changes: these are unrelated to editing, and the pointer-only listing decision is binding.",
+      "Live updates via SNS/SQS in the dashboard: unrelated to editing, and manual refresh is enough.",
+      "Extracting config and error helpers shared by the CLI and the dashboard: refactoring debt that is not needed for editing.",
+      "Hosted or multi-user deployment of the dashboard: it stays a local tool bound to 127.0.0.1."
+    ],
+    "domainShape": "business",
+    "domainShapeReason": "The objective is about domain rules operators recognise: which feature values may be changed, and how an edit becomes a new immutable snapshot version against the Current Pointer without losing a concurrent publish.",
+    "ubiquitousLanguage": [
+      {
+        "term": "Feature",
+        "meaning": "A named entry in a snapshot, either a boolean feature (enabled plus rules) or a config feature (enabled, default JSON value, rules)."
+      },
+      {
+        "term": "Flag Edit",
+        "meaning": "An operator's change to one feature's editable value (enabled, or a config feature's default), made in the dashboard."
+      },
+      {
+        "term": "Snapshot",
+        "meaning": "An immutable, versioned JSON document of all features for one environment, stored at <env>/snapshots/<n>.json."
+      },
+      {
+        "term": "Current Pointer",
+        "meaning": "<env>/current.json, the only mutable key. It names the live snapshot version and is the base every Flag Edit starts from."
+      },
+      {
+        "term": "Base Version",
+        "meaning": "The snapshot version an edit form was rendered from. The edit is refused if the Current Pointer no longer names it (stale edit)."
+      },
+      {
+        "term": "Publish",
+        "meaning": "Writing a new snapshot version and moving the Current Pointer to it, only ever through S3SnapshotPublisher."
+      },
+      {
+        "term": "Rollback",
+        "meaning": "Moving the Current Pointer back to an earlier existing version without writing a new snapshot."
+      },
+      {
+        "term": "Operator",
+        "meaning": "The person running the local dashboard with their own AWS credentials who publishes, edits and rolls back snapshots."
+      },
+      {
+        "term": "Snapshot Editing / Snapshot Publishing",
+        "meaning": "The two bounded contexts touched: the dashboard turning a Flag Edit into the next Snapshot, and the aws publisher writing it with an optional expected current version."
+      }
+    ]
+  },
+  "discoveryFindings": [
+    {
+      "area": "publisher semantics",
+      "finding": "publish(env, snapshot) validates, reads pointer (with ETag), computes version = pointer+1 via nextSnapshotVersion, PUTs snapshots/<n>.json IfNoneMatch:* (fail→VERSION_EXISTS), then PUTs current.json IfMatch etag / IfNoneMatch:* (fail→CONFLICT). No expected-base-version parameter.",
+      "filePath": "packages/aws/src/infrastructure/s3-snapshot-publisher.ts",
+      "implication": "Stale-base detection must be done in the dashboard: re-read current version and compare to the form's baseVersion before publish; the ETag only guards the gap between the publisher's own read and write. Do not change the aws package. (Superseded at preview: the user asked for a compare-and-swap publish, so the aws publisher gains an optional expectedCurrentVersion — see phase add-expected-version-to-s3-publisher.)"
+    },
+    {
+      "area": "publisher body fidelity",
+      "finding": "publish stores JSON.stringify(snapshot) as-is. It does NOT rewrite the body's version/previousVersion/createdAt fields to match the computed version number.",
+      "filePath": "packages/aws/src/infrastructure/s3-snapshot-publisher.ts",
+      "implication": "The edit domain function must set version=base+1, previousVersion=base, and a fresh createdAt (plus createdBy/reason). Otherwise the stored body disagrees with its key. A mismatch between the expected base+1 and the returned version means a race."
+    },
+    {
+      "area": "snapshot contract",
+      "finding": "The snapshot is a strictObject with schemaVersion:1, environment, version:int>0, createdAt (ISO with offset), createdBy (min 1), previousVersion (nullable, must be < version), reason:string, features:record.",
+      "filePath": "packages/core/src/domain/snapshot-contract.ts",
+      "implication": "The edit must produce every metadata field. createdBy and reason need a source, either a form field or a constant such as 'dashboard'. The clock must be injected so the domain stays pure and tests are deterministic."
+    },
+    {
+      "area": "feature schema",
+      "finding": "boolean: strict {type, enabled, rules default []}. config: strict {type, enabled, default: z.json(), rules default []}. The only editable fields in scope are enabled (both types) and default (config only).",
+      "filePath": "packages/core/src/domain/feature.ts",
+      "implication": "strictObject means no extra keys can be added. The default must be any JSON value (null allowed). Rules are copied through untouched."
+    },
+    {
+      "area": "round-trip fidelity",
+      "finding": "parseSnapshot returns a deep-frozen, normalized copy that fills in rules:[] when absent. fetcher.fetch returns raw text, and the ports expose fetchSnapshotText(env, version) returning a string.",
+      "filePath": "packages/dashboard/src/infrastructure/aws-adapters.ts",
+      "implication": "Apply edits to JSON.parse(rawText) with non-mutating copies, not to the frozen parsed value. This keeps unedited features byte-faithful (no injected rules:[]). Then validate with parseSnapshot before publishing."
+    },
+    {
+      "area": "core public API",
+      "finding": "core index exports parseSnapshot, Snapshot, DeepReadonly, Feature/BooleanFeature/ConfigFeature types, ValidationIssue, SnapshotValidationError, Result. It does NOT export featureSchema, snapshotContract, or SNAPSHOT_SCHEMA_VERSION.",
+      "filePath": "packages/core/src/index.ts",
+      "implication": "Dashboard validation must go through parseSnapshot. Avoid adding core exports unless there is a clear need."
+    },
+    {
+      "area": "dashboard layers",
+      "finding": "packages/dashboard/src has application/ and infrastructure/ (with views/) but no domain/ dir. The ESLint zones glob ./packages/*/src/domain/** blocks imports from application or infrastructure, and application is blocked from importing infrastructure.",
+      "filePath": "eslint.config.js",
+      "implication": "A new packages/dashboard/src/domain/ (e.g. edit-feature.ts) is covered by the lint zones automatically. The domain may import @featuresync/core (a package, not a restricted path)."
+    },
+    {
+      "area": "coverage",
+      "finding": "Root vitest coverage includes packages/*/src/**/*.ts with 100% thresholds for lines, branches, functions and statements. The integration/** dir is excluded from unit runs.",
+      "filePath": "vitest.config.ts",
+      "implication": "Every branch of the new domain function, application use case, routes and views needs unit tests. Budget test work in each phase."
+    },
+    {
+      "area": "test layout",
+      "finding": "Application tests live in packages/dashboard/test/application/*.test.ts. Infrastructure tests are colocated (src/infrastructure/http-server.test.ts, aws-adapters.test.ts). The LocalStack integration test is at integration/dashboard.localstack.test.ts.",
+      "filePath": "packages/dashboard/integration/dashboard.localstack.test.ts",
+      "implication": "Put domain tests at test/domain/. Extend http-server.test.ts for the route and the LocalStack test for the end-to-end edit and conflict cases."
+    },
+    {
+      "area": "application write path",
+      "finding": "publish-snapshot.ts has SnapshotWriter{publish, rollback}, WritePorts.openWriter(onNotifyError) opened per request, and a private write() helper that maps errors via describeFailure into a WriteOutcome (success with version/message/warning, or failure with message/issues).",
+      "filePath": "packages/dashboard/src/application/publish-snapshot.ts",
+      "implication": "Add an editFeature use case beside it and reuse write()/WriteOutcome (export or share the helper). Ports need BrowsePorts plus WritePorts to load the base snapshot."
+    },
+    {
+      "area": "error messages",
+      "finding": "PUBLISH_ERROR_MESSAGES already covers CONFLICT ('Reload the page and retry') and VERSION_EXISTS (explained as a post-rollback leftover). describeFailure adds 'path: message' issue lines only for INVALID_SNAPSHOT and INVALID_POINTER.",
+      "filePath": "packages/dashboard/src/application/error-messages.ts",
+      "implication": "Add new constants for a stale base version, an unknown feature key, invalid default JSON, and a non-config default edit. Reuse the path: message issue formatting for validation failures."
+    },
+    {
+      "area": "http routing",
+      "finding": "The router matches segments /env/:env[/publish|/rollback|/versions/:n] (max 4 segments). POST requires Origin == http://127.0.0.1:port, or a matching Host when Origin is absent (else 403). readForm parses urlencoded bodies with a 1 MiB cap (413). parseVersion accepts only ^[1-9]\\d{0,8}$.",
+      "filePath": "packages/dashboard/src/infrastructure/http-server.ts",
+      "implication": "Add a POST route such as /env/:env/features/:key or /env/:env/edit (form fields: key, baseVersion, enabled, default). The same-origin guard applies automatically. Reuse parseVersion for baseVersion."
+    },
+    {
+      "area": "post response pattern",
+      "finding": "The existing publish and rollback POSTs do NOT redirect. They re-run browseEnvironment and render the environment page with notices, status 200 on success or 422 on failure. 303 redirect is used only for the home ?env= form.",
+      "filePath": "packages/dashboard/src/infrastructure/http-server.ts",
+      "implication": "The success criterion asks for a redirect showing the new version. Either follow the current render-with-notice pattern for consistency, or use a 303 plus a query or flash param. Decide explicitly."
+    },
+    {
+      "area": "views",
+      "finding": "snapshot-contents.ts renders a read-only table (Flag/Type/Enabled/Default JSON/Rules) from FlagDefinitionView (key, type, enabled, defaultValue, ruleCount). It is shared by environment-page and version-page. escapeHtml and environmentPath are in views/escape.ts.",
+      "filePath": "packages/dashboard/src/infrastructure/views/snapshot-contents.ts",
+      "implication": "Add per-row forms (a hidden baseVersion equal to the current version, an enabled checkbox, a default textarea) only on the environment page or when the version is current. Escape all values. A draft-preserving state is needed for re-render after a 422."
+    },
+    {
+      "area": "flag view model",
+      "finding": "FlagDefinitionView.defaultValue for boolean features is set to feature.enabled, and is computed from the parsed and normalized snapshot.",
+      "filePath": "packages/dashboard/src/application/browse-environment.ts",
+      "implication": "The edit form must render the default textarea only for type=config and must not treat the boolean 'default' as editable."
+    },
+    {
+      "area": "adapters/main",
+      "finding": "createAwsDashboardPorts wires the reader, the fetcher (returning .text) and a per-request publisher with parseSnapshot validation. main.ts/bin.ts need no changes unless a createdBy source (e.g. an env var or flag) is added.",
+      "filePath": "packages/dashboard/src/infrastructure/aws-adapters.ts",
+      "implication": "No new AWS adapter is needed. The existing DashboardPorts suffice, apart from an optional clock/actor port."
+    }
+  ],
+  "requiredMaterials": [],
+  "phases": [
+    {
+      "id": "add-flag-edit-domain-function",
+      "order": 0,
+      "name": "Add pure Flag Edit function for snapshots",
+      "goal": "Build a pure domain function that takes the raw stored Snapshot JSON of the Base Version, one Flag Edit (feature key plus a new `enabled` value, or a new `default` JSON value for a config Feature), the edit metadata and the current time. It returns the next Snapshot body or a typed failure.",
+      "rationale": "A Snapshot is an immutable, versioned JSON document. An edit must produce version n+1 that differs from version n only in the edited field and in the metadata fields. S3SnapshotPublisher stores the body exactly as given (JSON.stringify of the input) and never sets or checks the body's version, previousVersion or createdAt against the version it computes, so this function must set them correctly. Keeping the rule pure, with the time passed in as a parameter, makes it deterministic and easy to cover at 100%.",
+      "filesAffected": [
+        "packages/dashboard/src/domain/flag-edit.ts",
+        "packages/dashboard/test/domain/flag-edit.test.ts"
+      ],
+      "changes": [
+        "Create packages/dashboard/src/domain/ as a new directory. It is the dashboard's first domain layer, and the existing ESLint zone rules cover it automatically.",
+        "Define a FlagEdit type as a discriminated union: {kind:'enabled', key, enabled:boolean} | {kind:'default', key, defaultJson:string}. A discriminated union is a TypeScript union told apart by a literal `kind` field.",
+        "Implement applyFlagEdit(rawSnapshotText, edit, meta:{baseVersion, createdBy, reason, now:Date}). JSON.parse the raw text and copy it without mutating the input (non-mutating spread). Replace only the target Feature's field, and copy other Features, their rules and all other fields byte-faithfully. Do not add `rules: []` where it is absent.",
+        "Set version=baseVersion+1, previousVersion=baseVersion, createdAt=now.toISOString(), and createdBy/reason from meta.",
+        "Return typed failures: UNKNOWN_FEATURE when the key is not present; DEFAULT_NOT_EDITABLE when a default edit targets a boolean Feature; INVALID_DEFAULT_JSON when JSON.parse fails on defaultJson, carrying the parser message. Then validate the result with @featuresync/core parseSnapshot and return INVALID_SNAPSHOT with its path: message issues on failure.",
+        "Add unit tests for every branch, including a round-trip test proving that unedited Features are deep-equal to the input and that no rules:[] is injected."
+      ],
+      "boundedContext": "Snapshot Editing (dashboard)",
+      "layer": "domain",
+      "blastRadius": "small",
+      "inputs": [
+        "packages/core/src/domain/snapshot-contract.ts",
+        "packages/core/src/domain/feature.ts",
+        "packages/core/src/index.ts (parseSnapshot)"
+      ],
+      "expectedResult": "packages/dashboard/src/domain/flag-edit.ts exporting applyFlagEdit, covered 100% by test/domain/flag-edit.test.ts",
+      "dependsOn": [],
+      "rubric": [
+        {
+          "id": "byte-faithful-unedited-copy",
+          "label": "Unedited content copied byte-faithfully",
+          "ruleStatement": "applyFlagEdit changes only the target Feature's edited field plus version/previousVersion/createdAt/createdBy/reason, and leaves everything else exactly as it was. 10 = a test compares JSON.stringify of every unedited Feature and top-level field before and after, and also checks that the input object is not mutated. 8 = deep-equal round-trip test plus a no-rules:[] test. Below 7 = anything gets injected or normalized.",
+          "passCriteria": [
+            "flag-edit.test.ts has a fixture Feature with no `rules` key, and asserts that the output Feature still has no `rules` key (`'rules' in f` is false)",
+            "A test asserts that every non-target Feature in the output deep-equals the input Feature, and that the target Feature differs only in `enabled` or `default`",
+            "A test freezes the input (or keeps a copy of the raw text) and asserts that it is unchanged after the call",
+            "Unknown top-level fields in the input snapshot are still present in the output"
+          ],
+          "failureExamples": [
+            "Parsing through @featuresync/core parseSnapshot and then serializing the parsed result, which fills in `rules: []` defaults on Features that had none",
+            "A shallow spread that mutates the nested target Feature object in the input snapshot",
+            "Dropping an unknown top-level property because the result was built from a typed object instead of the parsed JSON"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "metadata-and-version-arithmetic",
+          "label": "Next-version metadata set from meta and the injected clock",
+          "ruleStatement": "The output has version=baseVersion+1, previousVersion=baseVersion, createdAt=meta.now.toISOString(), and createdBy/reason taken from meta. The function never calls the system clock. 10 = the tests use a baseVersion that differs from the body's own version field, which proves the value comes from meta. 8 = all five fields are asserted with a fixed Date.",
+          "passCriteria": [
+            "The test asserts all five fields exactly, with a fixed `new Date('2026-01-01T00:00:00.000Z')`",
+            "grep flag-edit.ts for `Date.now` or `new Date(`: there must be no match",
+            "A test where the raw body's version differs from meta.baseVersion still produces baseVersion+1"
+          ],
+          "failureExamples": [
+            "Computing version as parsed.version+1 instead of meta.baseVersion+1",
+            "Setting createdAt with new Date() inside the function, so the tests can only be made stable with fake timers"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "typed-failure-branches",
+          "label": "Every typed failure reachable and specific",
+          "ruleStatement": "Each failure (UNKNOWN_FEATURE, DEFAULT_NOT_EDITABLE, INVALID_DEFAULT_JSON carrying the parser message, INVALID_SNAPSHOT carrying path: message issues) is returned as a value, not thrown, and has its own test. 10 = the INVALID_SNAPSHOT test really triggers a schema failure caused by an edit (for example a default that breaks the schema), and the coverage run reports 100% branches. 8 = all four failures are tested and coverage is 100%.",
+          "passCriteria": [
+            "Each of the four failure kinds has a test asserting the `kind` value and its payload (the parser message string, and an issues array whose entries are formatted as `path: message`)",
+            "A default edit on a boolean Feature returns DEFAULT_NOT_EDITABLE and does not change the Feature",
+            "Running the dashboard coverage command shows 100% lines and branches for src/domain/flag-edit.ts"
+          ],
+          "failureExamples": [
+            "Letting JSON.parse throw out of the function for a bad defaultJson instead of returning INVALID_DEFAULT_JSON",
+            "Looking up the key with `in` on a Features array, or matching by prototype keys like `toString`, so a key such as 'constructor' is wrongly accepted as known"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "domain-layer-purity",
+          "label": "Domain has no outer-layer dependencies",
+          "ruleStatement": "src/domain/flag-edit.ts imports only @featuresync/core and its own types. It has no imports from application or infrastructure code, no AWS SDK, no node:http and no I/O. 10 = ESLint zone rules pass and the file has no side-effecting imports at all. 8 = lint passes and there are no forbidden imports.",
+          "passCriteria": [
+            "The import lines in flag-edit.ts reference only '@featuresync/core' or relative domain paths",
+            "The dashboard's eslint command passes, with the no-restricted-paths zones covering src/domain",
+            "There are no console or process usages in the file"
+          ],
+          "failureExamples": [
+            "Importing FlagDefinitionView from ../application/browse-environment to decide whether a Feature is a config Feature",
+            "Returning error message strings from error-messages.ts instead of typed failure kinds"
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "The usual failure is running the result through parseSnapshot and serializing the parsed value, which injects rules:[]. Validate with parseSnapshot but return the spread-copied raw JSON object, and add the no-rules-key round-trip test."
+    },
+    {
+      "id": "add-expected-version-to-s3-publisher",
+      "order": 1,
+      "name": "Add expected current version to publisher",
+      "goal": "Give S3SnapshotPublisher.publish an optional third argument, publish(environment, snapshot, { expectedCurrentVersion }). When it is given, the publisher compares it to the pointer version it has just read and throws S3PublishError('CONFLICT') before writing any object if the two differ.",
+      "rationale": "Before this change, a stale check could only run in the dashboard, before the publisher re-read the pointer. That left a race: A checks base=5, B publishes 6, A's publisher reads 6 and writes A's edit (built on 5) as 7, silently reverting B. Doing the comparison inside publish, against the same readPointer result whose ETag guards the IfMatch pointer write, closes the race and makes the publish a compare-and-swap. If another writer moves the pointer after the check, either the snapshot write fails (IfNoneMatch '*' gives VERSION_EXISTS, because both writers computed the same next version) or the pointer write fails (IfMatch ETag gives CONFLICT). Either way, a stale edit never becomes current. The option is optional, so the CLI and paste-publish callers do not change. Finding: publish never checks that the body's `version`/`previousVersion` fields agree with the version it computes (validate only checks the schema, and the body is stored as JSON.stringify(snapshot)). This phase leaves that as it is, because adding the check would change behaviour for existing callers. The edit path gets consistency from the expectation, since applyFlagEdit writes baseVersion+1, which the passed check guarantees is the computed version.",
+      "filesAffected": [
+        "packages/aws/src/infrastructure/s3-snapshot-publisher.ts",
+        "packages/aws/src/index.ts",
+        "packages/aws/test/infrastructure/s3-snapshot-publisher.test.ts",
+        "packages/aws/integration/s3-snapshot-publisher.localstack.test.ts"
+      ],
+      "changes": [
+        "Export a PublishOptions interface { readonly expectedCurrentVersion?: number } and change the S3SnapshotPublisher interface to publish(environment, snapshot, options?: PublishOptions). Re-export the type from the package index if the other publisher types are exported there.",
+        "In publish, right after readPointer(env) and before any put: if options?.expectedCurrentVersion is defined and differs from current?.pointer.version, throw new S3PublishError('CONFLICT', `${env}/current.json`, new Error('Expected current version X, found Y')). Treat 'no pointer yet' (current undefined) as a mismatch whenever an expectation is given, and use 'none' for Y in the cause message.",
+        "Leave behaviour unchanged when options or expectedCurrentVersion is omitted, and leave rollback unchanged.",
+        "Unit tests in s3-snapshot-publisher.test.ts using fake-s3.ts: the expectation matches and publishes; a mismatch throws CONFLICT with zero PutObject calls; no pointer plus an expectation throws CONFLICT with zero puts; omitting the option keeps existing behaviour. Keep 100% coverage.",
+        "Add one LocalStack case in s3-snapshot-publisher.localstack.test.ts: seed version 1, then publish with expectedCurrentVersion 0 (or 2). Assert CONFLICT, assert that no snapshots/2.json exists, and assert that current.json is byte-identical to before."
+      ],
+      "boundedContext": "Snapshot Publishing (aws)",
+      "layer": "infrastructure",
+      "blastRadius": "small",
+      "inputs": [
+        "packages/aws/src/infrastructure/s3-snapshot-publisher.ts",
+        "packages/aws/test/infrastructure/s3-snapshot-publisher.test.ts",
+        "packages/aws/test/infrastructure/fake-s3.ts",
+        "packages/aws/integration/s3-snapshot-publisher.localstack.test.ts"
+      ],
+      "expectedResult": "S3SnapshotPublisher.publish accepting { expectedCurrentVersion } and throwing CONFLICT with nothing written on mismatch, covered 100% by s3-snapshot-publisher.test.ts plus one passing LocalStack case",
+      "dependsOn": [],
+      "compensation": "The option is additive and optional: reverting the commit restores the old two-argument publish without touching any caller.",
+      "rubric": [
+        {
+          "id": "cas-writes-nothing-on-mismatch",
+          "label": "Mismatched expectation writes nothing",
+          "ruleStatement": "When expectedCurrentVersion is given and differs from the pointer that was read (including when there is no pointer), publish throws S3PublishError('CONFLICT') before any PutObject. 10 = the unit tests assert zero puts for both a mismatch and a missing pointer, and the LocalStack test asserts that current.json is byte-identical and that no snapshots/N.json exists. 8 = the unit tests assert zero puts, and the LocalStack test asserts CONFLICT.",
+          "passCriteria": [
+            "A fake-s3 test with the pointer at 5 and expectedCurrentVersion 4 asserts reason 'CONFLICT' and that the PutObject call count is 0",
+            "A fake-s3 test with no pointer and expectedCurrentVersion 0 asserts CONFLICT, 0 puts, and a cause message containing 'none'",
+            "The LocalStack case reads current.json before and after and compares the bytes, and HeadObject on snapshots/2.json returns not found"
+          ],
+          "failureExamples": [
+            "Checking the expectation after the snapshot PutObject and before the pointer write, which leaves an orphan snapshots/N.json",
+            "Treating an undefined pointer as version 0, so expectedCurrentVersion 0 passes on an empty environment",
+            "Checking with a truthy test (`if (options?.expectedCurrentVersion)`), so an expectation of 0 is ignored"
+          ],
+          "minScore": 9
+        },
+        {
+          "id": "backward-compatible-signature",
+          "label": "Existing callers and rollback unchanged",
+          "ruleStatement": "The third argument is optional, and CLI, paste-publish and rollback behave exactly as before. 10 = a test calls the two-argument publish and gets the same writes as before, the rollback tests pass without edits, and no caller file changed. 8 = the existing tests pass unmodified.",
+          "passCriteria": [
+            "git diff shows no changes to existing test expectations in s3-snapshot-publisher.test.ts, only added tests",
+            "The CLI package sources that call publish are not in the diff",
+            "rollback() has no diff in the function body"
+          ],
+          "failureExamples": [
+            "Making options required, which breaks CLI type-checking",
+            "Reusing the new check in rollback, so a rollback with a stale pointer suddenly throws"
+          ],
+          "minScore": 9
+        },
+        {
+          "id": "check-uses-same-pointer-read",
+          "label": "Expectation compared against the ETag-guarded read",
+          "ruleStatement": "The comparison uses the same readPointer result whose ETag feeds the IfMatch pointer write. There is no second read. 10 = the read count is asserted as exactly one GetObject on current.json per publish. 8 = the code reads the pointer once.",
+          "passCriteria": [
+            "publish contains a single readPointer call, and the comparison uses its `pointer.version`",
+            "A test counts the GetObject calls on current.json and finds exactly 1"
+          ],
+          "failureExamples": [
+            "Adding a separate readPointer for the check, which reopens the race between the check and the ETag"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "infra-layer-and-export",
+          "label": "Type exported from package, stays in infrastructure",
+          "ruleStatement": "PublishOptions is exported next to the other publisher types in packages/aws/src/index.ts, and the aws package does not import from dashboard. 8 = exported and lint clean; 10 = also documented with a JSDoc comment on the conflict semantics.",
+          "passCriteria": [
+            "packages/aws/src/index.ts re-exports PublishOptions (or the other publisher types are not exported there either)",
+            "The aws lint and tsc commands pass, and coverage for s3-snapshot-publisher.ts is 100%"
+          ],
+          "failureExamples": [
+            "Defining PublishOptions only inside the dashboard, which forces the dashboard to write a structural duplicate"
+          ],
+          "minScore": 7
+        }
+      ],
+      "healerHint": "The most likely bug is a truthy or undefined-pointer check (`if (options?.expectedCurrentVersion)`, or current?.pointer.version ?? 0). Test with `!== undefined`, treat a missing pointer as a mismatch, and run the check before the first put."
+    },
+    {
+      "id": "add-edit-feature-use-case",
+      "order": 2,
+      "name": "Add edit feature use case with version expectation",
+      "goal": "Add an application use case, editFeature, that fetches the Snapshot at the form's Base Version and applies the Flag Edit. It then publishes through the SnapshotWriter port with expectedCurrentVersion=baseVersion and returns the existing WriteOutcome type, mapping a concurrent-publish CONFLICT to a 'reload and redo your edit' message.",
+      "rationale": "The application layer depends only on its own port. SnapshotWriter in publish-snapshot.ts gains the same optional third argument, and any adapter that honours it (the aws publisher, wired in the route phase) makes the publish a compare-and-swap. Decision: remove the dashboard-side pre-read pointer check. It cannot prevent the race, it costs an extra S3 read on every edit, and the publisher's expectation check produces the same result (nothing written, CONFLICT) at the only point where the check is authoritative. The after-the-fact heuristic 'published version != base+1' is also removed, because a successful expected-version publish always yields base+1. VERSION_EXISTS on the edit path has two causes: a simultaneous edit on the same base won the snapshot key, or version base+1 already exists after a Rollback. The use case tells them apart by re-reading the current pointer: if it is no longer baseVersion, it reports the concurrent message; otherwise it reports the rollback explanation. Other decisions: createdBy is the constant 'dashboard', the reason is generated (e.g. \"Set <key>.enabled=false via dashboard\"), and the clock is injected as `now: () => Date`.",
+      "filesAffected": [
+        "packages/dashboard/src/application/edit-feature.ts",
+        "packages/dashboard/src/application/publish-snapshot.ts",
+        "packages/dashboard/src/application/error-messages.ts",
+        "packages/dashboard/test/application/edit-feature.test.ts"
+      ],
+      "changes": [
+        "Extend SnapshotWriter.publish in publish-snapshot.ts to publish(environment, snapshot, options?: { expectedCurrentVersion?: number }). Existing callers pass no options, so paste-publish and rollback tests stay green.",
+        "Export the private write() helper and the WriteOutcome type from publish-snapshot.ts without changing their behaviour.",
+        "Create editFeature(ports: BrowsePorts & WritePorts & {now: () => Date}, env, baseVersion, edit). Fetch the text with fetchSnapshotText(env, baseVersion), call applyFlagEdit, then run write() with writer.publish(env, snapshot, { expectedCurrentVersion: baseVersion }). Do not pre-read the pointer.",
+        "Map CONFLICT on this path to a new EDIT_CONFLICT message: 'Someone else published version N meanwhile — reload and redo your edit', where N is obtained by re-reading the current pointer after the failure (fall back to wording without N if that read fails). On VERSION_EXISTS, re-read the pointer: if it differs from baseVersion, use EDIT_CONFLICT; otherwise use a new EDIT_AFTER_ROLLBACK message explaining that version base+1 already exists because of an earlier Rollback, that edits from a rolled-back version are not supported yet, and that the Operator should paste-publish instead.",
+        "Add message constants for EDIT_CONFLICT, EDIT_AFTER_ROLLBACK, UNKNOWN_FEATURE, DEFAULT_NOT_EDITABLE and INVALID_DEFAULT_JSON to error-messages.ts, and reuse the path: message issue formatting for INVALID_SNAPSHOT. Confirm that every S3FetchError/S3PublishError reason reachable on this path has a message.",
+        "Unit-test with fake ports: success passes expectedCurrentVersion=baseVersion; CONFLICT gives EDIT_CONFLICT naming N; VERSION_EXISTS with the pointer moved gives EDIT_CONFLICT; VERSION_EXISTS with the pointer at base gives EDIT_AFTER_ROLLBACK; each domain failure; each fetch/publish error reason; and a failed re-read fallback."
+      ],
+      "boundedContext": "Snapshot Editing (dashboard)",
+      "layer": "application",
+      "blastRadius": "medium",
+      "inputs": [
+        "packages/dashboard/src/application/publish-snapshot.ts",
+        "packages/dashboard/src/application/browse-environment.ts",
+        "packages/dashboard/src/application/error-messages.ts",
+        "packages/dashboard/src/domain/flag-edit.ts"
+      ],
+      "expectedResult": "packages/dashboard/src/application/edit-feature.ts exporting editFeature, covered 100% by test/application/edit-feature.test.ts",
+      "dependsOn": [
+        "add-flag-edit-domain-function"
+      ],
+      "rubric": [
+        {
+          "id": "expectation-passed-no-preread",
+          "label": "Publishes with expectedCurrentVersion=baseVersion and no pre-read",
+          "ruleStatement": "editFeature fetches the base snapshot text, applies the edit, and calls writer.publish(env, snapshot, {expectedCurrentVersion: baseVersion}) without reading the pointer first. 10 = the success test asserts the exact options object and that the pointer read count is 0 before publish. 8 = the options are asserted.",
+          "passCriteria": [
+            "The fake writer records its third argument, and the test asserts that it equals {expectedCurrentVersion: baseVersion}",
+            "The fake pointer reader records call order, and no pointer read happens before publish on the success path",
+            "fetchSnapshotText is called with (env, baseVersion), not with 'current'"
+          ],
+          "failureExamples": [
+            "Fetching the current snapshot instead of the snapshot at baseVersion, so an edit silently rebases onto someone else's change",
+            "Keeping a dashboard-side pointer pre-check 'for safety', which adds an S3 read and gives the same race"
+          ],
+          "minScore": 9
+        },
+        {
+          "id": "conflict-vs-rollback-disambiguation",
+          "label": "CONFLICT/VERSION_EXISTS mapped by re-reading the pointer",
+          "ruleStatement": "CONFLICT maps to EDIT_CONFLICT naming N. VERSION_EXISTS maps to EDIT_CONFLICT when the re-read pointer differs from base, and to EDIT_AFTER_ROLLBACK when it still equals base. A failed re-read falls back to wording without N. 10 = all four paths are tested and the message text is asserted. 8 = all four paths are tested.",
+          "passCriteria": [
+            "Tests exist for: CONFLICT with the pointer at 7 (the message contains '7'); VERSION_EXISTS with the pointer moved; VERSION_EXISTS with the pointer equal to base (the rollback message); and a re-read that throws (the message has no number and no 'undefined')",
+            "The EDIT_AFTER_ROLLBACK text mentions paste-publish"
+          ],
+          "failureExamples": [
+            "Mapping every VERSION_EXISTS to the rollback message, so a lost same-base race tells the Operator to paste-publish",
+            "Interpolating an undefined N and producing 'published version undefined meanwhile'"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "shared-port-unchanged-for-existing-callers",
+          "label": "SnapshotWriter widening keeps paste-publish and rollback intact",
+          "ruleStatement": "SnapshotWriter.publish gains only an optional third parameter. write() and WriteOutcome are exported with their behaviour unchanged. 8 = the existing publish-snapshot tests pass unmodified; 10 = also no diff to their bodies apart from the export keyword.",
+          "passCriteria": [
+            "The git diff of publish-snapshot.ts touches only the export keywords and the optional parameter",
+            "The existing publish and rollback use-case tests pass without edits"
+          ],
+          "failureExamples": [
+            "Changing write() to map CONFLICT to EDIT_CONFLICT globally, which changes the paste-publish message"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "application-layer-boundary",
+          "label": "Depends only on ports and domain",
+          "ruleStatement": "edit-feature.ts imports from domain, from application ports and messages, and from @featuresync/core only. It never imports @featuresync/aws values or infrastructure, and it gets the time from ports.now(). Error reasons are compared as strings or through the port's error shape, not with aws instanceof.",
+          "passCriteria": [
+            "No import in edit-feature.ts resolves to packages/aws or src/infrastructure",
+            "grep shows no `new Date(` in edit-feature.ts, and createdBy is 'dashboard'",
+            "The lint zone check passes, and coverage for edit-feature.ts is 100%"
+          ],
+          "failureExamples": [
+            "Using `instanceof S3PublishError` imported from @featuresync/aws inside the application layer"
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "The most likely miss is the VERSION_EXISTS branch not re-reading the pointer, or leaking 'undefined' when the re-read fails. Add the re-read with a try/catch fallback message and test all four conflict paths."
+    },
+    {
+      "id": "add-feature-edit-form-view",
+      "order": 3,
+      "name": "Add per-feature edit forms to snapshot view",
+      "goal": "Render an edit form on each Feature row of the environment page only: a hidden baseVersion equal to the current version, an enabled checkbox for every Feature, and a default JSON textarea for config Features only. Show a draft value and an error message when the form is re-rendered after a failed edit.",
+      "rationale": "Operators should change a Feature in place instead of pasting a whole Snapshot. The existing read-only table in snapshot-contents.ts is shared by the environment and version pages, so the forms go in a new file under views/. Plain HTML forms with no client-side JavaScript keep the Horizon 10 rule of no framework and no build step. Forms appear only on the environment page, which always shows the current version, because edits always start from the Current Pointer; the per-version pages stay read-only.",
+      "filesAffected": [
+        "packages/dashboard/src/infrastructure/views/feature-edit-form.ts",
+        "packages/dashboard/src/infrastructure/views/snapshot-contents.ts",
+        "packages/dashboard/src/infrastructure/views/feature-edit-form.test.ts"
+      ],
+      "changes": [
+        "Create views/feature-edit-form.ts, rendering one <form method=post action=/env/<env>/features/<key>> per Feature. Build the action URL with environmentPath and encodeURIComponent, and escape every value with escapeHtml.",
+        "Render the default textarea only when FlagDefinitionView.type is 'config'. The boolean defaultValue mirrors enabled and must not be offered as editable.",
+        "Accept an optional EditDraft {key, enabled?, defaultJson?, message, issues} so a 422 re-render keeps the Operator's typed text and shows the error next to that Feature.",
+        "Add an optional `editable` input to snapshot-contents.ts that appends the form cell only when true. Only the environment page passes true; the version page never does, even for the current version.",
+        "Unit-test the escaping of hostile keys and values, config vs boolean rendering, the draft/error rendering, and the read-only mode."
+      ],
+      "boundedContext": "Snapshot Editing (dashboard)",
+      "layer": "infrastructure",
+      "blastRadius": "small",
+      "inputs": [
+        "packages/dashboard/src/infrastructure/views/snapshot-contents.ts",
+        "packages/dashboard/src/infrastructure/views/escape.ts",
+        "packages/dashboard/src/application/browse-environment.ts (FlagDefinitionView)"
+      ],
+      "expectedResult": "packages/dashboard/src/infrastructure/views/feature-edit-form.ts rendering escaped per-feature edit forms, covered 100% by its colocated test",
+      "dependsOn": [],
+      "rubric": [
+        {
+          "id": "escape-every-rendered-value",
+          "label": "Every interpolated value HTML-escaped",
+          "ruleStatement": "Keys, env, default JSON, draft text, messages and issues all pass through escapeHtml, and URL segments are also encodeURIComponent'd. 10 = the test uses a hostile key like `\"><script>` and a textarea value containing `</textarea>`, and asserts that none appears raw. 8 = a hostile key and a hostile value are tested.",
+          "passCriteria": [
+            "The test renders the key `a\"><img src=x onerror=1>` and asserts that the output contains no raw `<img`",
+            "The test renders a default/draft containing `</textarea><script>` and asserts that it is escaped inside the textarea",
+            "The action attribute for the key 'a/b' contains 'a%2Fb'"
+          ],
+          "failureExamples": [
+            "Escaping the displayed key but not the hidden input value, or not the action URL",
+            "Putting draft text inside <textarea> unescaped on the assumption that textarea content is inert"
+          ],
+          "minScore": 9
+        },
+        {
+          "id": "config-vs-boolean-controls",
+          "label": "Default textarea only for config Features",
+          "ruleStatement": "Every Feature gets an enabled checkbox and a hidden baseVersion equal to the current version. Only type 'config' gets a default textarea. 8 = both cases are tested; 10 = the test also asserts that the checkbox `checked` state reflects enabled and that the baseVersion value is exact.",
+          "passCriteria": [
+            "A boolean Feature's form contains no <textarea>",
+            "A config Feature's form has a textarea prefilled with its default as JSON",
+            "The hidden input baseVersion value equals the rendered version",
+            "The checkbox is checked if and only if enabled is true"
+          ],
+          "failureExamples": [
+            "Offering the boolean Feature's mirrored defaultValue as editable",
+            "A missing field discriminator, so the route cannot tell an unchecked checkbox from an omitted one"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "read-only-version-page",
+          "label": "Forms appear only when editable",
+          "ruleStatement": "snapshot-contents renders form cells only when editable is true, so the version pages stay byte-identical to before. 10 = a snapshot test proves that the non-editable output is unchanged from the previous output.",
+          "passCriteria": [
+            "A test renders with editable omitted and asserts there is no '<form'",
+            "The version-page handler call site does not pass editable:true",
+            "The existing view tests pass unmodified"
+          ],
+          "failureExamples": [
+            "Setting editable when version === current on the version page"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "draft-error-rendering",
+          "label": "Draft and error shown next to the right Feature",
+          "ruleStatement": "An EditDraft re-render keeps the typed text and the checkbox state, and shows the escaped message and issues only on the matching key's row.",
+          "passCriteria": [
+            "The test passes a draft for key B and asserts that the message appears after B's row marker and not in A's row",
+            "The draft defaultJson replaces the stored default in the textarea"
+          ],
+          "failureExamples": [
+            "Showing the draft text in every config Feature's textarea"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "view-layer-boundary",
+          "label": "View is pure rendering",
+          "ruleStatement": "feature-edit-form.ts imports only the view helpers and application view types, does no I/O, and does not call use cases.",
+          "passCriteria": [
+            "Its imports are limited to ./escape, the environmentPath helper, and application types",
+            "Coverage for the file is 100%"
+          ],
+          "failureExamples": [
+            "Calling applyFlagEdit from the view to pre-validate"
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "The most likely miss is unescaped textarea or hidden-input content, or a key that is not URL-encoded in the action. Route every interpolation through escapeHtml and encodeURIComponent, and add a hostile-key test."
+    },
+    {
+      "id": "add-feature-edit-post-route",
+      "order": 4,
+      "name": "Add feature edit POST route to dashboard",
+      "goal": "Handle POST /env/:env/features/:key: parse the form, call editFeature with a real clock and the aws publisher's expected-version support, and re-render the environment page in place. Return status 200 with 'Published version N' on success, or 422 with the preserved draft and mapped message on failure.",
+      "rationale": "This route connects the browser form to the use case, and aws-adapters.ts is where the application's SnapshotWriter port is bound to S3SnapshotPublisher. That binding must forward the third options argument, which is why this phase depends on the aws publisher phase. It keeps the existing render-with-notice pattern (200/422, no redirect) of the publish and rollback POSTs: success is shown on the re-rendered environment page, and no flash/session state is needed. The existing Origin/Host guard and 1 MiB body cap apply automatically.",
+      "filesAffected": [
+        "packages/dashboard/src/infrastructure/http-server.ts",
+        "packages/dashboard/src/infrastructure/http-server.test.ts",
+        "packages/dashboard/src/infrastructure/aws-adapters.ts"
+      ],
+      "changes": [
+        "In aws-adapters.ts, make openWriter return a writer whose publish forwards (environment, snapshot, options) to S3SnapshotPublisher.publish. If it returns the publisher directly, the widened type check alone confirms this. Also inject `now: () => new Date()` into the ports built by createAwsDashboardPorts.",
+        "Extend the router to match the 4-segment path /env/:env/features/:key for POST only. URL-decode the key and reject an empty one with 404.",
+        "Read form fields baseVersion (validated with parseVersion; 422 on failure), field ('enabled' or 'default'), enabled (checkbox present means true), and default. Build the FlagEdit from them.",
+        "On success, re-run browseEnvironment and render the environment page with 'Published version N' at status 200 (no redirect). On failure, render the environment page with the EditDraft and mapped message (EDIT_CONFLICT, EDIT_AFTER_ROLLBACK, or a domain/validation message) at status 422.",
+        "Extend http-server.test.ts with a fixed clock and fake writer: a cross-origin POST gets 403; bad baseVersion; a writer CONFLICT renders the reload-and-redo message; VERSION_EXISTS after rollback renders the rollback explanation; unknown key; invalid default JSON; the success notice. Assert that the fake writer received expectedCurrentVersion. Confirm that the paste-publish and rollback tests pass unchanged."
+      ],
+      "boundedContext": "Snapshot Editing (dashboard)",
+      "layer": "interface",
+      "blastRadius": "medium",
+      "inputs": [
+        "packages/dashboard/src/infrastructure/http-server.ts",
+        "packages/dashboard/src/infrastructure/aws-adapters.ts",
+        "packages/dashboard/src/application/edit-feature.ts",
+        "packages/aws/src/infrastructure/s3-snapshot-publisher.ts"
+      ],
+      "expectedResult": "A POST /env/:env/features/:key route in http-server.ts, wired through aws-adapters.ts with expectedCurrentVersion forwarded, returning 200 with the new version or 422 with a mapped message, covered 100% by http-server.test.ts",
+      "dependsOn": [
+        "add-expected-version-to-s3-publisher",
+        "add-edit-feature-use-case",
+        "add-feature-edit-form-view"
+      ],
+      "compensation": "An edit wrongly published to S3 is undone with the existing Rollback, which moves the Current Pointer back to the previous version; snapshots are never deleted.",
+      "rubric": [
+        {
+          "id": "origin-guard-and-body-cap",
+          "label": "Origin/Host guard applies to the new POST",
+          "ruleStatement": "The new route sits behind the existing Origin/Host check and the 1 MiB cap. 10 = tests for a cross-origin POST (403) and a missing-Origin case matching the existing policy both assert that the writer was never called.",
+          "passCriteria": [
+            "The test sends a POST with Origin http://evil.example and asserts status 403 and a fake writer call count of 0",
+            "The route is dispatched after the shared guard, not before it"
+          ],
+          "failureExamples": [
+            "Matching the 4-segment path in a new branch placed before the guard runs"
+          ],
+          "minScore": 9
+        },
+        {
+          "id": "expected-version-wired-to-s3",
+          "label": "Options forwarded through aws-adapters",
+          "ruleStatement": "openWriter's publish forwards the options argument to S3SnapshotPublisher, and the ports include now. 8 = a test asserts that the fake writer got expectedCurrentVersion; 10 = the adapter forwarding is also proved by a test or by returning the publisher directly.",
+          "passCriteria": [
+            "http-server.test asserts that the writer's third argument is {expectedCurrentVersion: <form baseVersion>}",
+            "In aws-adapters.ts, publish is either the publisher itself or a function taking (env, snapshot, options) that passes all three on",
+            "createAwsDashboardPorts returns now"
+          ],
+          "failureExamples": [
+            "A wrapper `(e, s) => publisher.publish(e, s)` that silently drops options, so production has no compare-and-swap"
+          ],
+          "minScore": 9
+        },
+        {
+          "id": "form-parsing-and-status",
+          "label": "Correct status codes and form parsing",
+          "ruleStatement": "Success gives 200 with 'Published version N'. A bad baseVersion, domain failure or conflict gives 422 with the preserved draft. An empty key gives 404. 10 = an unchecked checkbox (field=enabled with no enabled field) is tested as false.",
+          "passCriteria": [
+            "There are tests for: success (200, body contains 'Published version 2'); baseVersion 'abc' (422); an unknown key (422); invalid default JSON (422, with the draft text echoed back escaped); CONFLICT (the reload message); and VERSION_EXISTS after rollback (the rollback message)",
+            "A test posts field=enabled with no enabled key and asserts that the FlagEdit had enabled:false",
+            "A test for a URL-decoded key 'a%2Fb' reaches key 'a/b'"
+          ],
+          "failureExamples": [
+            "Redirecting with 303 after success, which breaks the render-with-notice pattern",
+            "Treating a missing enabled field as 'no change' instead of false"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "existing-routes-unchanged",
+          "label": "Paste-publish and rollback behaviour untouched",
+          "ruleStatement": "The existing HTTP tests pass without edits, and the router change does not shadow the 3-segment routes.",
+          "passCriteria": [
+            "The git diff of http-server.test.ts only adds tests",
+            "GET /env/:env/features/:key returns the same 404 or 405 as before",
+            "Coverage for http-server.ts is 100%"
+          ],
+          "failureExamples": [
+            "A greedy path match that routes /env/x/publish into the features handler"
+          ],
+          "minScore": 9
+        },
+        {
+          "id": "interface-layer-thin",
+          "label": "Route delegates, no domain logic",
+          "ruleStatement": "The route only parses and renders. Version arithmetic and conflict mapping stay in the use case and domain.",
+          "passCriteria": [
+            "http-server.ts does not call applyFlagEdit or compute baseVersion+1"
+          ],
+          "failureExamples": [
+            "Re-implementing the conflict message mapping in the route"
+          ],
+          "minScore": 7
+        }
+      ],
+      "healerHint": "The most likely failure is an aws-adapters wrapper that drops the third options argument. Return the publisher directly or forward (env, snapshot, options), and assert expectedCurrentVersion in the route test."
+    },
+    {
+      "id": "test-flag-edit-against-localstack",
+      "order": 5,
+      "name": "Test Flag Edit end to end on LocalStack",
+      "goal": "Prove against LocalStack (a local AWS emulator) that an edit submitted through the dashboard server publishes version n+1, whose body differs from version n only in the edited field and the metadata. Two edits on the same base must result in exactly one publish, and the loser must write nothing.",
+      "rationale": "Unit tests use fake ports. Only a real S3 round trip shows that the expected-version check, the conditional writes, the pointer move and the byte-faithful copy of unedited Features hold together. This file is excluded from the unit coverage run.",
+      "filesAffected": [
+        "packages/dashboard/integration/dashboard.localstack.test.ts"
+      ],
+      "changes": [
+        "Seed version 1, submit an enabled edit POST, then fetch versions 1 and 2 and assert that the diff contains only the edited Feature field plus version/previousVersion/createdAt/createdBy/reason.",
+        "Submit a config default edit, then assert the new default and that the other Features are unchanged.",
+        "Submit two edits with the same baseVersion (sequentially, the second after the first succeeded, and also concurrently via Promise.all). Assert that exactly one returns 200, that the other returns 422 with the reload-and-redo message, that only one new snapshot key exists, and that the Current Pointer names the winner's version.",
+        "Seed a rollback (publish v2, roll back to v1), submit an edit on base 1, and assert status 422 with the rollback explanation and that nothing was written.",
+        "Run with the fail-not-skip LocalStack rule from Horizon 3."
+      ],
+      "boundedContext": "Snapshot Editing (dashboard)",
+      "layer": "interface",
+      "blastRadius": "small",
+      "inputs": [
+        "packages/dashboard/integration/dashboard.localstack.test.ts"
+      ],
+      "expectedResult": "Passing LocalStack integration cases in dashboard.localstack.test.ts proving that an edit yields version n+1 and that same-base concurrent edits publish exactly once",
+      "dependsOn": [
+        "add-feature-edit-post-route"
+      ],
+      "rubric": [
+        {
+          "id": "minimal-diff-proof",
+          "label": "n+1 differs only in the edited field and metadata",
+          "ruleStatement": "The test fetches v1 and v2 from S3 and asserts that the diff is exactly the edited field plus version/previousVersion/createdAt/createdBy/reason. 10 = the seed includes a Feature with no rules key and asserts that it survives byte-faithfully. 8 = there is a structured diff assertion for both the enabled and the config-default edits.",
+          "passCriteria": [
+            "The test computes the differing paths between the parsed v1 and v2 and asserts that the set equals the expected 6 paths",
+            "The seed has a Feature without `rules`, and v2's raw text for it has no `rules` key",
+            "The config-default edit asserts the new default value and that the other Features are unchanged"
+          ],
+          "failureExamples": [
+            "Asserting only v2.features[key].enabled === false, which misses injected rules:[] or dropped fields"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "exactly-once-concurrent",
+          "label": "Same-base concurrent edits publish exactly once",
+          "ruleStatement": "Both a sequential and a Promise.all pair of same-base edits yield exactly one 200 and one 422 with the reload message, exactly one new snapshot key, and a pointer on the winner. 10 = the concurrent case lists the snapshots/ prefix and asserts the exact key set.",
+          "passCriteria": [
+            "The Promise.all case sorts the statuses and asserts [200, 422]",
+            "HeadObject on <env>/snapshots/2.json succeeds and on <env>/snapshots/3.json returns not found (test-only raw client check; the dashboard itself never lists)",
+            "current.json version equals 2, and the v2 body carries the winner's edit"
+          ],
+          "failureExamples": [
+            "Only testing the sequential case, which never exercises the IfNoneMatch or IfMatch race",
+            "Asserting that 'at least one' request succeeded"
+          ],
+          "minScore": 9
+        },
+        {
+          "id": "rollback-edit-writes-nothing",
+          "label": "Edit after rollback refused with nothing written",
+          "ruleStatement": "After publishing v2 and rolling back to v1, an edit on base 1 returns 422 with the rollback explanation, and the S3 state is unchanged.",
+          "passCriteria": [
+            "The test asserts status 422 and the EDIT_AFTER_ROLLBACK text",
+            "The snapshots key list and the current.json bytes are identical before and after the request"
+          ],
+          "failureExamples": [
+            "Checking only the status code, and missing that the pointer was changed"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "real-stack-fail-not-skip",
+          "label": "Runs through the real server and fails without LocalStack",
+          "ruleStatement": "The requests go through the real HTTP server with aws-adapters (no fake writer), and a missing LocalStack fails the run instead of skipping it.",
+          "passCriteria": [
+            "The test builds ports via createAwsDashboardPorts against the LocalStack endpoint and sends real HTTP POSTs that include an allowed Origin",
+            "It uses the Horizon 3 fail-not-skip helper, so with no LocalStack the suite errors",
+            "The file is under integration/ and excluded from unit coverage"
+          ],
+          "failureExamples": [
+            "Using describe.skipIf(!localstack), so CI silently passes"
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "The most likely failure is a flaky or omitted concurrent case. Fire both POSTs with Promise.all against real aws-adapters, then assert the sorted statuses [200, 422] and the exact snapshots/ key list."
+    }
+  ],
+  "successCriteria": [
+    "An Operator on the environment page (the current version only; older version pages stay read-only) can flip a Feature's enabled flag or replace a config Feature's default JSON and submit it. The dashboard publishes version n+1, whose body differs from version n only in the edited field and the version/previousVersion/createdAt/createdBy/reason metadata. The success notice ('Published version N') appears on the re-rendered environment page with status 200; there is no redirect. The publish is a compare-and-swap: the edit carries its Base Version as expectedCurrentVersion, and S3SnapshotPublisher checks it against the same pointer read whose ETag guards the conditional pointer write. When two edits are submitted at the same time on the same base, exactly one succeeds. The other writes nothing and is re-rendered with status 422, the Operator's draft kept, and a message like 'Someone else published version N meanwhile — reload and redo your edit'. An edit made after a Rollback (when the next version number already exists) is refused, writes nothing, and shows a clear VERSION_EXISTS explanation; the real fix is deferred. The CLI, paste-publish and rollback behave exactly as before. All new code has 100% unit coverage, and LocalStack cases prove that a mismatched expectation writes nothing.",
+    "Add pure Flag Edit function for snapshots: packages/dashboard/src/domain/flag-edit.ts exporting applyFlagEdit, covered 100% by test/domain/flag-edit.test.ts",
+    "Add expected current version to publisher: S3SnapshotPublisher.publish accepting { expectedCurrentVersion } and throwing CONFLICT with nothing written on mismatch, covered 100% by s3-snapshot-publisher.test.ts plus one passing LocalStack case",
+    "Add edit feature use case with version expectation: packages/dashboard/src/application/edit-feature.ts exporting editFeature, covered 100% by test/application/edit-feature.test.ts",
+    "Add per-feature edit forms to snapshot view: packages/dashboard/src/infrastructure/views/feature-edit-form.ts rendering escaped per-feature edit forms, covered 100% by its colocated test",
+    "Add feature edit POST route to dashboard: A POST /env/:env/features/:key route in http-server.ts, wired through aws-adapters.ts with expectedCurrentVersion forwarded, returning 200 with the new version or 422 with a mapped message, covered 100% by http-server.test.ts",
+    "Test Flag Edit end to end on LocalStack: Passing LocalStack integration cases in dashboard.localstack.test.ts proving that an edit yields version n+1 and that same-base concurrent edits publish exactly once"
+  ],
+  "deferred": [
+    "Editing targeting rules and conditions: the rule and condition schema needs a much richer form UI. This slice covers values only.",
+    "Adding, deleting or renaming features: this changes the snapshot's structure and must be kept consistent with app definitions. It is a separate slice.",
+    "Fixing publish or edit after rollback (reopening the horizon-4 versioning decision): the user explicitly passed over this focus. It is only surfaced as a risk.",
+    "Hardening the dashboard (CSRF tokens, DNS-rebinding defence, auth): the user explicitly passed over this focus, and the horizon-10 decision on the Origin/Host check is binding.",
+    "Snapshot file upload, diff views and evaluation preview (the brief's 'safer publishing' theme): the user did not choose them.",
+    "A UI framework, client-side bundle or build step: the horizon-10 decision requires plain node:http and HTML strings.",
+    "Batch or multi-feature draft editing with a single publish: this needs session or draft state. The slice publishes one edit at a time.",
+    "Pagination, ListObjectsV2 or IAM policy changes: these are unrelated to editing, and the pointer-only listing decision is binding.",
+    "Live updates via SNS/SQS in the dashboard: unrelated to editing, and manual refresh is enough.",
+    "Extracting config and error helpers shared by the CLI and the dashboard: refactoring debt that is not needed for editing.",
+    "Hosted or multi-user deployment of the dashboard: it stays a local tool bound to 127.0.0.1.",
+    "Configurable createdBy (CLI flag or env var for Operator identity): fails gate 1 (no current need); AWS credentials already identify the Operator, and the constant 'dashboard' satisfies the snapshot contract",
+    "Free-text reason field on the edit form: fails gate 1; the generated reason describes the edit, so add the field only when someone asks for it",
+    "303 redirect after a successful edit: fails gate 4 (ceremony); it needs flash/query state, whereas render-with-notice already shows the new version on the re-rendered page and matches the existing POSTs",
+    "Publisher rejecting a body whose version/previousVersion disagrees with the computed version: fails gate 3 (it changes behaviour for existing CLI/paste-publish callers); the edit path is already consistent through expectedCurrentVersion",
+    "Moving applyFlagEdit into @featuresync/core: fails gate 2 (only one consumer); the core public API grows only when a second consumer appears",
+    "Validating a config default against the app's Zod definition: fails gate 1; the dashboard has no access to app definitions",
+    "Fixing edit-after-rollback VERSION_EXISTS (publishing past existing higher versions): out of scope by user choice; it is refused with a clear explanation",
+    "Editing rules, adding or deleting features, multi-feature drafts, and diff preview: out of scope for this slice",
+    "CSRF tokens and DNS-rebinding defence: out of scope; the Horizon 10 Origin/Host decision is binding"
+  ],
+  "revision": 0
+}

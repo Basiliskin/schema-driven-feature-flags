@@ -1,0 +1,303 @@
+{
+  "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-11-in-browser-flag-editing-roadmap.json",
+  "roadmapTask": "Horizon 11 of FeatureSync: in-browser flag editing in the local dashboard — operators edit a feature's enabled flag and a config feature's default value instead of pasting a whole snapshot JSON; each edit publishes a new snapshot version via S3SnapshotPublisher with a compare-and-swap on the expected current version. Production-ready, 100% coverage.",
+  "roadmapRevision": 0,
+  "createdAt": "2026-09-19T09:47:27Z",
+  "updatedAt": "2026-09-19T12:53:30Z",
+  "phases": [
+    {
+      "phaseId": "add-flag-edit-domain-function",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-19T09:47:27Z",
+      "completedAt": "2026-09-19T09:52:47Z",
+      "baseRef": "832819a2f3b57cfd6a1b81ada80c88053e6f570a",
+      "baseDirty": true,
+      "gateRun": "pnpm run verify (build all, typecheck, lint, vitest --coverage 100%): pass",
+      "gradeResult": {
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "byte-faithful-unedited-copy",
+            "score": 8,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "metadata-and-version-arithmetic",
+            "score": 10,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "typed-failure-branches",
+            "score": 8,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "domain-layer-purity",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          }
+        ]
+      },
+      "compensationInvoked": false,
+      "amendments": [],
+      "unplannedFiles": [],
+      "notes": "Already dirty at start: docs/roadmaps/featuresync/{decisions,discoveries,state}.md, next-horizon-brief.md (deleted), archive/, horizons/horizon-11-* (planning output). Changed: packages/dashboard/src/domain/flag-edit.ts (new), packages/dashboard/test/domain/flag-edit.test.ts (new). applyFlagEdit(raw text, FlagEdit, meta) spreads the raw JSON, edits one feature field, sets version/previousVersion/createdAt/createdBy/reason from meta, validates with parseSnapshot, returns typed failures (UNKNOWN_FEATURE via Object.hasOwn, DEFAULT_NOT_EDITABLE, INVALID_DEFAULT_JSON, INVALID_SNAPSHOT as path: message strings). Local run: 15 tests pass, 100% coverage on the file, tsc and eslint clean. Note: strict snapshot schema makes an unknown top-level field fail as INVALID_SNAPSHOT (tested) rather than pass through. Grade: 8/10/8/9, passed first try. Grader concerns (non-blocking): INVALID_SNAPSHOT test triggered by meta rather than by an edit; a raw snapshot text that is not JSON throws instead of returning a failure."
+    },
+    {
+      "phaseId": "add-expected-version-to-s3-publisher",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-19T09:53:40Z",
+      "completedAt": "2026-09-19T12:26:23Z",
+      "baseRef": "832819a2f3b57cfd6a1b81ada80c88053e6f570a",
+      "baseDirty": true,
+      "gateRun": "pnpm run verify (build all, typecheck, lint, vitest --coverage 100%): pass; aws LocalStack integration (6 files, 15 tests): pass",
+      "gradeResult": {
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "cas-writes-nothing-on-mismatch",
+            "score": 10,
+            "minScore": 9,
+            "passed": true
+          },
+          {
+            "dimensionId": "backward-compatible-signature",
+            "score": 10,
+            "minScore": 9,
+            "passed": true
+          },
+          {
+            "dimensionId": "check-uses-same-pointer-read",
+            "score": 10,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "infra-layer-and-export",
+            "score": 10,
+            "minScore": 7,
+            "passed": true
+          }
+        ]
+      },
+      "compensationInvoked": false,
+      "amendments": [],
+      "unplannedFiles": [],
+      "notes": "Already dirty at start: roadmap memory/planning files and phase-1 files (packages/dashboard/src/domain/, packages/dashboard/test/domain/). Changed: packages/aws/src/infrastructure/s3-snapshot-publisher.ts (PublishOptions + checkExpectedVersion right after the single readPointer, before any put; CONFLICT with cause \"Expected current version X, found Y|none\"), packages/aws/src/index.ts (re-export type PublishOptions), s3-snapshot-publisher.test.ts (4 added tests, no existing ones changed), s3-snapshot-publisher.localstack.test.ts (stale-expectation case: CONFLICT, current.json bytes unchanged, HeadObject snapshots/2.json 404). Local: 39 unit tests pass, 100% coverage on the publisher, eslint + tsc clean; LocalStack suite 5/5 pass. Rollback and CLI untouched. Grade: 10/10/10/10, passed first try; each 10 names an observable above-bar item (LocalStack byte-compare, {} options test, exact GetObject count, JSDoc). Compensation: revert the commit; publish goes back to two arguments and no caller needs changing. Local .env lacked AWS_ENDPOINT_URL_SNS; sourced .env.example first."
+    },
+    {
+      "phaseId": "add-edit-feature-use-case",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-19T12:28:31Z",
+      "completedAt": "2026-09-19T12:33:46Z",
+      "baseRef": "832819a2f3b57cfd6a1b81ada80c88053e6f570a",
+      "baseDirty": true,
+      "gateRun": "pnpm run verify (build all, typecheck, lint, vitest --coverage 100%): pass",
+      "gradeResult": {
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "expectation-passed-no-preread",
+            "score": 10,
+            "minScore": 9,
+            "passed": true
+          },
+          {
+            "dimensionId": "conflict-vs-rollback-disambiguation",
+            "score": 10,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "shared-port-unchanged-for-existing-callers",
+            "score": 10,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "application-layer-boundary",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          }
+        ]
+      },
+      "compensationInvoked": false,
+      "amendments": [],
+      "unplannedFiles": [],
+      "notes": "Already dirty at start: roadmap memory/planning files, phase-1 dashboard domain files, phase-2 aws publisher files. Changed: packages/dashboard/src/application/edit-feature.ts (new: editFeature fetches text at baseVersion, applyFlagEdit with createdBy \"dashboard\" + generated reason + ports.now(), publishes via exported write() with {expectedCurrentVersion: baseVersion}, no pre-read; on CONFLICT/VERSION_EXISTS re-reads the pointer: VERSION_EXISTS with pointer==base -> EDIT_AFTER_ROLLBACK, else EDIT_CONFLICT(N), re-read failure/undefined -> wording without N), publish-snapshot.ts (optional options arg on SnapshotWriter.publish, export keyword on write; WriteOutcome was already exported), error-messages.ts (EDIT_CONFLICT, EDIT_AFTER_ROLLBACK, UNKNOWN_FEATURE_MESSAGE, DEFAULT_NOT_EDITABLE_MESSAGE, INVALID_DEFAULT_JSON_MESSAGE, EDITED_SNAPSHOT_INVALID_MESSAGE appended), test/application/edit-feature.test.ts (new, 25 tests incl. all 4 conflict paths, every fetch/publish reason, each domain failure). Existing publish/rollback tests untouched and green. Local: 59 application tests pass, 100% coverage on all 4 application files, eslint + tsc clean. INVALID_DEFAULT_JSON carries the parser message as its single issue. Grade: 10/10/10/9, passed first try; each 10 names an observable above-bar item (ordered fetch→publish call log, exact message strings asserted, publish-snapshot diff limited to 2 permitted hunks). Grader concern (non-blocking): the S3PublishError reason is detected by matching the class-name string, which couples the application layer to aws naming rather than a port-defined error shape. Compensation: none defined (revert the files)."
+    },
+    {
+      "phaseId": "add-feature-edit-form-view",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-19T12:35:32Z",
+      "completedAt": "2026-09-19T12:39:52Z",
+      "baseRef": "832819a2f3b57cfd6a1b81ada80c88053e6f570a",
+      "baseDirty": true,
+      "gateRun": "pnpm run verify (build all, typecheck, lint, vitest --coverage 100%): pass",
+      "gradeResult": {
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "escape-every-rendered-value",
+            "score": 9,
+            "minScore": 9,
+            "passed": true
+          },
+          {
+            "dimensionId": "config-vs-boolean-controls",
+            "score": 10,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "read-only-version-page",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "draft-error-rendering",
+            "score": 9,
+            "minScore": 7,
+            "passed": true
+          },
+          {
+            "dimensionId": "view-layer-boundary",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          }
+        ]
+      },
+      "compensationInvoked": false,
+      "amendments": [
+        {
+          "phaseId": "add-feature-edit-form-view",
+          "at": "2026-09-19T12:37:19Z",
+          "reason": "changes[3] says only the environment page passes editable, but environment-page.ts was in neither this phase nor phase 5 filesAffected; phase 5 renders the env page with an EditDraft, so the page must accept one. Same goal, one more file.",
+          "before": {
+            "filesAffected": [
+              "packages/dashboard/src/infrastructure/views/feature-edit-form.ts",
+              "packages/dashboard/src/infrastructure/views/snapshot-contents.ts",
+              "packages/dashboard/src/infrastructure/views/feature-edit-form.test.ts"
+            ]
+          },
+          "after": {
+            "filesAffected": [
+              "packages/dashboard/src/infrastructure/views/feature-edit-form.ts",
+              "packages/dashboard/src/infrastructure/views/snapshot-contents.ts",
+              "packages/dashboard/src/infrastructure/views/feature-edit-form.test.ts",
+              "packages/dashboard/src/infrastructure/views/environment-page.ts"
+            ]
+          }
+        }
+      ],
+      "unplannedFiles": [],
+      "notes": "Already dirty at start: roadmap memory/planning files, phase 1-3 files (dashboard domain/, application/ edit-feature + publish-snapshot + error-messages, aws publisher files). Changed: views/feature-edit-form.ts (new: renderFeatureEditForm(flag, {environment, baseVersion, draft?}) -> POST /env/<env>/features/<key> via environmentPath+encodeURIComponent, all values escapeHtml; hidden baseVersion, enabled checkbox, config-only default textarea (pretty JSON); field discriminator = submit button name=field value=enabled|default; EditDraft {key, enabled?, defaultJson?, message, issues} shown only on the matching key), views/snapshot-contents.ts (optional editable: EditContext adds Edit column; omitted output byte-identical, asserted with toBe), views/environment-page.ts (amendment: EnvironmentPageState.editDraft, passes editable with baseVersion=currentVersion; version-page.ts untouched), views/feature-edit-form.test.ts (new, 14 tests incl. hostile key/textarea, a/b encoding, draft on right row). Local: 148 dashboard tests pass, views 100% coverage, tsc + eslint clean. Grade: 9/10/9/9/9, passed first try (the 10 is for the checkbox asserted both ways plus literal field-discriminator buttons). Grader concerns (non-blocking): the hostile-key test covers only the form, not the snapshot-contents key cell; the byte-identical test pins a hand-written literal rather than diffing against the previous commit. Compensation: none defined."
+    },
+    {
+      "phaseId": "add-feature-edit-post-route",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-19T12:41:37Z",
+      "completedAt": "2026-09-19T12:46:50Z",
+      "baseRef": "832819a2f3b57cfd6a1b81ada80c88053e6f570a",
+      "baseDirty": true,
+      "gateRun": "pnpm run verify (build all, typecheck, lint, vitest --coverage 100%): pass",
+      "gradeResult": {
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "origin-guard-and-body-cap",
+            "score": 10,
+            "minScore": 9,
+            "passed": true
+          },
+          {
+            "dimensionId": "expected-version-wired-to-s3",
+            "score": 10,
+            "minScore": 9,
+            "passed": true
+          },
+          {
+            "dimensionId": "form-parsing-and-status",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "existing-routes-unchanged",
+            "score": 9,
+            "minScore": 9,
+            "passed": true
+          },
+          {
+            "dimensionId": "interface-layer-thin",
+            "score": 9,
+            "minScore": 7,
+            "passed": true
+          }
+        ]
+      },
+      "compensationInvoked": false,
+      "amendments": [],
+      "unplannedFiles": [
+        "packages/dashboard/test/main.test.ts",
+        "packages/dashboard/src/infrastructure/aws-adapters.test.ts"
+      ],
+      "notes": "Already dirty at start: roadmap memory/planning files, phase 1-4 files (dashboard domain/, application/, infrastructure/views/, aws publisher files). Changed: http-server.ts (DashboardPorts = EditFeaturePorts; 4-segment POST /env/:env/features/:key inside match(), so the shared 405/403 Origin-Host guard and 1 MiB readForm cap apply; key via decodeSegment; parseEditForm: baseVersion regex else 422 reload message, field enabled|default else 422, enabled = fields.has(enabled), default ?? empty; calls editFeature; 200 with success notices, 422 with error notice + EditDraft (typed default and checkbox kept) re-rendering the env page, no redirect), aws-adapters.ts (now: () => new Date(); openWriter still returns the publisher itself, so options reach S3SnapshotPublisher.publish), http-server.test.ts (NOW const + now in fakes fixture; 15 new tests: success asserts options {expectedCurrentVersion:1}, fetch at base, createdAt from clock, Published version 2; unchecked=false; default edit; a%2Fb decodes to a/b; bad/missing/0 baseVersion 422; bad field 422; unknown key; escaped invalid-JSON draft; missing default; checkbox kept in draft; CONFLICT names 7; VERSION_EXISTS rollback text; 405 GET + 400 bad encoding; foreign Origin and Host-only 403 with no writer). Unplanned: test/main.test.ts (one fixture line: now, needed because DashboardPorts now requires the clock), aws-adapters.test.ts (clock test for coverage). Existing tests unedited apart from these fixture lines. An unknown-key failure has no row to show on, so failures also render a page-level error notice. Discovery logged: feature keys cannot contain /. Local: 166 dashboard tests pass, dashboard 100% coverage, tsc + eslint clean. VERIFY: grade 10/10/9/9/9, passed first try (10s: 403 test covers foreign Origin and Host-only with openWriter never called; adapter returns publisher directly). Grader concerns (non-blocking): empty key 404 only incidental (empty segments filtered), no test, whitespace key gives 422; baseVersion uses local regex (9-digit cap) instead of planned parseVersion; GET features/:key now 405 instead of 404. Compensation: existing Rollback moves the pointer back; snapshots never deleted."
+    },
+    {
+      "phaseId": "test-flag-edit-against-localstack",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-19T12:47:51Z",
+      "completedAt": "2026-09-19T12:53:30Z",
+      "baseRef": "832819a2f3b57cfd6a1b81ada80c88053e6f570a",
+      "baseDirty": true,
+      "gateRun": "pnpm run verify (build all, typecheck, lint, vitest --coverage 100%): pass; pnpm run test:integration (aws 15, dashboard 7): pass",
+      "gradeResult": {
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "minimal-diff-proof",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "exactly-once-concurrent",
+            "score": 10,
+            "minScore": 9,
+            "passed": true
+          },
+          {
+            "dimensionId": "rollback-edit-writes-nothing",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "real-stack-fail-not-skip",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          }
+        ]
+      },
+      "compensationInvoked": false,
+      "amendments": [],
+      "unplannedFiles": [],
+      "notes": "Already dirty at start: roadmap memory/planning files and phase 1-5 files (dashboard domain/, application/, infrastructure/, test/, aws publisher files). Changed: packages/dashboard/integration/dashboard.localstack.test.ts only (5 new cases in the existing describe, reusing main()+createAwsDashboardPorts via the real server, Origin header, and the file-level throw when AWS_ENDPOINT_URL_S3 is unset): enabled edit v1->v2 with differingPaths == edited field + 5 metadata paths, new-dashboard has no rules key; config default edit; sequential same-base second edit 422 with EDIT_CONFLICT(2), exact key list; Promise.all pair sorted [200,422], exact key list, HeadObject 2 exists / 3 NotFound, pointer 2, v2 carries winner edit; edit after rollback 422 EDIT_AFTER_ROLLBACK text, key list and current.json bytes unchanged. Local: LocalStack suite 7/7 pass, eslint + dashboard tsc clean. VERIFY: grade 9/10/9/9, passed first try (10: exact sorted key set on a fresh bucket). Grader concerns (non-blocking): no-rules check is on parsed v2, not raw text; winner identified by Promise.all order. Compensation: existing Rollback moves the pointer back; snapshots never deleted."
+    }
+  ]
+}

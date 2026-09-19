@@ -26,6 +26,7 @@ export function createAwsDashboardPorts(config: AwsDashboardConfig): DashboardPo
   const reader = createS3CurrentPointerReader(s3);
   const fetcher = createS3SnapshotFetcher(s3);
   return {
+    now: () => new Date(),
     readCurrentVersion: (environment) => reader.read(environment),
     fetchSnapshotText: async (environment, version) => (await fetcher.fetch(environment, version)).text,
     openWriter: (onNotifyError) =>
