@@ -11,11 +11,18 @@ const renderFlagBadges = (flag: FlagDefinitionView): string =>
 const renderTableRow = (flag: FlagDefinitionView): string =>
   `<tr><td data-label="Flag"><code>${escapeHtml(flag.key)}</code></td><td data-label="Type">${flag.type}</td><td data-label="Enabled">${String(flag.enabled)}</td><td data-label="Default"><code>${escapeHtml(JSON.stringify(flag.defaultValue))}</code></td><td data-label="Rules">${String(flag.ruleCount)}</td></tr>`;
 
-const renderFlagCard = (flag: FlagDefinitionView, editable: EditContext): string => `<li class="card flag" data-flag="${escapeHtml(flag.key)}">
-<div class="card-head"><h3 class="flag-key">${escapeHtml(flag.key)}</h3>${renderFlagBadges(flag)}</div>
+// Each flag is a one-line row that expands to its editor, so a long list stays scannable.
+// A row opens by itself when it holds a rejected draft, so the error sits next to the input.
+const renderFlagCard = (flag: FlagDefinitionView, editable: EditContext): string => {
+  const open = editable.draft?.key === flag.key ? ' open' : '';
+  return `<li class="card flag" data-flag="${escapeHtml(flag.key)}" data-search="${escapeHtml(`${flag.key} ${flag.type} ${flag.enabled ? 'on' : 'off'}`.toLowerCase())}">
+<details class="flag-row"${open}>
+<summary><span class="flag-key">${escapeHtml(flag.key)}</span>${renderFlagBadges(flag)}<span class="flag-summary muted">${rulesLabel(flag.ruleCount)}</span></summary>
 <p class="muted">Default <code>${escapeHtml(JSON.stringify(flag.defaultValue))}</code> · ${rulesLabel(flag.ruleCount)}</p>
 ${renderFeatureEditForm(flag, editable)}
+</details>
 </li>`;
+};
 
 export const renderSnapshotContents = (contents: SnapshotContents, editable?: EditContext): string => {
   if (contents.status === 'invalid') {

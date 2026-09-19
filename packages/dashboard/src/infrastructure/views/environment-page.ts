@@ -72,10 +72,16 @@ const renderFlags = (view: PublishedView, state: EnvironmentPageState): string =
     current.contents.status === 'valid'
       ? `\n${renderNewFlagForm({ ...context, ...(createDraft === undefined ? {} : { draft: createDraft }) })}`
       : '';
+  // Revealed by the page script; without JavaScript every flag simply stays listed.
+  const filter =
+    current.contents.status === 'valid' && current.contents.flags.length > 0
+      ? `<input type="search" class="flag-filter" data-filter="flag-list" placeholder="Filter flags…" aria-label="Filter flags by key, type or on/off" hidden>`
+      : '';
   return `<section class="section" aria-labelledby="flags-heading">
-<div class="section-head"><h2 id="flags-heading">Flags</h2></div>
+<div class="section-head"><h2 id="flags-heading">Flags</h2>${filter}</div>
 <div class="stack">
-${flags}${newFlag}
+${flags}
+<p class="muted" data-filter-empty hidden>No flags match.</p>${newFlag}
 </div>
 </section>`;
 };
@@ -113,15 +119,18 @@ ${[...view.versions]
 </ol>
 </section>`;
 
-const renderPublishForm = (view: EnvironmentView, draft: string | undefined): string => `<section class="section card" aria-labelledby="publish-heading">
-<h2 id="publish-heading">Publish a new version</h2>
+// A modal dialog keeps the raw-JSON editor out of the way until it is asked for. It opens on load when
+// a publish was rejected, so the operator lands back on their draft; without JavaScript it renders inline.
+const renderPublishDialog = (view: EnvironmentView, draft: string | undefined): string => `<dialog id="publish-dialog" class="publish-dialog" aria-labelledby="publish-heading"${draft === undefined ? '' : ' data-open-on-load'}>
+<div class="dialog-head"><h2 id="publish-heading">Publish a new version</h2>
+<form method="dialog"><button type="submit" class="button-secondary" aria-label="Close">Close</button></form></div>
 <p class="muted">Starts from the current snapshot. <code>version</code>, <code>previousVersion</code> and <code>createdAt</code> are set when you publish.</p>
 <form method="post" action="${escapeHtml(`${environmentPath(view.environment)}/publish`)}" class="stack">
 <label for="snapshot">Snapshot JSON</label>
 <textarea id="snapshot" name="snapshot" rows="16" required spellcheck="false">${escapeHtml(draft ?? prefill(view))}</textarea>
 <div class="actions"><button type="submit">Publish</button></div>
 </form>
-</section>`;
+</dialog>`;
 
 export const renderEnvironmentPage = (view: EnvironmentView, state: EnvironmentPageState = {}): string => {
   const summary =
@@ -130,9 +139,10 @@ export const renderEnvironmentPage = (view: EnvironmentView, state: EnvironmentP
       : `${renderCurrentCard(view)}\n${renderFlags(view, state)}\n${renderVersions(view)}`;
   return renderPage(
     view.environment,
-    `<div class="page-head"><p class="eyebrow">Environment</p><h1>Environment ${escapeHtml(view.environment)}</h1></div>
+    `<div class="page-head page-head-actions"><div><p class="eyebrow">Environment</p><h1>Environment ${escapeHtml(view.environment)}</h1></div>
+<button type="button" data-open-dialog="publish-dialog" hidden>Publish new version</button></div>
 ${summary}
-${renderPublishForm(view, state.draft)}`,
+${renderPublishDialog(view, state.draft)}`,
     state.notices,
   );
 };

@@ -29,7 +29,7 @@ const RAW = {
 const CONTENTS: SnapshotContents = { status: 'valid', flags: [BOOLEAN, CONFIG], metadata: METADATA, raw: RAW };
 
 const rowOf = (html: string, key: string): string => {
-  const start = html.indexOf(`<li class="card flag" data-flag="${key}">`);
+  const start = html.indexOf(`<li class="card flag" data-flag="${key}"`);
   const end = html.indexOf('</li>', start);
   return html.slice(start, end);
 };
@@ -177,6 +177,30 @@ describe('renderEnvironmentPage edit forms', () => {
     versions: [{ version: 6 }, { version: 7, metadata: METADATA }],
     current: { environment: 'production', version: 7, status: 'available', contents: CONTENTS },
   };
+
+  it('collapses every flag row unless it holds a rejected draft', () => {
+    const closed = renderEnvironmentPage(view);
+    expect(rowOf(closed, 'checkout-limits')).toContain('<details class="flag-row">');
+    const html = renderEnvironmentPage(view, {
+      editDraft: { key: 'checkout-limits', defaultJson: '{}', message: 'Bad', issues: [] },
+    });
+    expect(rowOf(html, 'checkout-limits')).toContain('<details class="flag-row" open>');
+    expect(rowOf(html, 'new-dashboard')).toContain('<details class="flag-row">');
+  });
+
+  it('indexes each flag for the filter by key, type and on/off state', () => {
+    const html = renderEnvironmentPage(view);
+    expect(html).toContain('data-filter="flag-list"');
+    expect(html).toMatch(/data-flag="new-dashboard" data-search="new-dashboard boolean (on|off)"/);
+  });
+
+  it('puts the publish form in a dialog opened from the page header', () => {
+    const html = renderEnvironmentPage(view);
+    expect(html).toContain('data-open-dialog="publish-dialog"');
+    expect(html).toContain('<dialog id="publish-dialog" class="publish-dialog" aria-labelledby="publish-heading">');
+    const rejected = renderEnvironmentPage(view, { draft: '{}' });
+    expect(rejected).toContain('aria-labelledby="publish-heading" data-open-on-load>');
+  });
 
   it('renders edit forms for the current version', () => {
     const html = renderEnvironmentPage(view);

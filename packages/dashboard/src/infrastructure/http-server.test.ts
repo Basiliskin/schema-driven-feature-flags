@@ -129,7 +129,7 @@ describe('startDashboardServer', () => {
     const page = await call(dashboard, 'GET', '/env/production');
 
     expect(page.status).toBe(200);
-    expect(page.body).toContain('<h3 class="flag-key">new-dashboard</h3><span class="badge">boolean</span>');
+    expect(page.body).toContain('<span class="flag-key">new-dashboard</span><span class="badge">boolean</span>');
     expect(page.body).toContain('<code>{&quot;max&quot;:3}</code>');
     expect(page.body).toContain('Current snapshot · v3');
     expect(page.body).toContain('<a href="/env/production/versions/3">Version 3</a><span class="badge badge-accent">current</span>');

@@ -131,10 +131,6 @@ pre {
   padding: 0;
 }
 
-.flag-list > li + li {
-  margin-top: 0.75rem;
-}
-
 .flag-key {
   margin: 0;
   font-family: var(--mono);
@@ -186,4 +182,94 @@ pre {
 
 .timeline p {
   margin: 0;
+}
+
+/* Collapsible flag rows. */
+.flag-list > li.flag {
+  padding: 0 1rem;
+}
+
+.flag-list > li + li {
+  margin-top: 0.5rem;
+}
+
+.flag-list > li[hidden] {
+  display: none;
+}
+
+.flag-row > summary {
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  color: var(--text);
+  list-style: none;
+}
+
+.flag-row > summary::-webkit-details-marker {
+  display: none;
+}
+
+.flag-row > summary .flag-key {
+  margin-right: auto;
+}
+
+.flag-row[open] {
+  padding-bottom: 1rem;
+}
+
+.flag-filter {
+  width: 100%;
+  max-width: 18rem;
+}
+
+/* Publish dialog; inline card when scripting is unavailable. */
+.page-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.publish-dialog {
+  display: block;
+  position: static;
+  width: auto;
+  margin: 2rem 0 0;
+  padding: 1rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.publish-dialog.is-enhanced {
+  display: none;
+  position: fixed;
+  width: min(48rem, calc(100vw - 2 * var(--gutter)));
+  max-height: calc(100vh - 2 * var(--gutter));
+  margin: auto;
+  overflow: auto;
+}
+
+.publish-dialog.is-enhanced[open] {
+  display: block;
+}
+
+.publish-dialog::backdrop {
+  background: rgb(0 0 0 / 45%);
+}
+
+.dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.dialog-head h2 {
+  margin: 0;
+}
+
+.publish-dialog:not(.is-enhanced) .dialog-head form {
+  display: none;
 }
