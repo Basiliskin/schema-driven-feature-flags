@@ -1,0 +1,78 @@
+/* Read-only flag table; below 640px each row becomes a stacked card. */
+.table-wrap {
+  overflow-x: auto;
+}
+
+.flag-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.flag-table th,
+.flag-table td {
+  padding: 0.625rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.flag-table th {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.flag-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+@media (max-width: 640px) {
+  .flag-table,
+  .flag-table tbody,
+  .flag-table tr,
+  .flag-table td {
+    display: block;
+  }
+
+  .flag-table {
+    border: 0;
+    background: none;
+  }
+
+  .flag-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .flag-table tr {
+    margin-bottom: 0.75rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+
+  .flag-table td {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    text-align: right;
+  }
+
+  .flag-table td::before {
+    content: attr(data-label);
+    color: var(--text-muted);
+    font-weight: 600;
+    text-align: left;
+  }
+
+  .flag-table tr td:last-child {
+    border-bottom: 0;
+  }
+}

@@ -3,18 +3,20 @@ import type { AddressInfo } from 'node:net';
 import { browseEnvironment, viewSnapshotVersion } from '../application/browse-environment.js';
 import { editFeature, type EditFeaturePorts } from '../application/edit-feature.js';
 import { describeFailure } from '../application/error-messages.js';
-import type { FlagEdit } from '../domain/flag-edit.js';
+import type { FlagEdit, FlagType } from '../domain/flag-edit.js';
 import {
   publishSnapshot,
   rollbackSnapshot,
   type WriteOutcome,
 } from '../application/publish-snapshot.js';
-import { renderEnvironmentPage } from './views/environment-page.js';
+import { renderEnvironmentPage, type EnvironmentPageState } from './views/environment-page.js';
 import { renderErrorPage } from './views/error-page.js';
 import { environmentPath } from './views/escape.js';
 import type { EditDraft } from './views/feature-edit-form.js';
 import { renderHomePage } from './views/home-page.js';
 import type { Notice } from './views/layout.js';
+import type { CreateDraft } from './views/new-flag-form.js';
+import { STYLESHEET, STYLESHEET_PATH } from './views/stylesheet.js';
 import { renderVersionPage } from './views/version-page.js';
 
 export type DashboardPorts = EditFeaturePorts;
@@ -55,6 +57,19 @@ const send = (response: ServerResponse, status: number, html: string): void => {
     'cache-control': 'no-store',
   });
   response.end(html);
+};
+
+// Pages link the sheet with a content-hash query, so a new release gets a new URL and the old one can be cached for good.
+const stylesheetRoute: Route = {
+  method: 'GET',
+  handle: (_request, response) => {
+    response.writeHead(200, {
+      'content-type': 'text/css; charset=utf-8',
+      'cache-control': 'public, max-age=31536000, immutable',
+      'x-content-type-options': 'nosniff',
+    });
+    response.end(STYLESHEET);
+  },
 };
 
 const redirect = (response: ServerResponse, location: string): void => {
@@ -98,35 +113,76 @@ const outcomeNotices = (outcome: WriteOutcome): Notice[] => {
 const writeStatus = (outcome: WriteOutcome): number => (outcome.kind === 'success' ? 200 : 422);
 
 const BASE_VERSION_MESSAGE = 'The edit form is out of date; reload the page and redo your edit.';
-const FIELD_MESSAGE = 'Choose whether to save the enabled flag or the default value.';
+const FIELD_MESSAGE = 'Choose whether to save the enabled flag, the default value or the rules, or to delete the flag.';
+const TYPE_MESSAGE = 'Choose whether the new flag is a boolean or a config flag.';
 
 type EditRequest =
   | { readonly ok: true; readonly baseVersion: number; readonly edit: FlagEdit }
   | { readonly ok: false; readonly message: string };
 
-const parseEditForm = (key: string, fields: URLSearchParams): EditRequest => {
+const parseBaseVersion = (fields: URLSearchParams): number | undefined => {
   const baseVersion = fields.get('baseVersion');
-  if (baseVersion === null || !/^[1-9]\d{0,8}$/.test(baseVersion)) return { ok: false, message: BASE_VERSION_MESSAGE };
-  const field = fields.get('field');
-  if (field === 'enabled') {
-    return { ok: true, baseVersion: Number(baseVersion), edit: { kind: 'enabled', key, enabled: fields.has('enabled') } };
+  return baseVersion !== null && /^[1-9]\d{0,8}$/.test(baseVersion) ? Number(baseVersion) : undefined;
+};
+
+const parseFeatureEdit = (key: string, fields: URLSearchParams): FlagEdit | undefined => {
+  switch (fields.get('field')) {
+    case 'enabled':
+      return { kind: 'enabled', key, enabled: fields.has('enabled') };
+    case 'default':
+      return { kind: 'default', key, defaultJson: fields.get('default') ?? '' };
+    case 'rules':
+      return { kind: 'setRules', key, rulesJson: fields.get('rules') ?? '' };
+    case 'delete':
+      return { kind: 'delete', key };
+    default:
+      return undefined;
   }
-  if (field === 'default') {
-    return {
-      ok: true,
-      baseVersion: Number(baseVersion),
-      edit: { kind: 'default', key, defaultJson: fields.get('default') ?? '' },
-    };
-  }
-  return { ok: false, message: FIELD_MESSAGE };
+};
+
+const parseEditForm = (key: string, fields: URLSearchParams): EditRequest => {
+  const baseVersion = parseBaseVersion(fields);
+  if (baseVersion === undefined) return { ok: false, message: BASE_VERSION_MESSAGE };
+  const edit = parseFeatureEdit(key, fields);
+  return edit === undefined ? { ok: false, message: FIELD_MESSAGE } : { ok: true, baseVersion, edit };
+};
+
+const isFlagType = (value: string | null): value is FlagType => value === 'boolean' || value === 'config';
+
+const parseCreateForm = (fields: URLSearchParams): EditRequest => {
+  const baseVersion = parseBaseVersion(fields);
+  if (baseVersion === undefined) return { ok: false, message: BASE_VERSION_MESSAGE };
+  const type = fields.get('type');
+  if (!isFlagType(type)) return { ok: false, message: TYPE_MESSAGE };
+  const key = fields.get('key') ?? '';
+  const enabled = fields.has('enabled');
+  const edit: FlagEdit =
+    type === 'boolean'
+      ? { kind: 'create', key, type, enabled }
+      : { kind: 'create', key, type, enabled, defaultJson: fields.get('default') ?? '' };
+  return { ok: true, baseVersion, edit };
+};
+
+const createDraftOf = (fields: URLSearchParams, message: string, issues: readonly string[]): CreateDraft => {
+  const type = fields.get('type');
+  return {
+    key: fields.get('key') ?? '',
+    type: type === 'config' ? 'config' : 'boolean',
+    enabled: fields.has('enabled'),
+    defaultJson: fields.get('default') ?? '',
+    message,
+    issues,
+  };
 };
 
 const editDraftOf = (key: string, fields: URLSearchParams, message: string, issues: readonly string[]): EditDraft => {
   const defaultJson = fields.get('default');
+  const rulesJson = fields.get('rules');
   return {
     key,
     enabled: fields.has('enabled'),
     ...(defaultJson === null ? {} : { defaultJson }),
+    ...(rulesJson === null ? {} : { rulesJson }),
     message,
     issues,
   };
@@ -137,11 +193,29 @@ function createDashboardRequestHandler(
   expectedOrigin: () => string,
   logError: (error: unknown) => void,
 ): (request: IncomingMessage, response: ServerResponse) => void {
-  const isSameOrigin = (request: IncomingMessage): boolean => {
-    const origin = request.headers.origin;
-    if (origin !== undefined) return origin === expectedOrigin();
-    return request.headers.host !== undefined && `http://${request.headers.host}` === expectedOrigin();
-  };
+  // Browsers send Origin on every form POST; a request without one is not from this dashboard's pages.
+  const isSameOrigin = (request: IncomingMessage): boolean => request.headers.origin === expectedOrigin();
+
+  const editRoute = (
+    environment: string,
+    parse: (fields: URLSearchParams) => EditRequest,
+    draftState: (fields: URLSearchParams, message: string, issues: readonly string[]) => EnvironmentPageState,
+  ): Route => ({
+    method: 'POST',
+    handle: async (request, response) => {
+      const fields = await readForm(request);
+      const parsed = parse(fields);
+      const outcome: WriteOutcome = parsed.ok
+        ? await editFeature(ports, environment, parsed.baseVersion, parsed.edit)
+        : { kind: 'failure', message: parsed.message, issues: [] };
+      const view = await browseEnvironment(ports, environment);
+      const state = {
+        notices: outcomeNotices(outcome),
+        ...(outcome.kind === 'failure' ? draftState(fields, outcome.message, outcome.issues) : {}),
+      };
+      send(response, writeStatus(outcome), renderEnvironmentPage(view, state));
+    },
+  });
 
   const match = (segments: readonly string[]): Route | undefined => {
     if (segments.length === 0) {
@@ -154,6 +228,7 @@ function createDashboardRequestHandler(
         },
       };
     }
+    if (`/${segments.join('/')}` === STYLESHEET_PATH) return stylesheetRoute;
     if (segments[0] !== 'env' || segments.length < 2 || segments.length > 4) return undefined;
     const environment = decodeSegment(segments[1] as string);
     if (segments.length === 2) {
@@ -190,24 +265,18 @@ function createDashboardRequestHandler(
         },
       };
     }
+    if (segments.length === 3 && segments[2] === 'features') {
+      return editRoute(environment, parseCreateForm, (fields, message, issues) => ({
+        createDraft: createDraftOf(fields, message, issues),
+      }));
+    }
     if (segments.length === 4 && segments[2] === 'features') {
       const key = decodeSegment(segments[3] as string);
-      return {
-        method: 'POST',
-        handle: async (request, response) => {
-          const fields = await readForm(request);
-          const parsed = parseEditForm(key, fields);
-          const outcome: WriteOutcome = parsed.ok
-            ? await editFeature(ports, environment, parsed.baseVersion, parsed.edit)
-            : { kind: 'failure', message: parsed.message, issues: [] };
-          const view = await browseEnvironment(ports, environment);
-          const state = {
-            notices: outcomeNotices(outcome),
-            ...(outcome.kind === 'failure' ? { editDraft: editDraftOf(key, fields, outcome.message, outcome.issues) } : {}),
-          };
-          send(response, writeStatus(outcome), renderEnvironmentPage(view, state));
-        },
-      };
+      return editRoute(
+        environment,
+        (fields) => parseEditForm(key, fields),
+        (fields, message, issues) => ({ editDraft: editDraftOf(key, fields, message, issues) }),
+      );
     }
     if (segments.length === 4 && segments[2] === 'versions') {
       return {

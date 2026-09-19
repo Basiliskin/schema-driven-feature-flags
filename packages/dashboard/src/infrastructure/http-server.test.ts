@@ -21,7 +21,6 @@ const VALID = snapshotText({
   'checkout-limits': { type: 'config', enabled: false, default: { max: 3 } },
 });
 
-const NOW = new Date('2026-09-19T12:00:00.000Z');
 
 interface Fakes {
   readonly ports: DashboardPorts;
@@ -39,7 +38,6 @@ const fakes = (overrides: Partial<DashboardPorts> = {}, writer: Partial<Snapshot
     writer: fakeWriter,
     openWriter,
     ports: {
-      now: () => NOW,
       readCurrentVersion: () => Promise.resolve(3),
       fetchSnapshotText: () => Promise.resolve(VALID),
       openWriter,
@@ -125,27 +123,28 @@ describe('startDashboardServer', () => {
     expect(picked.headers.location).toBe('/env/eu%2Fprod');
   });
 
-  it('renders a published environment with flags, versions, rollback buttons and the rollback note', async () => {
+  it('renders a published environment with flags, versions and a restore button per older version', async () => {
     const dashboard = await start(fakes().ports);
 
     const page = await call(dashboard, 'GET', '/env/production');
 
     expect(page.status).toBe(200);
-    expect(page.body).toContain('<td>new-dashboard</td><td>boolean</td><td>true</td><td><code>true</code></td>');
+    expect(page.body).toContain('<h3 class="flag-key">new-dashboard</h3><span class="badge">boolean</span>');
     expect(page.body).toContain('<code>{&quot;max&quot;:3}</code>');
-    expect(page.body).toContain('<a href="/env/production/versions/3">Version 3</a> (current)');
+    expect(page.body).toContain('Current snapshot · v3');
+    expect(page.body).toContain('<a href="/env/production/versions/3">Version 3</a><span class="badge badge-accent">current</span>');
     expect(page.body).toContain('value="1"');
-    expect(page.body).toContain('Roll back to 2');
-    expect(page.body).not.toContain('Roll back to 3');
-    expect(page.body).toContain('the next publish fails with “version exists”');
-    expect(page.body).toContain('delete or move those newer');
+    expect(page.body).toContain('Restore version 1');
+    expect(page.body).toContain('Restore version 2');
+    expect(page.body).not.toContain('Restore version 3');
+    expect(page.body).not.toContain('by hand');
   });
 
   it('renders the empty, invalid, flagless and unavailable current-version states', async () => {
     const empty = await start(fakes({ readCurrentVersion: () => Promise.resolve(undefined) }).ports);
     const emptyPage = await call(empty, 'GET', '/env/staging');
     expect(emptyPage.body).toContain('Nothing has been published to this environment yet.');
-    expect(emptyPage.body).toContain('the next publish fails with “version exists”');
+    expect(emptyPage.body).not.toContain('by hand');
     await empty.close();
 
     const invalid = await start(fakes({ fetchSnapshotText: () => Promise.resolve('{"schemaVersion":2}') }).ports);
@@ -172,8 +171,8 @@ describe('startDashboardServer', () => {
     const page = await call(dashboard, 'GET', '/env/production/versions/2');
     expect(page.status).toBe(200);
     expect(page.body).toContain('<h1>production · version 2</h1>');
-    expect(page.body).toContain('<td>checkout-limits</td>');
-    expect(page.body).toContain('<a href="/env/production">Back to production</a>');
+    expect(page.body).toContain('<td data-label="Flag"><code>checkout-limits</code></td>');
+    expect(page.body).toContain('<a class="back-link" href="/env/production">Back to production</a>');
     expect(fetchSnapshotText).toHaveBeenCalledWith('production', 2);
 
     const missing = await call(dashboard, 'GET', '/env/production/versions/9');
@@ -199,6 +198,52 @@ describe('startDashboardServer', () => {
     expect((await call(dashboard, 'GET', '/env/%E0%A4%A')).status).toBe(400);
   });
 
+  describe('GET /assets/app.css', () => {
+    it('serves the one stylesheet the pages link, cacheable for good behind its content hash', async () => {
+      const dashboard = await start(fakes().ports);
+
+      const page = await call(dashboard, 'GET', '/env/production');
+      const href = /<link rel="stylesheet" href="([^"]+)">/.exec(page.body)?.[1] as string;
+      const sheet = await call(dashboard, 'GET', href);
+
+      expect(href).toMatch(/^\/assets\/app\.css\?v=[0-9a-f]{12}$/);
+      expect(sheet.status).toBe(200);
+      expect(sheet.headers['content-type']).toBe('text/css; charset=utf-8');
+      expect(sheet.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+      expect(sheet.headers['x-content-type-options']).toBe('nosniff');
+      expect(sheet.body).toContain('@media (prefers-color-scheme: dark)');
+      expect(sheet.body).toContain('@media (max-width: 640px)');
+      expect(sheet.body.indexOf('--bg:')).toBeLessThan(sheet.body.indexOf('.flag-table'));
+    });
+
+    it('accepts GET only and has no other assets', async () => {
+      const dashboard = await start(fakes().ports);
+
+      const post = await call(dashboard, 'POST', '/assets/app.css', { body: '' });
+      expect(post.status).toBe(405);
+      expect(post.headers.allow).toBe('GET');
+      expect((await call(dashboard, 'GET', '/assets/other.css')).status).toBe(404);
+      expect((await call(dashboard, 'GET', '/assets/app.css/x')).status).toBe(404);
+    });
+  });
+
+  it('publishes the pre-filled publish box unchanged as a new version with the same features', async () => {
+    const { ports, writer } = fakes();
+    const dashboard = await start(ports);
+
+    const page = await call(dashboard, 'GET', '/env/production');
+    const prefilled = /<textarea id="snapshot"[^>]*>([^<]*)<\/textarea>/.exec(page.body)?.[1] as string;
+    const text = prefilled.replaceAll('&quot;', '"').replaceAll('&amp;', '&');
+    const reply = await call(dashboard, 'POST', '/env/production/publish', { body: form({ snapshot: text }) });
+
+    expect(reply.status).toBe(200);
+    const published = writer.publish.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(published).not.toHaveProperty('version');
+    expect(published).not.toHaveProperty('previousVersion');
+    expect(published).not.toHaveProperty('createdAt');
+    expect(published.features).toEqual((JSON.parse(VALID) as Record<string, unknown>).features);
+  });
+
   it('HTML-escapes environment names, flag keys and values, including in attributes', async () => {
     const fetchSnapshotText = vi.fn((_env: string, version: number) =>
       Promise.resolve(
@@ -213,7 +258,7 @@ describe('startDashboardServer', () => {
     const page = await call(dashboard, 'GET', `/env/${environment}`);
     const version = await call(dashboard, 'GET', `/env/${environment}/versions/2`);
 
-    expect(page.body).not.toContain('<script>');
+    expect(page.body).not.toContain('<script>"');
     expect(page.body).toContain('Environment &lt;script&gt;&quot;&#39;');
     expect(page.body).toContain('<li>features.x&quot;&amp;&lt;y: ');
     expect(version.body).not.toContain('<b>');
@@ -230,7 +275,8 @@ describe('startDashboardServer', () => {
 
       expect(reply.status).toBe(200);
       expect(reply.body).toContain('Published version 4 to production.');
-      expect(reply.body).toContain('></textarea>');
+      // After a successful publish the box is pre-filled from the new current snapshot, not the old draft.
+      expect(reply.body).toContain('&quot;features&quot;: {');
       expect(openWriter).toHaveBeenCalledTimes(1);
       expect(writer.publish).toHaveBeenCalledWith('production', JSON.parse(VALID));
     });
@@ -270,7 +316,7 @@ describe('startDashboardServer', () => {
       expect(reply.body).toContain('The snapshot is not valid.');
       expect(reply.body).toContain('<li>features.&lt;i&gt;: must be &quot;x&quot;</li>');
       expect(reply.body).toContain('&lt;/textarea&gt;&lt;script&gt;alert(1)&lt;/script&gt;');
-      expect(reply.body).not.toContain('<script>');
+      expect(reply.body).not.toContain('<script>alert(1)');
     });
 
     it('treats a missing snapshot field as invalid JSON without calling the writer', async () => {
@@ -305,8 +351,8 @@ describe('startDashboardServer', () => {
       const reply = await call(dashboard, 'POST', '/env/production/rollback', { body: form({ version: '2' }) });
 
       expect(reply.status).toBe(200);
-      expect(reply.body).toContain('Rolled production back to version 2.');
-      expect(writer.rollback).toHaveBeenCalledWith('production', 2);
+      expect(reply.body).toContain('Restored version 2 of production as version 2.');
+      expect(writer.rollback).toHaveBeenCalledWith('production', 2, { actor: 'dashboard' });
     });
 
     it('shows a failed rollback as an error notice', async () => {
@@ -331,6 +377,107 @@ describe('startDashboardServer', () => {
     });
   });
 
+  describe('POST /env/:env/features', () => {
+    const published = (writer: Fakes['writer']) =>
+      writer.publish.mock.calls[0] as [string, { features: Record<string, unknown> }, unknown];
+    const publishError = (reason: string) => Object.assign(new Error(reason), { name: 'S3PublishError', reason });
+
+    it('creates a boolean flag against the submitted base version', async () => {
+      const { ports, writer } = fakes({}, { publish: () => Promise.resolve(4) });
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'POST', '/env/production/features', {
+        body: form({ baseVersion: '3', key: 'beta', type: 'boolean', enabled: 'on', default: 'ignored' }),
+      });
+
+      expect(reply.status).toBe(200);
+      expect(reply.body).toContain('Published version 4 to production.');
+      const [environment, snapshot, options] = published(writer);
+      expect(environment).toBe('production');
+      expect(options).toEqual({ expectedCurrentVersion: 3 });
+      expect(snapshot.features.beta).toEqual({ type: 'boolean', enabled: true });
+      expect(Object.keys(snapshot.features)).toEqual(['new-dashboard', 'checkout-limits', 'beta']);
+    });
+
+    it('creates a disabled config flag with its default', async () => {
+      const { ports, writer } = fakes();
+      const dashboard = await start(ports);
+
+      await call(dashboard, 'POST', '/env/production/features', {
+        body: form({ baseVersion: '3', key: 'limits', type: 'config', default: '{"max":2}' }),
+      });
+
+      expect(published(writer)[1].features.limits).toEqual({ type: 'config', enabled: false, default: { max: 2 } });
+    });
+
+    it.each<[string, Record<string, string>, string]>([
+      ['a duplicate key', { key: 'new-dashboard', type: 'boolean' }, 'A feature named &quot;new-dashboard&quot; already exists'],
+      ['an invalid key', { key: 'bad/key', type: 'boolean' }, '&quot;bad/key&quot; is not a valid feature key'],
+      ['a missing key', { type: 'boolean' }, '&quot;&quot; is not a valid feature key'],
+      ['a malformed default', { key: 'limits', type: 'config', default: '{' }, 'The default value is not valid JSON.'],
+      ['a missing default', { key: 'limits', type: 'config' }, 'The default value is not valid JSON.'],
+      ['an unknown type', { key: 'limits', type: 'number' }, 'Choose whether the new flag is a boolean or a config flag.'],
+      ['a missing base version', { key: 'limits', type: 'boolean', baseVersion: '' }, 'The edit form is out of date'],
+    ])('answers 422 for %s, keeping the draft and writing nothing', async (_, fields, message) => {
+      const { ports, openWriter } = fakes();
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'POST', '/env/production/features', {
+        body: form({ baseVersion: '3', ...fields }),
+      });
+
+      expect(reply.status).toBe(422);
+      expect(reply.body).toContain(message);
+      expect(reply.body).toContain(`name="key" required value="${fields.key ?? ''}"`);
+      expect(openWriter).not.toHaveBeenCalled();
+    });
+
+    it('keeps the chosen config type, checkbox and default text in the draft', async () => {
+      const { ports } = fakes();
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'POST', '/env/production/features', {
+        body: form({ baseVersion: '3', key: 'limits', type: 'config', enabled: 'on', default: '</textarea>' }),
+      });
+
+      expect(reply.body).toContain('<option value="config" selected>config</option>');
+      expect(reply.body).toContain('<input type="checkbox" name="enabled" checked> Enabled');
+      expect(reply.body).toContain('<textarea name="default" rows="3">&lt;/textarea&gt;</textarea>');
+    });
+
+    it('reports a stale base version as a conflict, not an overwrite', async () => {
+      const { ports, writer } = fakes(
+        { readCurrentVersion: () => Promise.resolve(5) },
+        { publish: () => Promise.reject(publishError('CONFLICT')) },
+      );
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'POST', '/env/production/features', {
+        body: form({ baseVersion: '3', key: 'beta', type: 'boolean' }),
+      });
+
+      expect(reply.status).toBe(422);
+      expect(reply.body).toContain('Someone else published version 5 meanwhile — reload and redo your edit.');
+      expect(published(writer)[2]).toEqual({ expectedCurrentVersion: 3 });
+    });
+
+    it('rejects a missing Origin with 403 and answers GET with 405', async () => {
+      const { ports, openWriter } = fakes();
+      const dashboard = await start(ports);
+
+      const post = await call(dashboard, 'POST', '/env/production/features', {
+        body: form({ baseVersion: '3', key: 'beta', type: 'boolean' }),
+        sameOrigin: false,
+      });
+      const get = await call(dashboard, 'GET', '/env/production/features');
+
+      expect(post.status).toBe(403);
+      expect(get.status).toBe(405);
+      expect(get.headers.allow).toBe('POST');
+      expect(openWriter).not.toHaveBeenCalled();
+    });
+  });
+
   describe('POST /env/:env/features/:key', () => {
     const published = (writer: Fakes['writer']) => writer.publish.mock.calls[0] as [string, Snapshot, unknown];
     type Snapshot = { version: number; createdAt: string; createdBy: string; features: Record<string, Record<string, unknown>> };
@@ -351,8 +498,6 @@ describe('startDashboardServer', () => {
       const [environment, snapshot, options] = published(writer);
       expect(environment).toBe('production');
       expect(options).toEqual({ expectedCurrentVersion: 1 });
-      expect(snapshot.version).toBe(2);
-      expect(snapshot.createdAt).toBe(NOW.toISOString());
       expect(snapshot.createdBy).toBe('dashboard');
       expect(snapshot.features['new-dashboard']?.enabled).toBe(true);
     });
@@ -406,7 +551,7 @@ describe('startDashboardServer', () => {
       },
     );
 
-    it.each([{}, { field: 'rules' }])('answers 422 for a missing or unknown field %o', async (fields) => {
+    it.each([{}, { field: 'nonsense' }])('answers 422 for a missing or unknown field %o', async (fields) => {
       const { ports, openWriter } = fakes();
       const dashboard = await start(ports);
 
@@ -415,7 +560,9 @@ describe('startDashboardServer', () => {
       });
 
       expect(reply.status).toBe(422);
-      expect(reply.body).toContain('Choose whether to save the enabled flag or the default value.');
+      expect(reply.body).toContain(
+        'Choose whether to save the enabled flag, the default value or the rules, or to delete the flag.',
+      );
       expect(openWriter).not.toHaveBeenCalled();
     });
 
@@ -488,7 +635,7 @@ describe('startDashboardServer', () => {
       expect(published(writer)[2]).toEqual({ expectedCurrentVersion: 3 });
     });
 
-    it('explains the rollback leftover when the next version already exists', async () => {
+    it('treats a taken next version as a concurrent publish', async () => {
       const { ports } = fakes({}, { publish: () => Promise.reject(publishError('VERSION_EXISTS')) });
       const dashboard = await start(ports);
 
@@ -497,11 +644,83 @@ describe('startDashboardServer', () => {
       });
 
       expect(reply.status).toBe(422);
-      expect(reply.body).toContain('Version 4 already exists because of an earlier rollback.');
-      expect(reply.body).toContain('paste-publish the snapshot instead');
+      expect(reply.body).toContain('meanwhile — reload and redo your edit.');
+      expect(reply.body).not.toContain('paste-publish');
     });
 
-    it('rejects a foreign Origin, or a foreign Host without Origin, before opening a writer', async () => {
+    it('deletes a feature and publishes the snapshot without it', async () => {
+      const { ports, writer } = fakes();
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'POST', '/env/production/features/new-dashboard', {
+        body: form({ baseVersion: '3', field: 'delete' }),
+      });
+
+      expect(reply.status).toBe(200);
+      const [, snapshot, options] = published(writer);
+      expect(options).toEqual({ expectedCurrentVersion: 3 });
+      expect(Object.keys(snapshot.features)).toEqual(['checkout-limits']);
+    });
+
+    it('publishes edited rules', async () => {
+      const { ports, writer } = fakes();
+      const dashboard = await start(ports);
+      const rules = [{ when: { plan: 'pro' }, value: { max: 9 } }];
+
+      const reply = await call(dashboard, 'POST', '/env/production/features/checkout-limits', {
+        body: form({ baseVersion: '3', field: 'rules', rules: JSON.stringify(rules) }),
+      });
+
+      expect(reply.status).toBe(200);
+      expect(published(writer)[1].features['checkout-limits']?.rules).toEqual(rules);
+    });
+
+    it.each([
+      ['malformed rules JSON', '[{"when"', 'The rules are not valid JSON.'],
+      ['rules that break the schema', '[{"when":{"plan":"pro"},"enabled":true}]', 'The edited snapshot is not valid.'],
+    ])('answers 422 for %s, keeping the escaped draft and writing nothing', async (_, rules, message) => {
+      const { ports, openWriter } = fakes();
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'POST', '/env/production/features/checkout-limits', {
+        body: form({ baseVersion: '3', field: 'rules', rules }),
+      });
+
+      expect(reply.status).toBe(422);
+      expect(reply.body).toContain(message);
+      expect(reply.body).toContain(`<textarea name="rules" rows="4">${rules.replaceAll('"', '&quot;')}</textarea>`);
+      expect(openWriter).not.toHaveBeenCalled();
+    });
+
+    it('treats missing rules as empty, invalid JSON', async () => {
+      const { ports, openWriter } = fakes();
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'POST', '/env/production/features/checkout-limits', {
+        body: form({ baseVersion: '3', field: 'rules' }),
+      });
+
+      expect(reply.status).toBe(422);
+      expect(reply.body).toContain('The rules are not valid JSON.');
+      expect(openWriter).not.toHaveBeenCalled();
+    });
+
+    it('reports a stale base version on delete as a conflict, not an overwrite', async () => {
+      const { ports } = fakes(
+        { readCurrentVersion: () => Promise.resolve(5) },
+        { publish: () => Promise.reject(publishError('CONFLICT')) },
+      );
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'POST', '/env/production/features/new-dashboard', {
+        body: form({ baseVersion: '3', field: 'delete' }),
+      });
+
+      expect(reply.status).toBe(422);
+      expect(reply.body).toContain('Someone else published version 5 meanwhile — reload and redo your edit.');
+    });
+
+    it('rejects a foreign Origin, or a missing Origin, before opening a writer', async () => {
       const { ports, openWriter } = fakes();
       const dashboard = await start(ports);
       const body = form({ baseVersion: '3', field: 'enabled', enabled: 'on' });
@@ -547,21 +766,26 @@ describe('startDashboardServer', () => {
       expect(openWriter).not.toHaveBeenCalled();
     });
 
-    it('falls back to the Host header when Origin is absent', async () => {
+    it.each(['publish', 'rollback'])('rejects %s without an Origin, even from its own Host', async (action) => {
+      const { ports, openWriter } = fakes();
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'POST', `/env/production/${action}`, {
+        body: form({ snapshot: VALID, version: '2' }),
+        sameOrigin: false,
+      });
+
+      expect(reply.status).toBe(403);
+      expect(openWriter).not.toHaveBeenCalled();
+    });
+
+    it('accepts the dashboard’s own Origin', async () => {
       const { ports, writer } = fakes();
       const dashboard = await start(ports);
-      const body = form({ version: '2' });
 
-      const foreign = await call(dashboard, 'POST', '/env/production/rollback', {
-        body,
-        sameOrigin: false,
-        headers: { host: 'evil.example' },
-      });
-      expect(foreign.status).toBe(403);
-      expect(writer.rollback).not.toHaveBeenCalled();
+      const reply = await call(dashboard, 'POST', '/env/production/rollback', { body: form({ version: '2' }) });
 
-      const own = await call(dashboard, 'POST', '/env/production/rollback', { body, sameOrigin: false });
-      expect(own.status).toBe(200);
+      expect(reply.status).toBe(200);
       expect(writer.rollback).toHaveBeenCalledTimes(1);
     });
 

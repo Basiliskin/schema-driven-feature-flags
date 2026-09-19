@@ -150,7 +150,7 @@ describe('push detection against LocalStack', () => {
     const deliveredLast = (label: string) =>
       vi.waitFor(
         () => {
-          expect(onChange).toHaveBeenLastCalledWith(snapshot(label));
+          expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining(snapshot(label)));
         },
         { timeout: DELIVERY_TIMEOUT_MS },
       );
@@ -162,7 +162,11 @@ describe('push detection against LocalStack', () => {
 
     await publisher.rollback(ENVIRONMENT, second);
     await deliveredLast('second');
-    expect(onChange.mock.calls).toEqual([[snapshot('second')], [snapshot('third')], [snapshot('second')]]);
+    expect(onChange.mock.calls).toEqual([
+      [expect.objectContaining(snapshot('second'))],
+      [expect.objectContaining(snapshot('third'))],
+      [expect.objectContaining({ ...snapshot('second'), reason: `Rollback to v${String(second)}` })],
+    ]);
 
     unsubscribe();
     unsubscribe = undefined;

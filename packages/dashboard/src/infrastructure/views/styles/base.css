@@ -1,0 +1,123 @@
+/* Design tokens, light and dark, plus element defaults. */
+:root {
+  color-scheme: light dark;
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-muted: #f0f2f5;
+  --text: #16181d;
+  --text-muted: #5b6270;
+  --border: #dde1e7;
+  --accent: #3b5bdb;
+  --accent-hover: #3049b8;
+  --accent-contrast: #ffffff;
+  --success: #1f7a4d;
+  --success-bg: #e7f5ee;
+  --warning: #9a6200;
+  --warning-bg: #fdf3e1;
+  --danger: #c0352b;
+  --danger-bg: #fdecea;
+  --focus: #7b93ff;
+  --radius: 10px;
+  --radius-sm: 6px;
+  --shadow: 0 1px 2px rgb(16 24 40 / 6%), 0 1px 3px rgb(16 24 40 / 8%);
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --tap: 44px;
+  --gutter: 16px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1115;
+    --surface: #171a21;
+    --surface-muted: #1f232c;
+    --text: #e8eaef;
+    --text-muted: #9aa2b1;
+    --border: #2c313c;
+    --accent: #7b93ff;
+    --accent-hover: #95a8ff;
+    --accent-contrast: #0f1115;
+    --success: #5cc493;
+    --success-bg: #14291f;
+    --warning: #f0b95a;
+    --warning-bg: #2d2412;
+    --danger: #f2837a;
+    --danger-bg: #331816;
+    --focus: #95a8ff;
+    --shadow: 0 1px 2px rgb(0 0 0 / 40%);
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+h1,
+h2,
+h3 {
+  line-height: 1.25;
+  margin: 0 0 0.5rem;
+}
+
+h1 {
+  font-size: 1.5rem;
+}
+
+h2 {
+  font-size: 1.15rem;
+}
+
+h3 {
+  font-size: 1rem;
+}
+
+p {
+  margin: 0 0 0.75rem;
+}
+
+a {
+  color: var(--accent);
+  text-underline-offset: 2px;
+}
+
+a:hover {
+  color: var(--accent-hover);
+}
+
+code,
+pre,
+textarea {
+  font-family: var(--mono);
+  font-size: 0.875rem;
+}
+
+code {
+  overflow-wrap: anywhere;
+}
+
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
+}

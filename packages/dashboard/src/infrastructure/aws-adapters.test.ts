@@ -1,4 +1,4 @@
-import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { S3PublishError } from '@featuresync/aws';
 import { describe, expect, it, vi } from 'vitest';
 import { createAwsDashboardPorts } from './aws-adapters.js';
@@ -42,7 +42,7 @@ describe('createAwsDashboardPorts', () => {
     await expect(ports.readCurrentVersion('staging')).resolves.toBeUndefined();
   });
 
-  it('rejects an invalid snapshot with core validation before any S3 write', async () => {
+  it('rejects an invalid snapshot with core validation without writing to S3', async () => {
     const client = fakeClient({});
     const writer = createAwsDashboardPorts({ bucket: 'flags', client, topicArn: 'arn:aws:sns:us-east-1:1:t' }).openWriter(
       vi.fn(),
@@ -54,7 +54,17 @@ describe('createAwsDashboardPorts', () => {
 
     expect(error).toBeInstanceOf(S3PublishError);
     expect((error as S3PublishError).reason).toBe('INVALID_SNAPSHOT');
-    expect(client.send).not.toHaveBeenCalled();
+    expect(client.send.mock.calls.some(([command]) => command instanceof PutObjectCommand)).toBe(false);
+  });
+
+  it('lets a valid snapshot through core validation to the snapshot write', async () => {
+    const client = fakeClient({});
+    const writer = createAwsDashboardPorts({ bucket: 'flags', client }).openWriter(vi.fn());
+
+    await writer.publish('production', JSON.parse(SNAPSHOT)).catch(() => undefined);
+
+    const put = client.send.mock.calls.find(([command]) => command instanceof PutObjectCommand)?.[0] as PutObjectCommand;
+    expect(put.input.Key).toBe('production/snapshots/1.json');
   });
 
   it('accepts a valid snapshot and falls back to the default S3 client when none is given', async () => {
@@ -66,15 +76,5 @@ describe('createAwsDashboardPorts', () => {
     expect((error as S3PublishError).reason).toBe('REQUEST_FAILED');
     expect(send).toHaveBeenCalled();
     send.mockRestore();
-  });
-
-  it('reads the clock from the system', () => {
-    const ports = createAwsDashboardPorts({ bucket: 'flags', client: fakeClient({}) });
-    const before = Date.now();
-
-    const now = ports.now().getTime();
-
-    expect(now).toBeGreaterThanOrEqual(before);
-    expect(now).toBeLessThanOrEqual(Date.now());
   });
 });

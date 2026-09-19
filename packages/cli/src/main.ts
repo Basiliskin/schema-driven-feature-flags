@@ -54,6 +54,7 @@ const USAGE = [
   '  featuresync publish --env <env> [--bucket <bucket>] <file>',
   '  featuresync rollback --env <env> --to <version> [--bucket <bucket>]',
   '  featuresync pull --env <env> --version <version> --out <file> [--bucket <bucket>]',
+  'rollback republishes an earlier version as a new version; history is never rewritten.',
   'publish and rollback accept [--topic-arn <arn>] to send a change notification.',
   'The bucket defaults to FEATURESYNC_BUCKET and the topic ARN to FEATURESYNC_TOPIC_ARN.',
 ].join('\n');
@@ -135,7 +136,7 @@ async function runRollback(io: CliIo, values: PublisherArgs & { readonly to?: st
   const env = requireValue(values.env, '--env');
   const target = Number(requireValue(values.to, '--to'));
   const version = await publisherFor(io, values).rollback(env, target);
-  io.out(`Rolled ${env} back to version ${String(version)}`);
+  io.out(`Rolled ${env} back to v${String(target)} as version ${String(version)}`);
   return EXIT_OK;
 }
 
@@ -193,7 +194,14 @@ function reportFetchError(io: CliIo, error: S3FetchError): ExitCode {
 }
 
 function reportPublishError(io: CliIo, error: S3PublishError): ExitCode {
+  if (error.reason === 'ENVIRONMENT_MISMATCH') {
+    io.err(`${(error.cause as Error).message}; pass the matching --env or fix the snapshot's environment`);
+    return EXIT_INVALID_SNAPSHOT;
+  }
   io.err(error.message);
+  if (error.reason === 'INVALID_ROLLBACK_TARGET') {
+    io.err('--to must name an existing version other than the current one');
+  }
   switch (error.reason) {
     case 'INVALID_SNAPSHOT':
     case 'INVALID_POINTER':
@@ -204,6 +212,7 @@ function reportPublishError(io: CliIo, error: S3PublishError): ExitCode {
       return EXIT_CONFLICT;
     case 'INVALID_ENVIRONMENT':
     case 'INVALID_ROLLBACK_TARGET':
+    case 'VERSION_PROBE_LIMIT':
     case 'REQUEST_FAILED':
       return EXIT_USAGE_OR_IO;
   }

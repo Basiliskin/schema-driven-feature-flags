@@ -36,6 +36,30 @@ importers:
         specifier: ^5.0.1
         version: 5.0.1(@types/node@26.6.1)(@vitest/coverage-v8@5.0.1)(vite@8.3.0(@types/node@26.6.1))
 
+  examples/local-dashboard:
+    dependencies:
+      '@aws-sdk/client-cloudformation':
+        specifier: ^3.1135.0
+        version: 3.1135.0
+      '@aws-sdk/client-s3':
+        specifier: ^3.1135.0
+        version: 3.1135.0
+      '@aws-sdk/client-sns':
+        specifier: ^3.1135.0
+        version: 3.1135.0
+      '@aws-sdk/client-sqs':
+        specifier: ^3.1135.0
+        version: 3.1135.0
+      '@featuresync/aws':
+        specifier: workspace:*
+        version: link:../../packages/aws
+      '@featuresync/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@featuresync/dashboard':
+        specifier: workspace:*
+        version: link:../../packages/dashboard
+
   examples/node-local:
     dependencies:
       '@featuresync/core':

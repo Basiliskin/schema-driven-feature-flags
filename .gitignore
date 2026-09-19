@@ -3,3 +3,4 @@ docker/volume/
 node_modules/
 dist/
 coverage/
+examples/local-dashboard/.dev-state.json

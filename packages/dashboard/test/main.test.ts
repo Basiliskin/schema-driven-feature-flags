@@ -3,7 +3,6 @@ import type { DashboardPorts } from '../src/infrastructure/http-server.js';
 import { DEFAULT_PORT, EXIT_FAILURE, EXIT_OK, main, nodeIo, type DashboardIo } from '../src/main.js';
 
 const ports: DashboardPorts = {
-  now: () => new Date(0),
   readCurrentVersion: () => Promise.resolve(undefined),
   fetchSnapshotText: () => Promise.resolve(''),
   openWriter: () => ({ publish: () => Promise.resolve(1), rollback: () => Promise.resolve(1) }),

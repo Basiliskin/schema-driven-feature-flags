@@ -146,7 +146,7 @@ describe('featuresync-dashboard against LocalStack', () => {
   it('shows an empty environment, publishes, browses versions and rolls back', async () => {
     const empty = await page(`/env/${ENVIRONMENT}`);
     expect(empty.status).toBe(200);
-    expect(empty.html).not.toContain('Current flags');
+    expect(empty.html).not.toContain('Current snapshot');
 
     for (const [version, enabled] of [
       [1, false],
@@ -159,9 +159,9 @@ describe('featuresync-dashboard against LocalStack', () => {
     }
 
     const current = await page(`/env/${ENVIRONMENT}`);
-    expect(current.html).toContain('Current flags (version 2)');
+    expect(current.html).toContain('Current snapshot · v2');
     expect(current.html).toContain('Version 1');
-    expect(current.html).toContain('Version 2</a> (current)');
+    expect(current.html).toContain('Version 2</a><span class="badge badge-accent">current</span>');
     expect(current.html).toContain('new-dashboard');
 
     const first = await page(`/env/${ENVIRONMENT}/versions/1`);
@@ -171,9 +171,11 @@ describe('featuresync-dashboard against LocalStack', () => {
     const rolledBack = await post(`/env/${ENVIRONMENT}/rollback`, { version: '1' });
     expect(rolledBack.status).toBe(200);
     const afterRollback = await rolledBack.text();
-    expect(afterRollback).toContain('Current flags (version 1)');
-    expect(afterRollback).not.toContain('Version 2</a>');
-    expect(await listKeys(bucket)).toContain(`${ENVIRONMENT}/snapshots/2.json`);
+    expect(afterRollback).toContain('Restored version 1 of');
+    expect(afterRollback).toContain('Current snapshot · v3');
+    expect(afterRollback).toContain('Version 2</a>');
+    expect(afterRollback).toContain('Version 3</a><span class="badge badge-accent">current</span>');
+    expect(await listKeys(bucket)).toContain(`${ENVIRONMENT}/snapshots/3.json`);
   });
 
   it('refuses a publish from another origin', async () => {
@@ -267,21 +269,57 @@ describe('featuresync-dashboard against LocalStack', () => {
     expect(published.features[winner === 'checkout' ? 'new-dashboard' : 'checkout'].enabled).toBe(true);
   });
 
-  it('refuses an edit on a rolled-back version and writes nothing', async () => {
+  it('edits a flag right after a rollback as the next version', async () => {
     await seed(editableSnapshot);
     await seed({ ...editableSnapshot, version: 2, previousVersion: 1, reason: 'second' });
     const rolledBack = await post(`/env/${ENVIRONMENT}/rollback`, { version: '1' });
     expect(rolledBack.status).toBe(200);
-    const keysBefore = (await listKeys(bucket)).sort();
-    const pointerBefore = await currentPointerText();
+    expect(JSON.parse(await currentPointerText())).toMatchObject({ version: 3 });
 
-    const edited = await disableNewDashboard(1);
+    const edited = await disableNewDashboard(3);
 
-    expect(edited.status).toBe(422);
-    expect(await edited.text()).toContain(
-      'Version 2 already exists because of an earlier rollback. Editing from a rolled-back version is not supported yet; paste-publish the snapshot instead.',
-    );
-    expect((await listKeys(bucket)).sort()).toEqual(keysBefore);
-    expect(await currentPointerText()).toBe(pointerBefore);
+    expect(edited.status).toBe(200);
+    expect(await edited.text()).toContain('Published version 4');
+    expect(JSON.parse(await currentPointerText())).toMatchObject({ version: 4 });
+    const published = JSON.parse(await snapshotText(4)) as Omit<typeof editableSnapshot, 'previousVersion'> & { previousVersion: number };
+    expect(published).toMatchObject({ version: 4, previousVersion: 3 });
+    expect(published.features['new-dashboard'].enabled).toBe(false);
+  });
+
+  it.each<[string, string, Record<string, string>, readonly string[]]>([
+    [
+      'creates a flag',
+      '/features',
+      { key: 'beta', type: 'config', enabled: 'on', default: '{"tier":1}' },
+      ['features.beta'],
+    ],
+    [
+      'edits the rules of a flag',
+      '/features/new-dashboard',
+      { field: 'rules', rules: '[{"when":{"plan":"pro"},"enabled":false}]' },
+      ['features.new-dashboard.rules'],
+    ],
+    ['deletes a flag', '/features/checkout', { field: 'delete' }, ['features.checkout']],
+  ])('%s as exactly one new version that differs only in that flag and the metadata', async (_, path, form, paths) => {
+    await seed(editableSnapshot);
+
+    const response = await post(`/env/${ENVIRONMENT}${path}`, { baseVersion: '1', ...form });
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain('Published version 2 to integration.');
+    expect(await snapshotExists(3)).toBe(false);
+    const before = JSON.parse(await snapshotText(1)) as unknown;
+    const after = JSON.parse(await snapshotText(2)) as unknown;
+    expect(differingPaths(before, after).sort()).toEqual([...paths, ...METADATA_PATHS].sort());
+  });
+
+  it('refuses a duplicate key without writing anything', async () => {
+    await seed(editableSnapshot);
+
+    const response = await post(`/env/${ENVIRONMENT}/features`, { baseVersion: '1', key: 'checkout', type: 'boolean' });
+
+    expect(response.status).toBe(422);
+    expect(await snapshotExists(2)).toBe(false);
+    expect(JSON.parse(await currentPointerText())).toMatchObject({ version: 1 });
   });
 });

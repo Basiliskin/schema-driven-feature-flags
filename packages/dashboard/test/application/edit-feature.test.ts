@@ -3,11 +3,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { editFeature, type EditFeaturePorts } from '../../src/application/edit-feature.js';
 import {
   DEFAULT_NOT_EDITABLE_MESSAGE,
-  EDIT_AFTER_ROLLBACK,
   EDIT_CONFLICT,
   EDITED_SNAPSHOT_INVALID_MESSAGE,
+  FEATURE_EXISTS_MESSAGE,
   FETCH_ERROR_MESSAGES,
   INVALID_DEFAULT_JSON_MESSAGE,
+  INVALID_KEY_MESSAGE,
+  INVALID_RULES_JSON_MESSAGE,
   NOTIFY_FAILED_WARNING,
   PUBLISH_ERROR_MESSAGES,
   UNEXPECTED_ERROR_MESSAGE,
@@ -16,7 +18,6 @@ import {
 import type { SnapshotWriter } from '../../src/application/publish-snapshot.js';
 import type { FlagEdit } from '../../src/domain/flag-edit.js';
 
-const NOW = new Date('2026-09-19T10:00:00.000Z');
 
 const baseSnapshot = {
   schemaVersion: 1,
@@ -59,7 +60,6 @@ const fakePorts = (options: FakeOptions = {}) => {
   const ports: EditFeaturePorts = {
     fetchSnapshotText,
     readCurrentVersion,
-    now: () => NOW,
     openWriter: (onNotifyError) => {
       writer.publish.mockImplementation(() => {
         calls.push('publish');
@@ -100,9 +100,6 @@ describe('editFeature', () => {
     expect(environment).toBe('production');
     expect(options).toEqual({ expectedCurrentVersion: 4 });
     expect(snapshot).toMatchObject({
-      version: 5,
-      previousVersion: 4,
-      createdAt: NOW.toISOString(),
       createdBy: 'dashboard',
       reason: 'Set dark-mode.enabled=true via dashboard',
       features: { 'dark-mode': { type: 'boolean', enabled: true } },
@@ -122,6 +119,38 @@ describe('editFeature', () => {
       reason: 'Set checkout-limits.default via dashboard',
       features: { 'checkout-limits': { default: { max: 5 } } },
     });
+  });
+
+  it.each<[string, FlagEdit, string, Record<string, unknown>]>([
+    [
+      'a created feature',
+      { kind: 'create', key: 'beta', type: 'config', enabled: true, defaultJson: '1' },
+      'Create config feature beta via dashboard',
+      { beta: { type: 'config', enabled: true, default: 1 } },
+    ],
+    [
+      'a deleted feature',
+      { kind: 'delete', key: 'dark-mode' },
+      'Delete feature dark-mode via dashboard',
+      { 'checkout-limits': baseSnapshot.features['checkout-limits'] },
+    ],
+    [
+      'replaced rules',
+      { kind: 'setRules', key: 'dark-mode', rulesJson: '[{"when":{"plan":"pro"},"enabled":true}]' },
+      'Set dark-mode.rules via dashboard',
+      { 'dark-mode': { type: 'boolean', enabled: false, rules: [{ when: { plan: 'pro' }, enabled: true }] } },
+    ],
+  ])('publishes %s as one version against the base version', async (_, edit, reason, features) => {
+    const { ports, writer } = fakePorts();
+
+    const outcome = await editFeature(ports, 'production', 4, edit);
+
+    expect(outcome).toMatchObject({ kind: 'success', message: 'Published version 5 to production.' });
+    expect(writer.publish).toHaveBeenCalledTimes(1);
+    const [environment, snapshot, options] = writer.publish.mock.calls[0] ?? [];
+    expect(environment).toBe('production');
+    expect(options).toEqual({ expectedCurrentVersion: 4 });
+    expect(snapshot).toMatchObject({ reason, createdBy: 'dashboard', features });
   });
 
   it('keeps a failed change notification as a warning', async () => {
@@ -179,7 +208,7 @@ describe('editFeature', () => {
       expect(outcome.message).toContain('version 5 meanwhile');
     });
 
-    it('maps VERSION_EXISTS with the pointer still at base to EDIT_AFTER_ROLLBACK', async () => {
+    it('maps VERSION_EXISTS to EDIT_CONFLICT, never to post-rollback guidance', async () => {
       const { ports } = fakePorts({
         publish: rejectPublish('VERSION_EXISTS'),
         pointer: () => Promise.resolve(4),
@@ -187,13 +216,8 @@ describe('editFeature', () => {
 
       const outcome = await editFeature(ports, 'production', 4, toggleDarkMode);
 
-      expect(outcome).toEqual({
-        kind: 'failure',
-        message: EDIT_AFTER_ROLLBACK(5),
-        issues: [],
-      });
-      expect(outcome.message).toContain('Version 5 already exists because of an earlier rollback');
-      expect(outcome.message).toContain('paste-publish');
+      expect(outcome).toEqual({ kind: 'failure', message: EDIT_CONFLICT(4), issues: [] });
+      expect(outcome.message).not.toContain('paste-publish');
     });
 
     it.each([
@@ -281,6 +305,19 @@ describe('editFeature', () => {
         DEFAULT_NOT_EDITABLE_MESSAGE('dark-mode'),
         [],
       ],
+      [
+        'a duplicate key',
+        { kind: 'create', key: 'dark-mode', type: 'boolean', enabled: true },
+        FEATURE_EXISTS_MESSAGE('dark-mode'),
+        [],
+      ],
+      [
+        'an invalid key',
+        { kind: 'create', key: 'bad/key', type: 'boolean', enabled: true },
+        INVALID_KEY_MESSAGE('bad/key'),
+        [],
+      ],
+      ['a delete of an unknown feature', { kind: 'delete', key: 'nope' }, UNKNOWN_FEATURE_MESSAGE('nope'), []],
     ])('%s', async (_, edit, message, issues) => {
       const { ports, writer } = fakePorts();
 
@@ -303,6 +340,16 @@ describe('editFeature', () => {
         kind: 'failure',
         message: INVALID_DEFAULT_JSON_MESSAGE,
       });
+      expect(outcome.kind === 'failure' && outcome.issues).toHaveLength(1);
+      expect(writer.publish).not.toHaveBeenCalled();
+    });
+
+    it('unparseable rules, with the parser message as the issue', async () => {
+      const { ports, writer } = fakePorts();
+
+      const outcome = await editFeature(ports, 'production', 4, { kind: 'setRules', key: 'dark-mode', rulesJson: '[' });
+
+      expect(outcome).toMatchObject({ kind: 'failure', message: INVALID_RULES_JSON_MESSAGE });
       expect(outcome.kind === 'failure' && outcome.issues).toHaveLength(1);
       expect(writer.publish).not.toHaveBeenCalled();
     });

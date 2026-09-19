@@ -105,14 +105,14 @@ describe('publishSnapshot', () => {
 });
 
 describe('rollbackSnapshot', () => {
-  it('rolls back once to the target version', async () => {
-    const { ports, writer } = fakePorts(() => Promise.resolve(2));
+  it('republishes the target once as a new version, authored by the dashboard', async () => {
+    const { ports, writer } = fakePorts(() => Promise.resolve(5));
 
     const outcome = await rollbackSnapshot(ports, 'production', 2);
 
-    expect(outcome).toEqual({ kind: 'success', version: 2, message: 'Rolled production back to version 2.' });
+    expect(outcome).toEqual({ kind: 'success', version: 5, message: 'Restored version 2 of production as version 5.' });
     expect(writer.rollback).toHaveBeenCalledTimes(1);
-    expect(writer.rollback).toHaveBeenCalledWith('production', 2);
+    expect(writer.rollback).toHaveBeenCalledWith('production', 2, { actor: 'dashboard' });
     expect(writer.publish).not.toHaveBeenCalled();
   });
 

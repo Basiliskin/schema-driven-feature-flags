@@ -3,22 +3,34 @@ import type { BrowsePorts } from './browse-environment.js';
 import {
   DEFAULT_NOT_EDITABLE_MESSAGE,
   describeFailure,
-  EDIT_AFTER_ROLLBACK,
   EDIT_CONFLICT,
   EDITED_SNAPSHOT_INVALID_MESSAGE,
+  FEATURE_EXISTS_MESSAGE,
   INVALID_DEFAULT_JSON_MESSAGE,
+  INVALID_KEY_MESSAGE,
+  INVALID_RULES_JSON_MESSAGE,
   UNKNOWN_FEATURE_MESSAGE,
 } from './error-messages.js';
 import { write, type WriteOutcome, type WritePorts } from './publish-snapshot.js';
 
-export type EditFeaturePorts = BrowsePorts & WritePorts & { readonly now: () => Date };
+export type EditFeaturePorts = BrowsePorts & WritePorts;
 
 const CREATED_BY = 'dashboard';
 
-const describeEdit = (edit: FlagEdit): string =>
-  edit.kind === 'enabled'
-    ? `Set ${edit.key}.enabled=${String(edit.enabled)} via dashboard`
-    : `Set ${edit.key}.default via dashboard`;
+const describeEdit = (edit: FlagEdit): string => {
+  switch (edit.kind) {
+    case 'enabled':
+      return `Set ${edit.key}.enabled=${String(edit.enabled)} via dashboard`;
+    case 'default':
+      return `Set ${edit.key}.default via dashboard`;
+    case 'create':
+      return `Create ${edit.type} feature ${edit.key} via dashboard`;
+    case 'delete':
+      return `Delete feature ${edit.key} via dashboard`;
+    case 'setRules':
+      return `Set ${edit.key}.rules via dashboard`;
+  }
+};
 
 const editFailure = (failure: FlagEditFailure): WriteOutcome => {
   switch (failure.kind) {
@@ -39,6 +51,24 @@ const editFailure = (failure: FlagEditFailure): WriteOutcome => {
         kind: 'failure',
         message: INVALID_DEFAULT_JSON_MESSAGE,
         issues: [failure.message],
+      };
+    case 'INVALID_RULES_JSON':
+      return {
+        kind: 'failure',
+        message: INVALID_RULES_JSON_MESSAGE,
+        issues: [failure.message],
+      };
+    case 'FEATURE_EXISTS':
+      return {
+        kind: 'failure',
+        message: FEATURE_EXISTS_MESSAGE(failure.key),
+        issues: [],
+      };
+    case 'INVALID_KEY':
+      return {
+        kind: 'failure',
+        message: INVALID_KEY_MESSAGE(failure.key),
+        issues: [],
       };
     case 'INVALID_SNAPSHOT':
       return {
@@ -76,12 +106,7 @@ export async function editFeature(
     return { kind: 'failure', ...describeFailure(error) };
   }
 
-  const edited = applyFlagEdit(text, edit, {
-    baseVersion,
-    createdBy: CREATED_BY,
-    reason: describeEdit(edit),
-    now: ports.now(),
-  });
+  const edited = applyFlagEdit(text, edit, { createdBy: CREATED_BY, reason: describeEdit(edit) });
   if (!edited.ok) return editFailure(edited.error);
 
   let publishReason: unknown;
@@ -103,10 +128,7 @@ export async function editFeature(
     return outcome;
   }
 
+  // Both mean another writer got in first: rollbacks now append a version, so VERSION_EXISTS is only a race.
   const current = await readPointerAfterFailure(ports, environment);
-  const message =
-    publishReason === 'VERSION_EXISTS' && current === baseVersion
-      ? EDIT_AFTER_ROLLBACK(baseVersion + 1)
-      : EDIT_CONFLICT(current);
-  return { kind: 'failure', message, issues: [] };
+  return { kind: 'failure', message: EDIT_CONFLICT(current), issues: [] };
 }

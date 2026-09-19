@@ -3,9 +3,11 @@ import { renderPage } from './layout.js';
 export const renderHomePage = (): string =>
   renderPage(
     'Environments',
-    `<h1>Pick an environment</h1>
-<form method="get" action="/">
+    `<div class="page-head"><h1>Pick an environment</h1></div>
+<section class="card">
+<form method="get" action="/" class="form-row">
 <label>Environment <input name="env" required></label>
 <button type="submit">Open</button>
-</form>`,
+</form>
+</section>`,
   );

@@ -25,6 +25,12 @@ export default defineConfig(
     languageOptions: { globals: { console: 'readonly' } },
   },
   {
+    files: ['examples/local-dashboard/*.js'],
+    languageOptions: {
+      globals: { process: 'readonly', URL: 'readonly', fetch: 'readonly', setInterval: 'readonly', clearInterval: 'readonly' },
+    },
+  },
+  {
     files: ['packages/*/src/**/*.ts'],
     plugins: { 'import-x': importX },
     settings: {

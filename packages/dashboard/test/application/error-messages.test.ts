@@ -13,7 +13,7 @@ const SECRET = 'AKIAIOSFODNN7EXAMPLE';
 
 describe('error message maps', () => {
   it.each([
-    ['S3PublishError', PUBLISH_ERROR_MESSAGES, 7],
+    ['S3PublishError', PUBLISH_ERROR_MESSAGES, 9],
     ['S3FetchError', FETCH_ERROR_MESSAGES, 6],
   ] as const)('gives every %s reason a distinct, non-empty message', (name, messages, count) => {
     const reasons = Object.keys(messages);
@@ -25,7 +25,8 @@ describe('error message maps', () => {
   });
 
   it('explains how to recover from VERSION_EXISTS and CONFLICT', () => {
-    expect(PUBLISH_ERROR_MESSAGES.VERSION_EXISTS).toMatch(/rollback.*hidden.*by hand/s);
+    expect(PUBLISH_ERROR_MESSAGES.VERSION_EXISTS).toMatch(/someone else published.*reload.*retry/is);
+    expect(PUBLISH_ERROR_MESSAGES.VERSION_EXISTS).not.toMatch(/by hand|rollback/i);
     expect(PUBLISH_ERROR_MESSAGES.CONFLICT).toMatch(/another writer.*reload.*retry/is);
   });
 });

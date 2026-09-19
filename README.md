@@ -45,8 +45,9 @@ featuresync-dashboard --bucket my-flags --port 4455
 
 The bucket comes from `--bucket <bucket>` or `FEATURESYNC_BUCKET`, and `--topic-arn <arn>` or
 `FEATURESYNC_TOPIC_ARN` sends a change notification after each write. It listens only on
-127.0.0.1 and accepts changes only from its own pages. After a rollback, newer versions stay in the
-bucket and block the next publish until you remove them by hand; the environment page explains how.
+127.0.0.1 and accepts changes only from POSTs carrying its own `Origin`. Restoring (rolling back to) an
+older version republishes it as a new version, so history stays linear and later edits and publishes
+just continue from there. `featuresync rollback` behaves the same way.
 
 ## Development
 
@@ -58,6 +59,9 @@ pnpm verify   # typecheck, lint, tests with 100% coverage
 ```
 
 CI runs the same `pnpm verify`.
+
+To try everything by hand on LocalStack (needs Docker and `LOCALSTACK_AUTH_TOKEN` in `.env`), run
+`pnpm dev:setup`, then `pnpm dev:run` (Ctrl-C stops the dashboard), and `pnpm dev:cleanup` when done. See [docs/playbooks/local-qa.md](docs/playbooks/local-qa.md).
 
 ## License
 

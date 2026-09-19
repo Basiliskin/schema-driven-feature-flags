@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { parseCurrentPointer, snapshotKeyFor, type CurrentPointer } from '../../src/domain/current-pointer.js';
 import {
   buildCurrentPointer,
+  buildRollbackSnapshot,
   checkRollbackTarget,
   nextSnapshotVersion,
+  stampSnapshot,
   validateEnvironmentName,
   validateVersion,
 } from '../../src/domain/publishing.js';
@@ -77,14 +79,71 @@ describe('checkRollbackTarget', () => {
   });
 
   it('rejects the current version as a target', () => {
-    expect(reasonOf(pointerAt(5), 5)).toBe('TARGET_NOT_BELOW_CURRENT');
+    expect(reasonOf(pointerAt(5), 5)).toBe('TARGET_IS_CURRENT');
   });
 
-  it('rejects a target above the current version', () => {
-    expect(reasonOf(pointerAt(5), 6)).toBe('TARGET_NOT_BELOW_CURRENT');
+  it.each([1, 4, 6])('accepts other target %i', (target) => {
+    expect(checkRollbackTarget(pointerAt(5), target)).toEqual({
+      ok: true,
+      value: { targetVersion: target, currentVersion: 5 },
+    });
+  });
+});
+
+const storedSnapshot = {
+  schemaVersion: 1,
+  environment: 'production',
+  version: 2,
+  createdAt: '2026-09-01T00:00:00.000Z',
+  createdBy: 'ci',
+  previousVersion: 1,
+  reason: 'second',
+  features: { b: { type: 'boolean', enabled: false }, a: { type: 'boolean', enabled: true } },
+};
+
+describe('stampSnapshot', () => {
+  const now = new Date('2026-09-19T12:00:00.000Z');
+
+  it('overwrites only version, previousVersion and createdAt, keeping key order and every other field', () => {
+    const stamped = stampSnapshot(storedSnapshot, { version: 3, previousVersion: 2, now });
+
+    expect(JSON.stringify(stamped)).toBe(
+      JSON.stringify({ ...storedSnapshot, version: 3, previousVersion: 2, createdAt: '2026-09-19T12:00:00.000Z' }),
+    );
+    expect(Object.keys(stamped)).toEqual(Object.keys(storedSnapshot));
+    expect(stamped.features).toBe(storedSnapshot.features);
   });
 
-  it.each([1, 4])('accepts lower target %i', (target) => {
-    expect(checkRollbackTarget(pointerAt(5), target)).toEqual({ ok: true, value: target });
+  it('adds the fields when the body lacks them, and stamps a null previousVersion for the first version', () => {
+    expect(stampSnapshot({ features: {} }, { version: 1, previousVersion: null, now })).toEqual({
+      features: {},
+      version: 1,
+      previousVersion: null,
+      createdAt: '2026-09-19T12:00:00.000Z',
+    });
+  });
+
+  it('does not modify the input', () => {
+    const copy = structuredClone(storedSnapshot);
+    stampSnapshot(storedSnapshot, { version: 9, previousVersion: 8, now });
+    expect(storedSnapshot).toEqual(copy);
+  });
+});
+
+describe('buildRollbackSnapshot', () => {
+  const source = storedSnapshot;
+  const meta = { targetVersion: 2, createdBy: 'dimitry' };
+
+  it('sets the rollback authorship and keeps everything else, in its original key order', () => {
+    const built = buildRollbackSnapshot(source, meta);
+
+    expect(JSON.stringify(built)).toBe(JSON.stringify({ ...source, createdBy: 'dimitry', reason: 'Rollback to v2' }));
+    expect(built.features).toBe(source.features);
+  });
+
+  it('does not modify the source', () => {
+    const copy = structuredClone(source);
+    buildRollbackSnapshot(source, meta);
+    expect(source).toEqual(copy);
   });
 });

@@ -4,10 +4,12 @@ export const PUBLISH_ERROR_MESSAGES: Record<S3PublishErrorReason, string> = {
   INVALID_ENVIRONMENT: 'Invalid environment name.',
   INVALID_POINTER: 'The environment’s current.json is malformed; repair it by hand before publishing or rolling back.',
   INVALID_SNAPSHOT: 'The snapshot is not valid.',
-  VERSION_EXISTS:
-    'The next version number is already taken. After a rollback, newer versions stay in the bucket but are hidden from the list; delete or move those snapshot files by hand, then publish again.',
+  ENVIRONMENT_MISMATCH: 'The snapshot names a different environment; set its "environment" to this one before publishing.',
+  VERSION_EXISTS: 'Someone else published at the same moment and took the next version number. Reload the page and retry.',
   CONFLICT: 'Another writer moved the current pointer while this change was in progress. Reload the page and retry.',
-  INVALID_ROLLBACK_TARGET: 'That version cannot be rolled back to; pick an existing version lower than the current one.',
+  INVALID_ROLLBACK_TARGET: 'That version cannot be rolled back to; pick an existing version other than the current one.',
+  VERSION_PROBE_LIMIT:
+    'No free version number was found after the current one; the snapshots folder needs attention before publishing.',
   REQUEST_FAILED: 'The S3 request failed; check connectivity and credentials, then retry.',
 };
 
@@ -64,9 +66,6 @@ export const EDIT_CONFLICT = (currentVersion?: number): string =>
     ? 'Someone else published a new version meanwhile — reload and redo your edit.'
     : `Someone else published version ${String(currentVersion)} meanwhile — reload and redo your edit.`;
 
-export const EDIT_AFTER_ROLLBACK = (nextVersion: number): string =>
-  `Version ${String(nextVersion)} already exists because of an earlier rollback. Editing from a rolled-back version is not supported yet; paste-publish the snapshot instead.`;
-
 export const UNKNOWN_FEATURE_MESSAGE = (key: string): string => `The snapshot has no feature named "${key}".`;
 
 export const DEFAULT_NOT_EDITABLE_MESSAGE = (key: string): string =>
@@ -75,3 +74,11 @@ export const DEFAULT_NOT_EDITABLE_MESSAGE = (key: string): string =>
 export const INVALID_DEFAULT_JSON_MESSAGE = 'The default value is not valid JSON.';
 
 export const EDITED_SNAPSHOT_INVALID_MESSAGE = 'The edited snapshot is not valid.';
+
+export const INVALID_RULES_JSON_MESSAGE = 'The rules are not valid JSON.';
+
+export const FEATURE_EXISTS_MESSAGE = (key: string): string =>
+  `A feature named "${key}" already exists; pick another key or edit the existing feature.`;
+
+export const INVALID_KEY_MESSAGE = (key: string): string =>
+  `"${key}" is not a valid feature key; use letters, digits, ".", "_" or "-", starting with a letter or digit.`;

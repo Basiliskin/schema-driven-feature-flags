@@ -190,11 +190,29 @@ describe('featuresync publish', () => {
     expect(h.err).toContain(`features.x.type: ${String(typeIssue().issues.find((issue) => issue.path === 'features.x.type')?.message)}`);
   });
 
+  it('explains an environment mismatch naming both environments and exits 1', async () => {
+    const h = harness();
+    h.publisher.publish.mockRejectedValue(
+      new S3PublishError(
+        'ENVIRONMENT_MISMATCH',
+        'qa/snapshots',
+        new Error('Snapshot names environment development, but is being published to qa'),
+      ),
+    );
+
+    expect(await main(['publish', '--env', 'qa', 'valid.json'], h.io)).toBe(EXIT_INVALID_SNAPSHOT);
+    expect(EXIT_INVALID_SNAPSHOT).toBe(1);
+    expect(h.err).toEqual([
+      "Snapshot names environment development, but is being published to qa; pass the matching --env or fix the snapshot's environment",
+    ]);
+  });
+
   it.each<[S3PublishErrorReason, number]>([
     ['CONFLICT', EXIT_CONFLICT],
     ['VERSION_EXISTS', EXIT_CONFLICT],
     ['INVALID_POINTER', EXIT_INVALID_SNAPSHOT],
     ['INVALID_ENVIRONMENT', EXIT_USAGE_OR_IO],
+    ['VERSION_PROBE_LIMIT', EXIT_USAGE_OR_IO],
     ['REQUEST_FAILED', EXIT_USAGE_OR_IO],
   ])('maps %s to exit code %i', async (reason, code) => {
     const h = harness();
@@ -206,12 +224,13 @@ describe('featuresync publish', () => {
 });
 
 describe('featuresync rollback', () => {
-  it('rolls back to the requested version and prints it', async () => {
+  it('republishes the requested version as a new version and prints both', async () => {
     const h = harness();
+    h.publisher.rollback.mockResolvedValue(8);
 
     expect(await main(['rollback', '--env', 'production', '--to', '3'], h.io)).toBe(EXIT_OK);
     expect(h.publisher.rollback).toHaveBeenCalledWith('production', 3);
-    expect(h.out).toEqual(['Rolled production back to version 3']);
+    expect(h.out).toEqual(['Rolled production back to v3 as version 8']);
   });
 
   it('needs --to', async () => {
@@ -228,6 +247,10 @@ describe('featuresync rollback', () => {
     );
 
     expect(await main(['rollback', '--env', 'production', '--to', '9'], h.io)).toBe(EXIT_USAGE_OR_IO);
+    expect(h.err).toEqual([
+      'INVALID_ROLLBACK_TARGET for s3 object production/current.json',
+      '--to must name an existing version other than the current one',
+    ]);
   });
 });
 

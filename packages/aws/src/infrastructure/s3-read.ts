@@ -5,6 +5,7 @@ import { S3SnapshotError } from './s3-snapshot-error.js';
 export interface S3Text {
   readonly text: string | undefined;
   readonly etag: string | undefined;
+  readonly lastModified?: Date | undefined;
 }
 
 export const readObjectText = async (
@@ -19,7 +20,7 @@ export const readObjectText = async (
     ...(ifNoneMatch === undefined ? {} : { IfNoneMatch: ifNoneMatch }),
   });
   const response = await client.send(command);
-  return { text: await response.Body?.transformToString(), etag: response.ETag };
+  return { text: await response.Body?.transformToString(), etag: response.ETag, lastModified: response.LastModified };
 };
 
 export const isNotFound = (error: unknown): boolean => {

@@ -63,7 +63,7 @@ describe('createS3CurrentPointerReader against LocalStack', () => {
     await expect(reader().read(ENVIRONMENT)).resolves.toBeUndefined();
   });
 
-  it('follows the current pointer through publishes and a rollback', async () => {
+  it('follows the current pointer through publishes and a rollback, which adds a version', async () => {
     const publisher = createS3SnapshotPublisher({ bucket, validate: parseSnapshot });
 
     await publisher.publish(ENVIRONMENT, snapshot('first', true));
@@ -73,6 +73,6 @@ describe('createS3CurrentPointerReader against LocalStack', () => {
     await expect(reader().read(ENVIRONMENT)).resolves.toBe(2);
 
     await publisher.rollback(ENVIRONMENT, 1);
-    await expect(reader().read(ENVIRONMENT)).resolves.toBe(1);
+    await expect(reader().read(ENVIRONMENT)).resolves.toBe(3);
   });
 });

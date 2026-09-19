@@ -1,0 +1,96 @@
+/* Buttons and form controls, all at least 44px tall for touch. */
+.button,
+button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap);
+  padding: 0.5rem 1rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--accent-hover);
+}
+
+.button-secondary {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.button-secondary:hover {
+  background: var(--surface-muted);
+}
+
+.button-danger {
+  background: var(--danger);
+  color: #ffffff;
+}
+
+.button-danger:hover {
+  background: var(--danger);
+  filter: brightness(1.1);
+}
+
+label {
+  display: block;
+  font-weight: 600;
+}
+
+input[type="text"],
+input:not([type]),
+select,
+textarea {
+  display: block;
+  width: 100%;
+  min-height: var(--tap);
+  margin-top: 0.25rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 400;
+}
+
+textarea {
+  resize: vertical;
+  line-height: 1.45;
+}
+
+label.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: var(--tap);
+}
+
+input[type="checkbox"] {
+  width: 1.25rem;
+  height: 1.25rem;
+  accent-color: var(--accent);
+}
+
+.form-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+}
+
+.form-row > label:not(.check) {
+  flex: 1 1 12rem;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}

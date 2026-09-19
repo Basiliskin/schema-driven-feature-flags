@@ -1,7 +1,9 @@
 import type { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { vi } from 'vitest';
 
-export type StoredObject = { readonly body?: string; readonly etag?: string } | { readonly error: Error };
+export type StoredObject =
+  | { readonly body?: string; readonly etag?: string; readonly lastModified?: Date }
+  | { readonly error: Error };
 
 export const pointer = (version: number, environment = 'production') => ({
   schemaVersion: 1,

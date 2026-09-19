@@ -12,7 +12,10 @@
     "test": "vitest run --coverage",
     "test:integration": "pnpm --filter @featuresync/core build && pnpm --filter @featuresync/aws build && pnpm --filter @featuresync/cli build && pnpm --filter @featuresync/dashboard build && pnpm --filter @featuresync/aws test:integration && pnpm --filter @featuresync/dashboard test:integration",
     "verify": "pnpm --filter @featuresync/core build && pnpm --filter @featuresync/nestjs build && pnpm --filter @featuresync/aws build && pnpm --filter @featuresync/cli build && pnpm --filter @featuresync/dashboard build && pnpm typecheck && pnpm lint && pnpm test",
-    "example:node-local": "pnpm --filter @featuresync/core build && pnpm --filter @featuresync/example-node-local start"
+    "example:node-local": "pnpm --filter @featuresync/core build && pnpm --filter @featuresync/example-node-local start",
+    "dev:setup": "pnpm --filter @featuresync/core --filter @featuresync/aws --filter @featuresync/dashboard build && pnpm --filter @featuresync/example-local-dashboard run sandbox:setup",
+    "dev:run": "pnpm --filter @featuresync/core --filter @featuresync/aws --filter @featuresync/dashboard build && pnpm --filter @featuresync/example-local-dashboard run sandbox:run",
+    "dev:cleanup": "pnpm --filter @featuresync/example-local-dashboard run sandbox:cleanup"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

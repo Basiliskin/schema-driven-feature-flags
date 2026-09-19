@@ -12,10 +12,24 @@ export interface FlagDefinitionView {
   readonly enabled: boolean;
   readonly defaultValue: unknown;
   readonly ruleCount: number;
+  readonly rules: readonly unknown[];
+}
+
+/** Who published a Snapshot Version, when and why. */
+export interface SnapshotMetadata {
+  readonly createdAt: string;
+  readonly createdBy: string;
+  readonly reason: string;
 }
 
 export type SnapshotContents =
-  | { readonly status: 'valid'; readonly flags: readonly FlagDefinitionView[] }
+  | {
+      readonly status: 'valid';
+      readonly flags: readonly FlagDefinitionView[];
+      readonly metadata: SnapshotMetadata;
+      /** The stored body as parsed JSON, key order kept. */
+      readonly raw: Readonly<Record<string, unknown>>;
+    }
   | { readonly status: 'invalid'; readonly issues: readonly ValidationIssue[] };
 
 export type SnapshotVersionView =
@@ -27,13 +41,19 @@ export type SnapshotVersionView =
       readonly contents: SnapshotContents;
     };
 
+export interface VersionEntry {
+  readonly version: number;
+  /** Absent when that version's snapshot file is missing or not valid. */
+  readonly metadata?: SnapshotMetadata;
+}
+
 export type EnvironmentView =
   | { readonly environment: string; readonly status: 'empty' }
   | {
       readonly environment: string;
       readonly status: 'published';
       readonly currentVersion: number;
-      readonly versions: readonly number[];
+      readonly versions: readonly VersionEntry[];
       readonly current: SnapshotVersionView;
     };
 
@@ -50,14 +70,18 @@ const readContents = (text: string): SnapshotContents => {
   }
   const parsed = parseSnapshot(raw);
   if (!parsed.ok) return { status: 'invalid', issues: parsed.error.issues };
+  const { createdAt, createdBy, reason } = parsed.value;
   return {
     status: 'valid',
+    metadata: { createdAt, createdBy, reason },
+    raw: raw as Record<string, unknown>,
     flags: Object.entries(parsed.value.features).map(([key, feature]) => ({
       key,
       type: feature.type,
       enabled: feature.enabled,
       defaultValue: feature.type === 'config' ? feature.default : feature.enabled,
       ruleCount: feature.rules.length,
+      rules: feature.rules,
     })),
   };
 };
@@ -77,14 +101,23 @@ export async function viewSnapshotVersion(
   return { environment, version, status: 'available', contents: readContents(text) };
 }
 
+const toVersionEntry = (view: SnapshotVersionView): VersionEntry =>
+  view.status === 'available' && view.contents.status === 'valid'
+    ? { version: view.version, metadata: view.contents.metadata }
+    : { version: view.version };
+
 export async function browseEnvironment(ports: BrowsePorts, environment: string): Promise<EnvironmentView> {
   const currentVersion = await ports.readCurrentVersion(environment);
   if (currentVersion === undefined) return { environment, status: 'empty' };
+  // History is linear (1..current), so every version is read by key; no bucket listing is needed.
+  const views = await Promise.all(
+    Array.from({ length: currentVersion }, (_, index) => viewSnapshotVersion(ports, environment, index + 1)),
+  );
   return {
     environment,
     status: 'published',
     currentVersion,
-    versions: Array.from({ length: currentVersion }, (_, index) => index + 1),
-    current: await viewSnapshotVersion(ports, environment, currentVersion),
+    versions: views.map(toVersionEntry),
+    current: views[currentVersion - 1] as SnapshotVersionView,
   };
 }

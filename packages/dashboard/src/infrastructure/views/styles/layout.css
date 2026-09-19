@@ -1,0 +1,88 @@
+/* Page frame: header, container and section spacing. */
+.container {
+  width: 100%;
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: 0 var(--gutter);
+}
+
+.site-header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.site-header .container {
+  display: flex;
+  align-items: center;
+  min-height: 56px;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
+  color: var(--text);
+  font-weight: 700;
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+
+.brand:hover {
+  color: var(--accent);
+}
+
+main.container {
+  padding-top: 1.5rem;
+  padding-bottom: 3rem;
+}
+
+.page-head {
+  margin-bottom: 1.25rem;
+}
+
+.page-head .eyebrow {
+  margin: 0 0 0.25rem;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
+}
+
+.section {
+  margin-top: 2rem;
+}
+
+.section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.section-head h2 {
+  margin: 0;
+}
+
+.stack > * + * {
+  margin-top: 0.75rem;
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+@media (min-width: 640px) {
+  :root {
+    --gutter: 24px;
+  }
+
+  h1 {
+    font-size: 1.75rem;
+  }
+}

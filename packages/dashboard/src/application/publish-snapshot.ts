@@ -3,7 +3,7 @@ import { describeFailure, INVALID_JSON_MESSAGE, NOTIFY_FAILED_WARNING } from './
 
 export interface SnapshotWriter {
   publish(environment: string, snapshot: unknown, options?: { expectedCurrentVersion?: number }): Promise<number>;
-  rollback(environment: string, targetVersion: number): Promise<number>;
+  rollback(environment: string, targetVersion: number, options?: { actor?: string }): Promise<number>;
 }
 
 export interface WritePorts {
@@ -55,7 +55,7 @@ export async function rollbackSnapshot(
 ): Promise<WriteOutcome> {
   return write(
     ports,
-    (writer) => writer.rollback(environment, targetVersion),
-    (version) => `Rolled ${environment} back to version ${String(version)}.`,
+    (writer) => writer.rollback(environment, targetVersion, { actor: 'dashboard' }),
+    (version) => `Restored version ${String(targetVersion)} of ${environment} as version ${String(version)}.`,
   );
 }

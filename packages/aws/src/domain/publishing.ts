@@ -10,7 +10,7 @@ export type PublishingErrorReason =
   | 'INVALID_ENVIRONMENT'
   | 'INVALID_VERSION'
   | 'NO_CURRENT_POINTER'
-  | 'TARGET_NOT_BELOW_CURRENT';
+  | 'TARGET_IS_CURRENT';
 
 export interface PublishingError {
   readonly reason: PublishingErrorReason;
@@ -51,18 +51,53 @@ export function validateVersion(input: string | number): PublishingResult<number
   return fail('INVALID_VERSION', `version must be a positive decimal integer, got ${JSON.stringify(input)}`);
 }
 
+/** A rollback may target any valid version except the current one; whether its snapshot exists is checked in S3. */
+export interface RollbackTarget {
+  readonly targetVersion: number;
+  readonly currentVersion: number;
+}
+
 export function checkRollbackTarget(
   current: CurrentPointer | undefined,
   targetVersion: number,
-): PublishingResult<number> {
+): PublishingResult<RollbackTarget> {
   if (current === undefined) return fail('NO_CURRENT_POINTER', 'nothing has been published, so there is nothing to roll back');
   const target = validateVersion(targetVersion);
   if (!target.ok) return target;
-  if (target.value >= current.version) {
-    return fail(
-      'TARGET_NOT_BELOW_CURRENT',
-      `rollback target ${String(target.value)} must be lower than the current version ${String(current.version)}`,
-    );
+  if (target.value === current.version) {
+    return fail('TARGET_IS_CURRENT', `version ${String(target.value)} is already the current version`);
   }
-  return target;
+  return { ok: true, value: { targetVersion: target.value, currentVersion: current.version } };
 }
+
+export interface StampMeta {
+  readonly version: number;
+  readonly previousVersion: number | null;
+  readonly now: Date;
+}
+
+/**
+ * Sets the version metadata the publisher owns. Every other field, and the position of every key, is kept as
+ * given, so the stored body differs from the input only in these three values.
+ */
+export const stampSnapshot = (raw: Readonly<Record<string, unknown>>, meta: StampMeta): Record<string, unknown> => ({
+  ...raw,
+  version: meta.version,
+  previousVersion: meta.previousVersion,
+  createdAt: meta.now.toISOString(),
+});
+
+export interface RollbackMeta {
+  readonly targetVersion: number;
+  readonly createdBy: string;
+}
+
+/** The body a rollback publishes before stamping: the target's snapshot, with rollback authorship. */
+export const buildRollbackSnapshot = (
+  source: Readonly<Record<string, unknown>>,
+  meta: RollbackMeta,
+): Record<string, unknown> => ({
+  ...source,
+  createdBy: meta.createdBy,
+  reason: `Rollback to v${String(meta.targetVersion)}`,
+});

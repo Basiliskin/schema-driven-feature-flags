@@ -18,10 +18,8 @@ const baseSnapshot = {
 const rawText = JSON.stringify(baseSnapshot);
 
 const meta: FlagEditMeta = {
-  baseVersion: 7,
   createdBy: 'dashboard',
   reason: 'toggle dark mode',
-  now: new Date('2026-01-01T00:00:00.000Z'),
 };
 
 const features = (value: Record<string, unknown>) => value.features as Record<string, Record<string, unknown>>;
@@ -54,13 +52,13 @@ describe('applyFlagEdit', () => {
     expect(next['new-dashboard']).toEqual(baseSnapshot.features['new-dashboard']);
   });
 
-  it('sets the next-version metadata from meta rather than from the stored body', () => {
-    const result = applyFlagEdit(rawText, { kind: 'enabled', key: 'dark-mode', enabled: true }, { ...meta, baseVersion: 12 });
+  it('sets the authorship from meta and leaves the version metadata for the publisher to stamp', () => {
+    const result = applyFlagEdit(rawText, { kind: 'enabled', key: 'dark-mode', enabled: true }, meta);
 
     expect(result.ok && result.value).toMatchObject({
-      version: 13,
-      previousVersion: 12,
-      createdAt: '2026-01-01T00:00:00.000Z',
+      version: 7,
+      previousVersion: 6,
+      createdAt: '2026-09-19T06:00:00.000Z',
       createdBy: 'dashboard',
       reason: 'toggle dark mode',
     });
@@ -107,17 +105,14 @@ describe('applyFlagEdit', () => {
     const result = applyFlagEdit(
       rawText,
       { kind: 'enabled', key: 'dark-mode', enabled: true },
-      { ...meta, baseVersion: 0, createdBy: '' },
+      { ...meta, createdBy: '' },
     );
 
     expect(result).toEqual({
       ok: false,
       error: {
         kind: 'INVALID_SNAPSHOT',
-        issues: expect.arrayContaining([
-          expect.stringMatching(/^createdBy: /),
-          expect.stringMatching(/^previousVersion: /),
-        ]) as unknown,
+        issues: [expect.stringMatching(/^createdBy: /)] as unknown,
       },
     });
   });
@@ -132,5 +127,143 @@ describe('applyFlagEdit', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toEqual({ kind: 'INVALID_SNAPSHOT', issues: [expect.stringMatching(/^\(root\): /)] });
+  });
+
+  describe('create', () => {
+    it('adds a boolean Feature without a default and leaves every other Feature unchanged', () => {
+      const result = applyFlagEdit(rawText, { kind: 'create', key: 'beta.v2_x', type: 'boolean', enabled: true }, meta);
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const next = features(result.value);
+      expect(next['beta.v2_x']).toEqual({ type: 'boolean', enabled: true });
+      const rest = Object.fromEntries(Object.entries(next).filter(([key]) => key !== 'beta.v2_x'));
+      expect(JSON.stringify(rest)).toBe(JSON.stringify(baseSnapshot.features));
+    });
+
+    it('adds a config Feature with its parsed default', () => {
+      const result = applyFlagEdit(
+        rawText,
+        { kind: 'create', key: 'limits', type: 'config', enabled: false, defaultJson: '{"max":1}' },
+        meta,
+      );
+
+      expect(result.ok && features(result.value).limits).toEqual({ type: 'config', enabled: false, default: { max: 1 } });
+    });
+
+    it('defaults a config Feature without default text to null', () => {
+      const result = applyFlagEdit(rawText, { kind: 'create', key: 'limits', type: 'config', enabled: true }, meta);
+
+      expect(result.ok && features(result.value).limits).toEqual({ type: 'config', enabled: true, default: null });
+    });
+
+    it('refuses a key that already exists', () => {
+      expect(
+        applyFlagEdit(rawText, { kind: 'create', key: 'dark-mode', type: 'boolean', enabled: true }, meta),
+      ).toEqual({ ok: false, error: { kind: 'FEATURE_EXISTS', key: 'dark-mode' } });
+    });
+
+    it.each(['bad/key', '', '-leading', 'has space', '__proto__'])('refuses the invalid key %j', (key) => {
+      expect(applyFlagEdit(rawText, { kind: 'create', key, type: 'boolean', enabled: true }, meta)).toEqual({
+        ok: false,
+        error: { kind: 'INVALID_KEY', key },
+      });
+    });
+
+    it('returns the parser message for a default that is not JSON', () => {
+      const result = applyFlagEdit(
+        rawText,
+        { kind: 'create', key: 'limits', type: 'config', enabled: true, defaultJson: '{' },
+        meta,
+      );
+
+      expect(result).toEqual({
+        ok: false,
+        error: { kind: 'INVALID_DEFAULT_JSON', message: expect.stringMatching(/JSON/) as unknown },
+      });
+    });
+
+    it('creates the first Feature in a snapshot whose features map is empty', () => {
+      const result = applyFlagEdit(
+        JSON.stringify({ ...baseSnapshot, features: {} }),
+        { kind: 'create', key: 'first', type: 'boolean', enabled: false },
+        meta,
+      );
+
+      expect(result.ok && features(result.value)).toEqual({ first: { type: 'boolean', enabled: false } });
+    });
+  });
+
+  describe('delete', () => {
+    it('removes only the target Feature and keeps the order of the rest', () => {
+      const result = applyFlagEdit(rawText, { kind: 'delete', key: 'dark-mode' }, meta);
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const next = features(result.value);
+      expect(Object.keys(next)).toEqual(['new-dashboard', 'checkout-limits']);
+      expect(JSON.stringify(next['new-dashboard'])).toBe(JSON.stringify(baseSnapshot.features['new-dashboard']));
+      expect(JSON.stringify(next['checkout-limits'])).toBe(JSON.stringify(baseSnapshot.features['checkout-limits']));
+    });
+
+    it.each(['missing', '__proto__'])('reports %s as an unknown Feature', (key) => {
+      expect(applyFlagEdit(rawText, { kind: 'delete', key }, meta)).toEqual({
+        ok: false,
+        error: { kind: 'UNKNOWN_FEATURE', key },
+      });
+    });
+  });
+
+  describe('setRules', () => {
+    it('replaces only the rules of the target Feature', () => {
+      const rulesJson = '[{"when":{"country":{"in":["DE","FR"]}},"enabled":true}]';
+      const result = applyFlagEdit(rawText, { kind: 'setRules', key: 'dark-mode', rulesJson }, meta);
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const next = features(result.value);
+      expect(next['dark-mode']).toEqual({ type: 'boolean', enabled: false, rules: JSON.parse(rulesJson) as unknown });
+      expect(JSON.stringify(next['new-dashboard'])).toBe(JSON.stringify(baseSnapshot.features['new-dashboard']));
+      expect(JSON.stringify(next['checkout-limits'])).toBe(JSON.stringify(baseSnapshot.features['checkout-limits']));
+    });
+
+    it('clears the rules with an empty array', () => {
+      const result = applyFlagEdit(rawText, { kind: 'setRules', key: 'new-dashboard', rulesJson: '[]' }, meta);
+
+      expect(result.ok && features(result.value)['new-dashboard']).toEqual({
+        type: 'boolean',
+        enabled: true,
+        rules: [],
+      });
+    });
+
+    it('returns the parser message for rules that are not JSON', () => {
+      expect(applyFlagEdit(rawText, { kind: 'setRules', key: 'dark-mode', rulesJson: '[{' }, meta)).toEqual({
+        ok: false,
+        error: { kind: 'INVALID_RULES_JSON', message: expect.stringMatching(/JSON/) as unknown },
+      });
+    });
+
+    it('reports rules that break the schema as path: message issues', () => {
+      const result = applyFlagEdit(
+        rawText,
+        { kind: 'setRules', key: 'checkout-limits', rulesJson: '[{"when":{"plan":"pro"},"enabled":true}]' },
+        meta,
+      );
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.kind).toBe('INVALID_SNAPSHOT');
+      expect(result.error).toMatchObject({
+        issues: expect.arrayContaining([expect.stringMatching(/^features\.checkout-limits\.rules\[0\]/)]) as unknown,
+      });
+    });
+
+    it('reports an unknown Feature', () => {
+      expect(applyFlagEdit(rawText, { kind: 'setRules', key: 'missing', rulesJson: '[]' }, meta)).toEqual({
+        ok: false,
+        error: { kind: 'UNKNOWN_FEATURE', key: 'missing' },
+      });
+    });
   });
 });

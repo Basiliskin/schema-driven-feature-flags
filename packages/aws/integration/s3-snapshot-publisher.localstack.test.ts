@@ -86,20 +86,56 @@ describe('createS3SnapshotPublisher against LocalStack', () => {
     expect(await rejection(put({ IfMatch: staleEtag }, 'stale'))).toMatchObject(preconditionFailed);
   });
 
-  it('publishes v1 and v2 and rolls back to v1, each readable by the snapshot source', async () => {
+  it('rolls back by publishing the target as a new version, and keeps publishing afterwards', async () => {
     const target = publisher();
+    const first = { ...snapshot('first'), features: { 'new-dashboard': { type: 'boolean', enabled: false } } };
 
-    await expect(target.publish(ENVIRONMENT, snapshot('first'))).resolves.toBe(1);
-    await expect(load()).resolves.toMatchObject({ reason: 'first' });
-
+    await expect(target.publish(ENVIRONMENT, first)).resolves.toBe(1);
     await expect(target.publish(ENVIRONMENT, snapshot('second'))).resolves.toBe(2);
     await expect(load()).resolves.toMatchObject({ reason: 'second' });
 
-    await expect(target.rollback(ENVIRONMENT, 1)).resolves.toBe(1);
-    await expect(load()).resolves.toMatchObject({ reason: 'first' });
-    await expect(
-      s3.send(new HeadObjectCommand({ Bucket: bucket, Key: `${ENVIRONMENT}/snapshots/2.json` })),
-    ).resolves.toBeDefined();
+    await expect(target.rollback(ENVIRONMENT, 1, { actor: 'integration-rollback' })).resolves.toBe(3);
+    await expect(load()).resolves.toMatchObject({
+      version: 3,
+      previousVersion: 2,
+      createdBy: 'integration-rollback',
+      reason: 'Rollback to v1',
+      features: first.features,
+    });
+
+    await expect(target.publish(ENVIRONMENT, snapshot('after rollback'))).resolves.toBe(4);
+    await expect(load()).resolves.toMatchObject({ reason: 'after rollback' });
+  });
+
+  it('stamps version metadata matching the key, and refuses a body for another environment', async () => {
+    const target = publisher();
+    await target.publish(ENVIRONMENT, snapshot('first'));
+    await target.publish(ENVIRONMENT, snapshot('second'));
+
+    await expect(target.publish(ENVIRONMENT, snapshot('third, still saying version 1'))).resolves.toBe(3);
+    await expect(load()).resolves.toMatchObject({ version: 3, previousVersion: 2, reason: 'third, still saying version 1' });
+
+    const keysBefore = await listKeys(bucket);
+    const error = await rejection(target.publish(ENVIRONMENT, { ...snapshot('wrong env'), environment: 'elsewhere' }));
+    expect(error).toMatchObject({ name: 'S3PublishError', reason: 'ENVIRONMENT_MISMATCH' });
+    expect(await listKeys(bucket)).toEqual(keysBefore);
+  });
+
+  it('skips past snapshots an old-style rollback left above the pointer', async () => {
+    const target = publisher();
+    await target.publish(ENVIRONMENT, snapshot('first'));
+    const { Body } = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: `${ENVIRONMENT}/current.json` }));
+    const pointerV1 = await Body?.transformToString();
+    if (pointerV1 === undefined) throw new Error('expected a pointer body');
+    await target.publish(ENVIRONMENT, snapshot('second'));
+    await target.publish(ENVIRONMENT, snapshot('third'));
+    // Recreate the pre-horizon-12 rollback: the pointer moved down, snapshots 2 and 3 stayed behind. S3's
+    // LastModified has one-second resolution, so wait until the rewritten pointer is strictly newer.
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    await s3.send(new PutObjectCommand({ Bucket: bucket, Key: `${ENVIRONMENT}/current.json`, Body: pointerV1 }));
+
+    await expect(target.publish(ENVIRONMENT, snapshot('fourth'))).resolves.toBe(4);
+    await expect(load()).resolves.toMatchObject({ reason: 'fourth' });
   });
 
   it('lets exactly one of two concurrent publishes win', async () => {

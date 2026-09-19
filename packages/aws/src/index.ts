@@ -4,6 +4,7 @@ export {
   createS3SnapshotPublisher,
   S3PublishError,
   type PublishOptions,
+  type RollbackOptions,
   type NotifyErrorHandler,
   type NotifyFailure,
   type S3PublishErrorReason,

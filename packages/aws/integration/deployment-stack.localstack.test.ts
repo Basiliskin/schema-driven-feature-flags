@@ -142,7 +142,7 @@ describe('deployment stack against LocalStack', () => {
         waitTimeSeconds: WAIT_TIME_SECONDS,
       }),
     });
-    await expect(source.load()).resolves.toEqual(snapshot(first));
+    await expect(source.load()).resolves.toMatchObject(snapshot(first));
     const onChange = vi.fn();
     if (source.subscribe === undefined) throw new Error('expected a subscribe method');
     const unsubscribe: Unsubscribe = source.subscribe(onChange);
@@ -152,7 +152,7 @@ describe('deployment stack against LocalStack', () => {
       expect(second).toBe(first + 1);
       await vi.waitFor(
         () => {
-          expect(onChange).toHaveBeenLastCalledWith(snapshot(second));
+          expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining(snapshot(second)));
         },
         { timeout: DELIVERY_TIMEOUT_MS },
       );

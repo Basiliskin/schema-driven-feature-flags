@@ -1,0 +1,189 @@
+/* Cards, notices, badges, disclosures and the version timeline. */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1rem;
+}
+
+.card-current {
+  border-top: 4px solid var(--accent);
+}
+
+.card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.card-head > :first-child {
+  margin: 0;
+  margin-right: auto;
+}
+
+.meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.75rem;
+  margin: 0 0 0.75rem;
+}
+
+.meta dt {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.meta dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.badge-on {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.badge-accent {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+details > summary {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap);
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+details[open] > summary {
+  margin-bottom: 0.5rem;
+}
+
+.danger-zone > summary {
+  color: var(--danger);
+}
+
+.danger-zone[open] {
+  padding: 0.75rem;
+  border-radius: var(--radius-sm);
+  background: var(--danger-bg);
+}
+
+pre {
+  margin: 0;
+  max-height: 24rem;
+  overflow: auto;
+  padding: 0.75rem;
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+}
+
+.notice {
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  border-left: 4px solid;
+  border-radius: var(--radius-sm);
+  overflow-wrap: anywhere;
+}
+
+.notice p:last-child,
+.notice ul {
+  margin-bottom: 0;
+}
+
+.success {
+  border-color: var(--success);
+  background: var(--success-bg);
+}
+
+.warning {
+  border-color: var(--warning);
+  background: var(--warning-bg);
+}
+
+.error {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+}
+
+.flag-list,
+.timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.flag-list > li + li {
+  margin-top: 0.75rem;
+}
+
+.flag-key {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.timeline > li {
+  position: relative;
+  padding: 0 0 1rem 1.5rem;
+  border-left: 2px solid var(--border);
+  margin-left: 0.5rem;
+}
+
+.timeline > li::before {
+  content: "";
+  position: absolute;
+  left: -7px;
+  top: 0.9rem;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 2px solid var(--border);
+}
+
+.timeline > li.is-current::before {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.timeline-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.timeline-head a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
+  font-weight: 600;
+}
+
+.timeline-head form {
+  margin-left: auto;
+}
+
+.timeline p {
+  margin: 0;
+}

@@ -28,6 +28,7 @@ export {
   type ValidationIssue,
 } from './domain/errors.js';
 export type { EvaluationReason, EvaluationResult } from './domain/evaluation/evaluate.js';
+export { FEATURE_KEY_PATTERN } from './domain/feature.js';
 export type { BooleanFeature, ConfigFeature, Feature } from './domain/feature.js';
 export type { BooleanRule, Condition, ConfigRule, OperatorExpression } from './domain/rule.js';
 /**

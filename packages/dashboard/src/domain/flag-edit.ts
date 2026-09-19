@@ -1,20 +1,33 @@
-import { parseSnapshot, type Result, type ValidationIssue } from '@featuresync/core';
+import { FEATURE_KEY_PATTERN, parseSnapshot, type Result, type ValidationIssue } from '@featuresync/core';
+
+export type FlagType = 'boolean' | 'config';
 
 export type FlagEdit =
   | { readonly kind: 'enabled'; readonly key: string; readonly enabled: boolean }
-  | { readonly kind: 'default'; readonly key: string; readonly defaultJson: string };
+  | { readonly kind: 'default'; readonly key: string; readonly defaultJson: string }
+  | {
+      readonly kind: 'create';
+      readonly key: string;
+      readonly type: FlagType;
+      readonly enabled: boolean;
+      readonly defaultJson?: string;
+    }
+  | { readonly kind: 'delete'; readonly key: string }
+  | { readonly kind: 'setRules'; readonly key: string; readonly rulesJson: string };
 
+/** Authorship for the edited snapshot. The publisher stamps `version`, `previousVersion` and `createdAt`. */
 export interface FlagEditMeta {
-  readonly baseVersion: number;
   readonly createdBy: string;
   readonly reason: string;
-  readonly now: Date;
 }
 
 export type FlagEditFailure =
   | { readonly kind: 'UNKNOWN_FEATURE'; readonly key: string }
   | { readonly kind: 'DEFAULT_NOT_EDITABLE'; readonly key: string }
   | { readonly kind: 'INVALID_DEFAULT_JSON'; readonly message: string }
+  | { readonly kind: 'INVALID_RULES_JSON'; readonly message: string }
+  | { readonly kind: 'FEATURE_EXISTS'; readonly key: string }
+  | { readonly kind: 'INVALID_KEY'; readonly key: string }
   | { readonly kind: 'INVALID_SNAPSHOT'; readonly issues: readonly string[] };
 
 type JsonObject = Record<string, unknown>;
@@ -29,20 +42,14 @@ export function applyFlagEdit(
 ): Result<JsonObject, FlagEditFailure> {
   const base: unknown = JSON.parse(rawSnapshotText);
   const features = isObject(base) && isObject(base.features) ? base.features : {};
-  const target = Object.hasOwn(features, edit.key) ? features[edit.key] : undefined;
-  if (!isObject(target)) return { ok: false, error: { kind: 'UNKNOWN_FEATURE', key: edit.key } };
-
-  const edited = editFeature(target, edit);
-  if (!edited.ok) return edited;
+  const nextFeatures = editFeatures(features, edit);
+  if (!nextFeatures.ok) return nextFeatures;
 
   const next: JsonObject = {
     ...(base as JsonObject),
-    version: meta.baseVersion + 1,
-    previousVersion: meta.baseVersion,
-    createdAt: meta.now.toISOString(),
     createdBy: meta.createdBy,
     reason: meta.reason,
-    features: { ...features, [edit.key]: edited.value },
+    features: nextFeatures.value,
   };
 
   const validated = parseSnapshot(next);
@@ -52,13 +59,53 @@ export function applyFlagEdit(
   return { ok: true, value: next };
 }
 
-function editFeature(feature: JsonObject, edit: FlagEdit): Result<JsonObject, FlagEditFailure> {
+function editFeatures(features: JsonObject, edit: FlagEdit): Result<JsonObject, FlagEditFailure> {
+  const exists = Object.hasOwn(features, edit.key);
+  if (edit.kind === 'create') {
+    if (!FEATURE_KEY_PATTERN.test(edit.key)) return { ok: false, error: { kind: 'INVALID_KEY', key: edit.key } };
+    if (exists) return { ok: false, error: { kind: 'FEATURE_EXISTS', key: edit.key } };
+    const created = createFeature(edit);
+    return created.ok ? { ok: true, value: { ...features, [edit.key]: created.value } } : created;
+  }
+
+  const target = exists ? features[edit.key] : undefined;
+  if (!isObject(target)) return { ok: false, error: { kind: 'UNKNOWN_FEATURE', key: edit.key } };
+  if (edit.kind === 'delete') {
+    return { ok: true, value: Object.fromEntries(Object.entries(features).filter(([key]) => key !== edit.key)) };
+  }
+  const edited = editFeature(target, edit);
+  return edited.ok ? { ok: true, value: { ...features, [edit.key]: edited.value } } : edited;
+}
+
+function createFeature(edit: Extract<FlagEdit, { kind: 'create' }>): Result<JsonObject, FlagEditFailure> {
+  if (edit.type === 'boolean') return { ok: true, value: { type: 'boolean', enabled: edit.enabled } };
+  const defaultValue = parseJson(edit.defaultJson ?? 'null', 'INVALID_DEFAULT_JSON');
+  if (!defaultValue.ok) return defaultValue;
+  return { ok: true, value: { type: 'config', enabled: edit.enabled, default: defaultValue.value } };
+}
+
+function editFeature(
+  feature: JsonObject,
+  edit: Exclude<FlagEdit, { kind: 'create' | 'delete' }>,
+): Result<JsonObject, FlagEditFailure> {
   if (edit.kind === 'enabled') return { ok: true, value: { ...feature, enabled: edit.enabled } };
+  if (edit.kind === 'setRules') {
+    const rules = parseJson(edit.rulesJson, 'INVALID_RULES_JSON');
+    return rules.ok ? { ok: true, value: { ...feature, rules: rules.value } } : rules;
+  }
   if (feature.type === 'boolean') return { ok: false, error: { kind: 'DEFAULT_NOT_EDITABLE', key: edit.key } };
+  const defaultValue = parseJson(edit.defaultJson, 'INVALID_DEFAULT_JSON');
+  return defaultValue.ok ? { ok: true, value: { ...feature, default: defaultValue.value } } : defaultValue;
+}
+
+function parseJson(
+  text: string,
+  kind: 'INVALID_DEFAULT_JSON' | 'INVALID_RULES_JSON',
+): Result<unknown, FlagEditFailure> {
   try {
-    return { ok: true, value: { ...feature, default: JSON.parse(edit.defaultJson) as unknown } };
+    return { ok: true, value: JSON.parse(text) as unknown };
   } catch (error) {
-    return { ok: false, error: { kind: 'INVALID_DEFAULT_JSON', message: (error as Error).message } };
+    return { ok: false, error: { kind, message: (error as Error).message } };
   }
 }
 
