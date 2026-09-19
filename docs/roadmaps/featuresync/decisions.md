@@ -15,7 +15,7 @@
 - 2026-09-18 | horizon 4 | A snapshot orphaned by a failed pointer write makes the next publish fail with VERSION_EXISTS and is fixed by hand — because automatic skip-ahead was deferred (user choice).
 - 2026-09-18 | horizon 5 | The Nest client is injected only via an exported FEATURE_FLAGS token with explicit @Inject, never by type metadata — because FeatureFlags is an interface and vitest emits no metadata.
 - 2026-09-18 | horizon 5 | @nestjs/common, @nestjs/core, reflect-metadata and rxjs are peer (and dev) deps of @featuresync/nestjs; decorator tsconfig flags stay local to that package — because apps own one Nest copy.
-- 2026-09-18 | horizon 5 | @FeatureFlag skips a disabled method and returns undefined or its fallback's result, never throwing; it evaluates without context against the newest initialised module's client — — see horizon-05 roadmap.md
+- 2026-09-18 | horizon 5 | @FeatureFlag skips a disabled method and returns undefined or its fallback's result, never throwing; it evaluates without context against the newest initialised module's client — see horizon-05 roadmap.md
 - 2026-09-18 | horizon 6 | featuresync pull requires an explicit --version and never resolves the Current Pointer; the fetcher reports 403 as ACCESS_DENIED, distinct from not-found — because CI pins must be reproducible and diagnosable.
 - 2026-09-18 | horizon 6 | s3-read.ts owns every NoSuchKey/transformToString: isNotFound (NoSuchKey/404) for the publisher and fetcher, isMissing (+403) only for the source — because the publisher must fail on 403.
 - 2026-09-18 | horizon 7 | Apps receive Change Notifications only from their own SQS queue subscribed to the SNS topic, never a public HTTP endpoint — because apps must not expose an attack surface.
@@ -23,7 +23,7 @@
 - 2026-09-18 | horizon 8 | A push load failure rethrows so SQS redelivers the message; users must configure a DLQ with maxReceiveCount to bound retries — because a lost change is worse than a retried one (user choice at preview).
 - 2026-09-18 | horizon 8 | Push lives inside createS3SnapshotSource via an optional notificationQueue option; the SnapshotSource port and public exports are otherwise unchanged — because push is an S3-source detail, not a core concern.
 - 2026-09-18 | horizon 8 | A notification is only a hint: push re-reads current.json unconditionally, so a rollback lands only once the pointer confirms it; push and poll loads run serially — because ordering must follow the pointer.
-- 2026-09-18 | horizon 8 | Poison Message policy: unparseable queue messages keep the queue's existing delete-immediately behaviour; only the options field (notificationQueue) changes on createS3SnapshotSource — — see horizon-08 roadmap.md
+- 2026-09-18 | horizon 8 | Poison Message policy: unparseable queue messages keep the queue's existing delete-immediately behaviour; only the options field (notificationQueue) changes on createS3SnapshotSource — see horizon-08 roadmap.md
 - 2026-09-18 | horizon 8 | CLI publish/rollback take --topic-arn ?? FEATURESYNC_TOPIC_ARN; a failed Change Notification prints one stderr warning and exits 0 — because the pointer write already succeeded and polling still converges.
 
 - 2026-09-18 | horizon 9 | The Deployment Stack is a plain CloudFormation JSON template in packages/deploy deployed via the SDK, not AWS CDK — because CDK on LocalStack needs cdklocal/bootstrap (user confirmed at preview).
@@ -34,7 +34,7 @@
 - 2026-09-19 | horizon 10 | Dashboard POSTs are protected by one Origin/Host check (no CSRF token); publish accepts pasted snapshot JSON only — because the user chose the simpler option at preview.
 - 2026-09-19 | horizon 10 | The dashboard lists versions 1..current from the Current Pointer, never ListObjectsV2 — because listing needs IAM changes and readers never list the bucket.
 - 2026-09-19 | horizon 11 | Dashboard flag edits publish via S3SnapshotPublisher.publish(env, snapshot, {expectedCurrentVersion: base}); a mismatch throws CONFLICT before any write — because concurrent edits — see horizon-11 roadmap.md
-- 2026-09-19 | horizon 11 | Flag edits apply to the raw stored snapshot JSON (not parseSnapshot's normalized copy), validate with parseSnapshot, set version/previousVersion/createdAt; createdBy is 'dashboard' — — see horizon-11 roadmap.md
+- 2026-09-19 | horizon 11 | Flag edits apply to the raw stored snapshot JSON (not parseSnapshot's normalized copy), validate with parseSnapshot, set version/previousVersion/createdAt; createdBy is 'dashboard' — see horizon-11 roadmap.md
 - 2026-09-19 | horizon 11 | Edit POSTs re-render the environment page (200 notice / 422 with draft), no redirect; forms only on the environment page — because it matches publish/rollback and edits always start from the Current Pointer.
 - 2026-09-19 | horizon 13 | Percentage rollout is sticky via deterministic hash bucketing (murmur3_32 of flagKey:salt:value mod 10000); no stored assignments — because evaluate() must stay pure and cross-language (user choice).
 - 2026-09-19 | horizon 13 | Flags reference segments by key only; SDKs follow each segment's own <env>/segments/<key>/current.json, so a CSV upload takes effect without republishing flags (user choice at preview).
