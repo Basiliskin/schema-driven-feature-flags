@@ -43,6 +43,12 @@ export interface RunningDashboard {
 export const LOOPBACK_HOST = '127.0.0.1';
 export const MAX_BODY_BYTES = 1024 * 1024;
 
+// A DNS-rebound or proxied request reaches the loopback socket under a foreign Host, so only the dashboard's own names pass.
+export const isAllowedHost = (hostHeader: string | undefined, port: number): boolean => {
+  const host = hostHeader?.toLowerCase();
+  return host === `${LOOPBACK_HOST}:${String(port)}` || host === `localhost:${String(port)}`;
+};
+
 class HttpError extends Error {
   constructor(
     readonly status: number,
@@ -224,11 +230,12 @@ const editDraftOf = (key: string, fields: URLSearchParams, message: string, issu
 
 function createDashboardRequestHandler(
   ports: DashboardPorts,
-  expectedOrigin: () => string,
+  listeningPort: () => number,
   logError: (error: unknown) => void,
 ): (request: IncomingMessage, response: ServerResponse) => void {
   // Browsers send Origin on every form POST; a request without one is not from this dashboard's pages.
-  const isSameOrigin = (request: IncomingMessage): boolean => request.headers.origin === expectedOrigin();
+  const isSameOrigin = (request: IncomingMessage): boolean =>
+    request.headers.origin === `http://${LOOPBACK_HOST}:${String(listeningPort())}`;
 
   const editRoute = (
     environment: string,
@@ -401,6 +408,11 @@ function createDashboardRequestHandler(
   };
 
   return (request, response) => {
+    if (!isAllowedHost(request.headers.host, listeningPort())) {
+      response.writeHead(403, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+      response.end('This dashboard only answers requests addressed to 127.0.0.1 or localhost on its own port.');
+      return;
+    }
     dispatch(request, response).catch((error: unknown) => {
       if (error instanceof HttpError) {
         send(response, error.status, renderErrorPage(String(error.status), error.message));
@@ -413,10 +425,10 @@ function createDashboardRequestHandler(
 }
 
 export async function startDashboardServer(options: DashboardServerOptions): Promise<RunningDashboard> {
-  let origin = '';
+  let port = 0;
   const handler = createDashboardRequestHandler(
     options.ports,
-    () => origin,
+    () => port,
     options.logError ??
       ((error) => {
         console.error(error);
@@ -430,10 +442,9 @@ export async function startDashboardServer(options: DashboardServerOptions): Pro
       resolve();
     });
   });
-  const { port } = server.address() as AddressInfo;
-  origin = `http://${LOOPBACK_HOST}:${String(port)}`;
+  ({ port } = server.address() as AddressInfo);
   return {
-    url: origin,
+    url: `http://${LOOPBACK_HOST}:${String(port)}`,
     close: () =>
       new Promise<void>((resolve, reject) => {
         server.close((error) => {

@@ -33,3 +33,5 @@
 
 - 2026-09-19 | horizon 15 | planned | 4 phases (S3 source segment bundle load, segment pointer polling, LocalStack re-upload chain test, spec docs); gate passed, 0 healed, 10 minor debt
 - 2026-09-19 | horizon 15 | completed | 4 phases (segment bundle load, Segment Pointer polling, LocalStack re-upload chain test, spec docs); 0 amendments, 0 overrides
+- 2026-09-19 | horizon 16 | planned | 2 phases (fix stale edit-conflict LocalStack tests for kept auto-replay, Host allowlist on dashboard guard); lite; gate passed after 1 blocker + 1 major healed, 0 debt
+- 2026-09-20 | horizon 16 | completed | 2 phases (edit-conflict LocalStack tests match replay; dashboard Host allowlist), 0 amendments, 0 overrides

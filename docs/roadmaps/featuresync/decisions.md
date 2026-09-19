@@ -47,3 +47,8 @@
 - 2026-09-19 | horizon 15 | The S3 source emits a bare Snapshot when it references no segments, else one Snapshot Bundle per change — because it mirrors the file source and keeps existing consumers unchanged (user accepted at preview).
 - 2026-09-19 | horizon 15 | S3 source segment load failures are reported via the existing Logger by segment key only; no onError option — because segments hold PII and horizon 8 fixed the options surface.
 - 2026-09-19 | horizon 15 | An omitted segment keeps FlagClient's last-known-good copy; only a never-loaded segment gets no-match — because that is existing core behaviour and needs no core change (user accepted at preview).
+- 2026-09-19 | horizon 12 | Rollback publishes the target snapshot as version current+1 (linear history); supersedes pointer-moves-down and VERSION_EXISTS-after-rollback from horizon 4 — see horizon-12 roadmap.md
+- 2026-09-19 | horizon 12 | When the pointer lags the highest snapshot, the next write goes to highest+1, found by forward HeadObject probing, never ListObjects — because readers/publishers keep horizon-10 IAM.
+- 2026-09-19 | horizon 12 | The publisher stamps version/previousVersion/createdAt and rejects a body whose environment differs with ENVIRONMENT_MISMATCH — because stored bodies must match their key.
+- 2026-09-19 | horizon 16 | Dashboard edits auto-replay onto the latest version when the edited feature is unchanged since base (c0c62ee); only same-feature stale edits get 422 CONFLICT — because the user chose to keep replay.
+- 2026-09-20 | horizon 16 | Every dashboard request needs Host 127.0.0.1:<port> or localhost:<port> (403 plain text otherwise), plus the matching Origin on POST; proxies are unsupported — because DNS rebinding could read GET pages.

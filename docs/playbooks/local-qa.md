@@ -28,6 +28,12 @@ app using the SDK (S3 poll + SQS push). Every change you make should show up the
   field-by-field merge; conflicting fields must be chosen before _Apply to my draft_.
 - **Edit after rollback** — restore v1, then toggle a flag → the next version, no error.
 
+## Where the dashboard answers
+
+The dashboard only answers requests whose `Host` is `127.0.0.1:<port>` or `localhost:<port>`, on the port it
+listens on; any other `Host` (a rebound domain, `[::1]`, another port) gets a plain-text 403. POSTs also need
+the matching `Origin`. Putting the dashboard behind a proxy, even on localhost, is unsupported.
+
 ## Automated browser tests
 
 `pnpm --filter @featuresync/dashboard test:e2e` runs the Playwright suite (`packages/dashboard/e2e`) against

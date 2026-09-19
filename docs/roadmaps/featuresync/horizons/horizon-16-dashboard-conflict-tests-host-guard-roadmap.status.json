@@ -1,0 +1,113 @@
+{
+  "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-16-dashboard-conflict-tests-host-guard-roadmap.json",
+  "roadmapTask": "Horizon 16 of FeatureSync: make the stale dashboard LocalStack edit-conflict tests match the kept auto-replay behaviour while proving same-feature same-base edits still return 422 CONFLICT, and add a Host allowlist to the dashboard same-origin guard against DNS rebinding and proxied localhost, without contradicting horizon 12's landed decisions.",
+  "createdAt": "2026-09-19T20:54:29Z",
+  "updatedAt": "2026-09-19T21:08:41Z",
+  "roadmapRevision": 0,
+  "phases": [
+    {
+      "phaseId": "fix-stale-edit-conflict-localstack-tests",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-19T20:54:29Z",
+      "baseRef": "139d71a1dfe5a8b9f41c97116f03a7d280e3a5bf",
+      "baseDirty": true,
+      "notes": "Already dirty at start: docs/roadmaps/featuresync/{decisions,discoveries,state}.md, horizon-16 roadmap .json/.md (untracked). Changed: packages/dashboard/integration/dashboard.localstack.test.ts. Replaced the two stale different-feature 422 tests with a sequential replay case (200, EDIT_REPLAYED(2), v3 has both edits) and a concurrent case asserting invariants (≥1 success, only 200/422, pointer = 1+successes, published snapshot has exactly that many disabled flags, no orphan version); added sequential and concurrent same-feature cases expecting 422 with imported EDIT_CONFLICT text. Deviation: concurrent different-feature case does not require both edits applied — the loser can read the pointer before the winner writes it, replay on v1 and lose CAS again (discoveries.md). Keep-replay decision was already in decisions.md. pnpm test:integration passed; dashboard suite passed 5 more runs.",
+      "unplannedFiles": [],
+      "completedAt": "2026-09-19T21:02:50Z",
+      "gradeResult": {
+        "phaseId": "fix-stale-edit-conflict-localstack-tests",
+        "dimensionScores": [
+          {
+            "dimensionId": "production-code-untouched",
+            "score": 9,
+            "pass": true,
+            "evidence": "Only the integration test changed; decisions.md:53 records keep-replay."
+          },
+          {
+            "dimensionId": "different-feature-replay-asserted",
+            "score": 8,
+            "pass": true,
+            "evidence": "Sequential replay fully asserted; concurrent asserts invariants not both-edits-present, justified by discoveries.md pointer race."
+          },
+          {
+            "dimensionId": "same-feature-conflict-sequential",
+            "score": 9,
+            "pass": true,
+            "evidence": "422 with EDIT_CONFLICT(2), no v3, pointer 2."
+          },
+          {
+            "dimensionId": "same-feature-conflict-concurrent",
+            "score": 9,
+            "pass": true,
+            "evidence": "Promise.all, sorted [200,422], no v3, v2 has winner value."
+          },
+          {
+            "dimensionId": "message-not-hand-copied",
+            "score": 9,
+            "pass": true,
+            "evidence": "Imports EDIT_CONFLICT/EDIT_REPLAYED; suffix derived from EDIT_CONFLICT()."
+          }
+        ],
+        "overallPass": true
+      },
+      "gateRun": "pnpm typecheck: pass; pnpm lint: pass; pnpm test: pass; pnpm test:integration: pass"
+    },
+    {
+      "phaseId": "add-host-allowlist-same-origin-guard",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-19T21:03:13Z",
+      "baseRef": "139d71a1dfe5a8b9f41c97116f03a7d280e3a5bf",
+      "baseDirty": true,
+      "notes": "Already dirty at start: phase-1 test file, featuresync memory files, horizon-16 roadmap/ledger. Changed: packages/dashboard/src/infrastructure/http-server.ts (pure exported isAllowedHost; Host checked in the request handler before dispatch on every method, 403 text/plain; POST Origin check unchanged, now built from the listening port), http-server.test.ts (Host allowlist describe: isAllowedHost accept/reject table, foreign-Host GET on /, /env/production, /env/production/versions/1 → 403 plain text, wrong port 403, localhost 200, own Origin + foreign Host POST 403, raw no-Host GET via net socket 403), docs/playbooks/local-qa.md (allowed hosts, proxy unsupported), decisions.md (horizon-16 Host allowlist entry), blockers.md (horizon-10 Origin/Host line resolved). pnpm typecheck/lint/test and dashboard integration passed during implementation.",
+      "unplannedFiles": [],
+      "completedAt": "2026-09-19T21:08:41Z",
+      "gradeResult": {
+        "phaseId": "add-host-allowlist-same-origin-guard",
+        "dimensionScores": [
+          {
+            "dimensionId": "host-check-in-infrastructure-only",
+            "score": 9,
+            "pass": true,
+            "evidence": "No host matches in application/domain; isAllowedHost pure; diff within filesAffected. Re-scored 10→9: evidence named no above-the-bar trait."
+          },
+          {
+            "dimensionId": "allowlist-exactness",
+            "score": 9,
+            "pass": true,
+            "evidence": "Exact equality after lowercasing; full accept/reject table tested."
+          },
+          {
+            "dimensionId": "every-method-before-routing",
+            "score": 9,
+            "pass": true,
+            "evidence": "Check first in handler; foreign-Host GETs on 3 routes and raw no-Host get 403 text/plain."
+          },
+          {
+            "dimensionId": "post-origin-fail-closed-preserved",
+            "score": 10,
+            "pass": true,
+            "evidence": "Existing guard tests unchanged; own-Origin+foreign-Host POST 403 also asserts openWriter not called, proving no side effect."
+          },
+          {
+            "dimensionId": "tests-and-coverage",
+            "score": 9,
+            "pass": true,
+            "evidence": "All five cases tested; 100% coverage gate green (after one unrelated flaky core test rerun)."
+          },
+          {
+            "dimensionId": "playbook-documented",
+            "score": 9,
+            "pass": true,
+            "evidence": "Playbook states allowed hosts and proxy unsupported; decisions and blockers updated."
+          }
+        ],
+        "overallPass": true
+      },
+      "gateRun": "pnpm typecheck: pass; pnpm lint: pass; pnpm test: pass on rerun (first run: unrelated flaky core file-snapshot-source watch test); pnpm test:integration: pass"
+    }
+  ]
+}

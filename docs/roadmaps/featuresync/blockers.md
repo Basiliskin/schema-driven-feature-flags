@@ -14,7 +14,7 @@
 - 2026-09-18 | horizon 7 | Can a push-triggered load race a concurrent poll/reconcile load in the shared loaded closure? — resolved by decision 2026-09-18
 - 2026-09-18 | horizon 7 | Did horizon 7 keep publish/rollback returning Promise<number> with onNotifyError plus a console.warn default? — resolved by decision 2026-09-18
 - 2026-09-18 | horizon 9 | How does a 2nd reading app get its own queue on the shared bucket/topic? Template has no queue-only/existing-topic mode; blocks document-stack-deployment (REPLAN). — resolved
-- 2026-09-19 | horizon 10 | Does the single Origin/Host check hold for a missing Origin header, DNS rebinding against 127.0.0.1, or a proxied localhost?
+- 2026-09-19 | horizon 10 | Does the single Origin/Host check hold for a missing Origin header, DNS rebinding against 127.0.0.1, or a proxied localhost? — resolved by decision 2026-09-20
 - 2026-09-19 | horizon 10 | How often do operators hit VERSION_EXISTS after a rollback in real use — does the horizon-4 versioning decision need revisiting?
 - 2026-09-19 | horizon 10 | Is 1..current version browsing usable for many versions, or is pagination needed?
 - 2026-09-19 | horizon 10 | Can hand-written HTML strings keep 100% branch coverage as the dashboard grows?

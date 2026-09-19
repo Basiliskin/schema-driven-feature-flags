@@ -15,3 +15,7 @@
 - horizon 13 discoveries landed — see archive/discoveries-landed.md and horizon-13-segments-rollout-roadmap.md
 - horizon 14 discoveries landed — see archive/discoveries-landed.md and horizon-14-segment-upload-s3-publisher-roadmap.md
 - horizon 15 discoveries landed — see archive/discoveries-landed.md and horizon-15-s3-source-segment-loading-roadmap.md
+- 2026-09-19 | horizon 16 | edit conflict | LocalStack 200-vs-422 failure is replayOnLatest (c0c62ee) replaying different-feature edits, not horizon 12 [packages/dashboard/src/application/edit-feature.ts] → fix tests, not publisher
+- 2026-09-19 | horizon 16 | same-origin guard | Host header never validated; GET routes answer any Host, so a DNS-rebound page can read HTML [packages/dashboard/src/infrastructure/http-server.ts] → add Host allowlist on all methods
+- 2026-09-19 | horizon 16 | concurrent replay | Racing different-feature edits can still yield 200+422: the loser may read current.json before the winner writes it, replay on v1 and lose CAS again [packages/dashboard/src/application/edit-feature.ts] → concurrent tests assert invariants, not "both applied"
+- 2026-09-20 | horizon 16 | flaky test | core file-snapshot-source "pushes a bundle when watching" failed once on timing (1009ms) and passed on rerun [packages/core/test/infrastructure/file-snapshot-source.test.ts]

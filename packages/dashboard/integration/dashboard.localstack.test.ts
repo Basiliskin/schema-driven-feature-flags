@@ -9,10 +9,12 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { EDIT_CONFLICT, EDIT_REPLAYED } from '../src/application/error-messages.js';
 import type { RunningDashboard } from '../src/infrastructure/http-server.js';
 import { EXIT_OK, main, nodeIo } from '../src/main.js';
 
 const ENVIRONMENT = 'integration';
+const EDIT_CONFLICT_SUFFIX = EDIT_CONFLICT().slice(EDIT_CONFLICT().indexOf(' meanwhile'));
 
 // Guards against running this suite against real AWS when the local endpoint is not configured.
 if (process.env.AWS_ENDPOINT_URL_S3 === undefined) {
@@ -139,6 +141,9 @@ describe('featuresync-dashboard against LocalStack', () => {
   const disableNewDashboard = (baseVersion: number) =>
     post(`/env/${ENVIRONMENT}/features/new-dashboard`, { baseVersion: String(baseVersion), field: 'enabled' });
 
+  const disableCheckout = (baseVersion: number) =>
+    post(`/env/${ENVIRONMENT}/features/checkout`, { baseVersion: String(baseVersion), field: 'enabled' });
+
   afterAll(() => {
     s3.destroy();
   });
@@ -225,48 +230,69 @@ describe('featuresync-dashboard against LocalStack', () => {
     expect(after.features.checkout.rules).toEqual(before.features.checkout.rules);
   });
 
-  it('refuses a second sequential edit on the same base with the reload message', async () => {
+  it('replays a second sequential edit of a different flag on the same base as the next version', async () => {
     await seed(editableSnapshot);
 
     const first = await disableNewDashboard(1);
-    const second = await post(`/env/${ENVIRONMENT}/features/checkout`, {
-      baseVersion: '1',
-      field: 'enabled',
-    });
+    const second = await disableCheckout(1);
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(await second.text()).toContain(EDIT_REPLAYED(2));
+    expect(JSON.parse(await currentPointerText())).toMatchObject({ version: 3 });
+    const published = JSON.parse(await snapshotText(3)) as typeof editableSnapshot;
+    expect(published).toMatchObject({ version: 3, previousVersion: 2 });
+    expect(published.features['new-dashboard'].enabled).toBe(false);
+    expect(published.features.checkout.enabled).toBe(false);
+  });
+
+  it('never loses a published version when two edits of different flags race on the same base', async () => {
+    await seed(editableSnapshot);
+
+    const responses = await Promise.all([disableNewDashboard(1), disableCheckout(1)]);
+    const statuses = responses.map(({ status }) => status);
+
+    expect(statuses).toContain(200);
+    expect(statuses.every((status) => status === 200 || status === 422)).toBe(true);
+    const succeeded = statuses.filter((status) => status === 200).length;
+    const pointer = JSON.parse(await currentPointerText()) as { version: number };
+    expect(pointer.version).toBe(1 + succeeded);
+    expect(await snapshotExists(pointer.version + 1)).toBe(false);
+    const published = JSON.parse(await snapshotText(pointer.version)) as typeof editableSnapshot;
+    const disabled = [published.features['new-dashboard'].enabled, published.features.checkout.enabled].filter(
+      (enabled) => !enabled,
+    );
+    expect(disabled).toHaveLength(succeeded);
+  });
+
+  it('refuses a second sequential edit of the same flag on the same base', async () => {
+    await seed(editableSnapshot);
+
+    const first = await disableNewDashboard(1);
+    const second = await disableNewDashboard(1);
 
     expect(first.status).toBe(200);
     expect(second.status).toBe(422);
-    expect(await second.text()).toContain('Someone else published version 2 meanwhile — reload and redo your edit.');
-    expect((await listKeys(bucket)).sort()).toEqual(
-      [`${ENVIRONMENT}/current.json`, `${ENVIRONMENT}/snapshots/1.json`, `${ENVIRONMENT}/snapshots/2.json`].sort(),
-    );
+    expect(await second.text()).toContain(EDIT_CONFLICT(2));
+    expect(await snapshotExists(3)).toBe(false);
     expect(JSON.parse(await currentPointerText())).toMatchObject({ version: 2 });
   });
 
-  it('publishes exactly one of two concurrent edits on the same base', async () => {
+  it('publishes exactly one of two concurrent edits of the same flag on the same base', async () => {
     await seed(editableSnapshot);
 
-    const responses = await Promise.all([
-      disableNewDashboard(1),
-      post(`/env/${ENVIRONMENT}/features/checkout`, { baseVersion: '1', field: 'enabled' }),
-    ]);
+    const responses = await Promise.all([disableNewDashboard(1), disableNewDashboard(1)]);
     const replies = await Promise.all(
       responses.map(async (response) => ({ status: response.status, html: await response.text() })),
     );
 
     expect(replies.map(({ status }) => status).sort()).toEqual([200, 422]);
-    const winner = replies[0]?.status === 200 ? 'new-dashboard' : 'checkout';
-    const loser = replies.find(({ status }) => status === 422);
-    expect(loser?.html).toContain('reload and redo your edit.');
-    expect((await listKeys(bucket)).sort()).toEqual(
-      [`${ENVIRONMENT}/current.json`, `${ENVIRONMENT}/snapshots/1.json`, `${ENVIRONMENT}/snapshots/2.json`].sort(),
-    );
-    expect(await snapshotExists(2)).toBe(true);
+    expect(replies.find(({ status }) => status === 422)?.html).toContain(EDIT_CONFLICT_SUFFIX);
     expect(await snapshotExists(3)).toBe(false);
     expect(JSON.parse(await currentPointerText())).toMatchObject({ version: 2 });
     const published = JSON.parse(await snapshotText(2)) as typeof editableSnapshot;
-    expect(published.features[winner].enabled).toBe(false);
-    expect(published.features[winner === 'checkout' ? 'new-dashboard' : 'checkout'].enabled).toBe(true);
+    expect(published.features['new-dashboard'].enabled).toBe(false);
+    expect(published.features.checkout).toEqual(editableSnapshot.features.checkout);
   });
 
   it('edits a flag right after a rollback as the next version', async () => {

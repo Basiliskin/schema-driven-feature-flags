@@ -2,7 +2,7 @@ import { request as httpRequest, type OutgoingHttpHeaders } from 'node:http';
 import { connect } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SnapshotWriter } from '../application/publish-snapshot.js';
-import { MAX_BODY_BYTES, startDashboardServer, type DashboardPorts, type RunningDashboard } from './http-server.js';
+import { isAllowedHost, MAX_BODY_BYTES, startDashboardServer, type DashboardPorts, type RunningDashboard } from './http-server.js';
 
 const snapshotText = (features: Record<string, unknown>) =>
   JSON.stringify({
@@ -1029,6 +1029,96 @@ describe('startDashboardServer', () => {
 
       expect(raw).toMatch(/^HTTP\/1\.1 403/);
       expect(openWriter).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Host allowlist', () => {
+    it.each(['127.0.0.1:4000', 'localhost:4000', 'LOCALHOST:4000'])('accepts %s', (host) => {
+      expect(isAllowedHost(host, 4000)).toBe(true);
+    });
+
+    it.each([
+      undefined,
+      '',
+      'localhost',
+      'localhost:4001',
+      '127.0.0.1:4001',
+      '[::1]:4000',
+      'evil.example:4000',
+      'localhost.evil.example:4000',
+      '127.0.0.1.nip.io:4000',
+    ])('rejects %s', (host) => {
+      expect(isAllowedHost(host, 4000)).toBe(false);
+    });
+
+    it.each(['/', '/env/production', '/env/production/versions/1'])(
+      'refuses GET %s under a foreign Host with plain text',
+      async (path) => {
+        const { ports } = fakes();
+        const dashboard = await start(ports);
+        const { port } = new URL(dashboard.url);
+
+        const reply = await call(dashboard, 'GET', path, { headers: { host: `evil.example:${port}` } });
+
+        expect(reply.status).toBe(403);
+        expect(reply.headers['content-type']).toBe('text/plain; charset=utf-8');
+        expect(reply.body).not.toContain('<');
+      },
+    );
+
+    it('refuses GET on the right host but the wrong port', async () => {
+      const { ports } = fakes();
+      const dashboard = await start(ports);
+      const { port } = new URL(dashboard.url);
+
+      const reply = await call(dashboard, 'GET', '/', { headers: { host: `127.0.0.1:${String(Number(port) + 1)}` } });
+
+      expect(reply.status).toBe(403);
+    });
+
+    it('serves GET addressed to localhost on its own port', async () => {
+      const { ports } = fakes();
+      const dashboard = await start(ports);
+      const { port } = new URL(dashboard.url);
+
+      const reply = await call(dashboard, 'GET', '/', { headers: { host: `localhost:${port}` } });
+
+      expect(reply.status).toBe(200);
+    });
+
+    it('refuses a POST with its own Origin but a foreign Host', async () => {
+      const { ports, openWriter } = fakes();
+      const dashboard = await start(ports);
+      const { port } = new URL(dashboard.url);
+
+      const reply = await call(dashboard, 'POST', '/env/production/rollback', {
+        body: form({ version: '2' }),
+        headers: { host: `proxy.example:${port}` },
+      });
+
+      expect(reply.status).toBe(403);
+      expect(openWriter).not.toHaveBeenCalled();
+    });
+
+    it('refuses a GET with no Host header', async () => {
+      const { ports } = fakes();
+      const dashboard = await start(ports);
+      const { port } = new URL(dashboard.url);
+
+      const raw = await new Promise<string>((resolve, reject) => {
+        const socket = connect(Number(port), '127.0.0.1', () => {
+          socket.end('GET /env/production HTTP/1.0\r\n\r\n');
+        });
+        let received = '';
+        socket.on('data', (chunk: Buffer) => (received += chunk.toString()));
+        socket.on('end', () => {
+          resolve(received);
+        });
+        socket.on('error', reject);
+      });
+
+      expect(raw).toMatch(/^HTTP\/1\.1 403/);
+      expect(raw).toContain('text/plain');
     });
   });
 
