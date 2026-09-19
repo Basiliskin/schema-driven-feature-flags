@@ -4,5 +4,5 @@
     "rootDir": ".",
     "types": ["node"]
   },
-  "include": ["src", "test", "integration", "vitest.integration.config.ts"]
+  "include": ["src", "test", "integration", "e2e", "vitest.integration.config.ts", "playwright.config.ts"]
 }

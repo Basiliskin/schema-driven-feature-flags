@@ -11,9 +11,10 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node -e \"require('node:fs').cpSync('src/infrastructure/views/styles', 'dist/infrastructure/views/styles', { recursive: true })\"",
+    "build": "tsc -p tsconfig.build.json && node -e \"for (const dir of ['styles', 'scripts']) require('node:fs').cpSync('src/infrastructure/views/' + dir, 'dist/infrastructure/views/' + dir, { recursive: true })\"",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test:integration": "vitest run --config vitest.integration.config.ts"
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@featuresync/aws": "workspace:*",
@@ -23,6 +24,7 @@
     "@aws-sdk/client-s3": "^3.1135.0"
   },
   "devDependencies": {
-    "@aws-sdk/client-s3": "^3.1135.0"
+    "@aws-sdk/client-s3": "^3.1135.0",
+    "@playwright/test": "^1.63.0"
   }
 }

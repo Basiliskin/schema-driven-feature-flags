@@ -174,6 +174,82 @@ describe('editFeature', () => {
     });
   });
 
+  describe('when someone published meanwhile without touching the edited field', () => {
+    const snapshotWith = (features: Record<string, unknown>) => JSON.stringify({ ...baseSnapshot, features });
+
+    it('re-applies the edit to the latest version and publishes it on top', async () => {
+      const latest = snapshotWith({ ...baseSnapshot.features, 'checkout-limits': { type: 'config', enabled: false, default: { max: 9 } } });
+      let published = 0;
+      const { ports, writer } = fakePorts({
+        publish: () => (++published === 1 ? Promise.reject(awsError('S3PublishError', 'CONFLICT')) : Promise.resolve(8)),
+        pointer: () => Promise.resolve(7),
+      });
+      ports.fetchSnapshotText = (_env, version) => Promise.resolve(version === 7 ? latest : JSON.stringify(baseSnapshot));
+
+      const outcome = await editFeature(ports, 'production', 4, toggleDarkMode);
+
+      expect(outcome).toEqual({
+        kind: 'success',
+        version: 8,
+        message:
+          'Published version 8 to production. Version 7 was published while you were editing, without touching what you changed, so your edit was applied on top of it.',
+      });
+      const [, snapshot, options] = writer.publish.mock.calls[1] as [string, { features: Record<string, unknown> }, unknown];
+      expect(options).toEqual({ expectedCurrentVersion: 7 });
+      expect(snapshot.features).toEqual({
+        'dark-mode': { type: 'boolean', enabled: true },
+        'checkout-limits': { type: 'config', enabled: false, default: { max: 9 } },
+      });
+    });
+
+    it('leaves a real conflict for review when the edited field changed too', async () => {
+      const latest = snapshotWith({ ...baseSnapshot.features, 'dark-mode': { type: 'boolean', enabled: true, rules: [] } });
+      const { ports, writer } = fakePorts({ publish: rejectPublish('CONFLICT'), pointer: () => Promise.resolve(7) });
+      ports.fetchSnapshotText = (_env, version) => Promise.resolve(version === 7 ? latest : JSON.stringify(baseSnapshot));
+
+      const outcome = await editFeature(ports, 'production', 4, { kind: 'enabled', key: 'dark-mode', enabled: false });
+
+      expect(outcome).toMatchObject({ kind: 'failure', conflict: { since: 4 } });
+      expect(writer.publish).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('when replaying on the latest version does not go through', () => {
+    it('reports the edit failure when the created key was taken meanwhile', async () => {
+      const latest = JSON.stringify({ ...baseSnapshot, features: { ...baseSnapshot.features, fresh: { type: 'boolean', enabled: true } } });
+      const { ports, writer } = fakePorts({ publish: rejectPublish('CONFLICT'), pointer: () => Promise.resolve(7) });
+      ports.fetchSnapshotText = (_env, version) => Promise.resolve(version === 7 ? latest : JSON.stringify(baseSnapshot));
+
+      const outcome = await editFeature(ports, 'production', 4, { kind: 'create', key: 'fresh', type: 'boolean', enabled: true });
+
+      expect(outcome).toEqual({ kind: 'failure', message: FEATURE_EXISTS_MESSAGE('fresh'), issues: [] });
+      expect(writer.publish).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports a plain failure when the second publish fails for another reason', async () => {
+      let published = 0;
+      const { ports } = fakePorts({
+        publish: () => Promise.reject(awsError('S3PublishError', ++published === 1 ? 'CONFLICT' : 'REQUEST_FAILED')),
+        pointer: () => Promise.resolve(7),
+      });
+
+      const outcome = await editFeature(ports, 'production', 4, toggleDarkMode);
+
+      expect(outcome).toEqual({ kind: 'failure', message: PUBLISH_ERROR_MESSAGES.REQUEST_FAILED, issues: [] });
+    });
+
+    it('keeps the conflict when the latest version cannot be read', async () => {
+      const { ports, writer } = fakePorts({ publish: rejectPublish('CONFLICT'), pointer: () => Promise.resolve(7) });
+      ports.fetchSnapshotText = (_env, version) =>
+        version === 7 ? Promise.reject(new Error('s3 down')) : Promise.resolve(JSON.stringify(baseSnapshot));
+
+      const outcome = await editFeature(ports, 'production', 4, toggleDarkMode);
+
+      expect(outcome).toMatchObject({ kind: 'failure', conflict: { since: 4 } });
+      expect(writer.publish).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('when the publish loses a race or hits a rolled-back version', () => {
     it('maps CONFLICT to EDIT_CONFLICT naming the version that is now current', async () => {
       const { ports, calls } = fakePorts({
@@ -187,9 +263,11 @@ describe('editFeature', () => {
         kind: 'failure',
         message: EDIT_CONFLICT(7),
         issues: [],
+        conflict: { since: 4 },
       });
-      expect(outcome.message).toBe('Someone else published version 7 meanwhile — reload and redo your edit.');
-      expect(calls).toEqual(['fetch', 'publish', 'pointer']);
+      expect(outcome.message).toBe('Someone else published version 7 meanwhile, so your edit was not saved.');
+      // The unchanged latest snapshot makes the edit replayable, so it is tried once more and loses again.
+      expect(calls).toEqual(['fetch', 'publish', 'pointer', 'pointer', 'fetch', 'publish', 'pointer']);
     });
 
     it('maps VERSION_EXISTS with a moved pointer to EDIT_CONFLICT', async () => {
@@ -204,6 +282,7 @@ describe('editFeature', () => {
         kind: 'failure',
         message: EDIT_CONFLICT(5),
         issues: [],
+        conflict: { since: 4 },
       });
       expect(outcome.message).toContain('version 5 meanwhile');
     });
@@ -216,7 +295,7 @@ describe('editFeature', () => {
 
       const outcome = await editFeature(ports, 'production', 4, toggleDarkMode);
 
-      expect(outcome).toEqual({ kind: 'failure', message: EDIT_CONFLICT(4), issues: [] });
+      expect(outcome).toEqual({ kind: 'failure', message: EDIT_CONFLICT(4), issues: [], conflict: { since: 4 } });
       expect(outcome.message).not.toContain('paste-publish');
     });
 
@@ -238,8 +317,9 @@ describe('editFeature', () => {
           kind: 'failure',
           message: EDIT_CONFLICT(),
           issues: [],
+          conflict: { since: 4 },
         });
-        expect(outcome.message).toBe('Someone else published a new version meanwhile — reload and redo your edit.');
+        expect(outcome.message).toBe('Someone else published a new version meanwhile, so your edit was not saved.');
         expect(outcome.message).not.toMatch(/\d|undefined/);
       },
     );

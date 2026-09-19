@@ -110,3 +110,47 @@ function parseJson(
 }
 
 const describeIssue = (issue: ValidationIssue): string => `${issue.path}: ${issue.message}`;
+
+/** The parts of a flag an edit reads or writes; for a delete, the whole flag. */
+const touchedFields = (edit: Exclude<FlagEdit, { kind: 'create' }>): readonly string[] | 'all' => {
+  switch (edit.kind) {
+    case 'enabled':
+      return ['enabled'];
+    // A default only makes sense for a config flag, so the type is part of what it depends on.
+    case 'default':
+      return ['type', 'default'];
+    case 'setRules':
+      return ['rules'];
+    case 'delete':
+      return 'all';
+  }
+};
+
+const featuresIn = (snapshotText: string): JsonObject | undefined => {
+  try {
+    const parsed: unknown = JSON.parse(snapshotText);
+    return isObject(parsed) && isObject(parsed.features) ? parsed.features : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const sameJson = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * Whether an edit made against `baseText` can be replayed on `latestText` without overriding anything that
+ * changed in between: true when nothing the edit touches differs between the two. A create only needs the
+ * key to still be free in both, and re-applying it reports FEATURE_EXISTS if someone else took it.
+ */
+export function canReplayEdit(baseText: string, latestText: string, edit: FlagEdit): boolean {
+  const before = featuresIn(baseText);
+  const after = featuresIn(latestText);
+  if (before === undefined || after === undefined) return false;
+  if (edit.kind === 'create') return !Object.hasOwn(before, edit.key);
+  const from = before[edit.key];
+  const to = after[edit.key];
+  if (!isObject(from) || !isObject(to)) return false;
+  const touched = touchedFields(edit);
+  if (touched === 'all') return sameJson(from, to);
+  return touched.every((field) => sameJson(from[field], to[field]));
+}

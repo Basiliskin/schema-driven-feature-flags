@@ -63,8 +63,11 @@ export function describeFailure(error: unknown): FailureDescription {
 
 export const EDIT_CONFLICT = (currentVersion?: number): string =>
   currentVersion === undefined
-    ? 'Someone else published a new version meanwhile — reload and redo your edit.'
-    : `Someone else published version ${String(currentVersion)} meanwhile — reload and redo your edit.`;
+    ? 'Someone else published a new version meanwhile, so your edit was not saved.'
+    : `Someone else published version ${String(currentVersion)} meanwhile, so your edit was not saved.`;
+
+export const EDIT_REPLAYED = (latestVersion: number): string =>
+  `Version ${String(latestVersion)} was published while you were editing, without touching what you changed, so your edit was applied on top of it.`;
 
 export const UNKNOWN_FEATURE_MESSAGE = (key: string): string => `The snapshot has no feature named "${key}".`;
 

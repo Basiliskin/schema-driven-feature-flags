@@ -193,10 +193,6 @@ pre {
   margin-top: 0.5rem;
 }
 
-.flag-list > li[hidden] {
-  display: none;
-}
-
 .flag-row > summary {
   flex-wrap: wrap;
   gap: 0.5rem;
@@ -272,4 +268,172 @@ pre {
 
 .publish-dialog:not(.is-enhanced) .dialog-head form {
   display: none;
+}
+
+/* Update banner and changes dialog. */
+.update-banner {
+  position: sticky;
+  top: 0.5rem;
+  z-index: 10;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin: 0 0 1rem;
+  padding: 0.5rem 0.5rem 0.5rem 1rem;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.update-banner p {
+  margin: 0;
+}
+
+.change-list {
+  list-style: none;
+  margin: 1rem 0;
+  padding: 0;
+}
+
+.change-list > li {
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--border);
+}
+
+.change-list > li.has-conflict {
+  padding-left: 0.75rem;
+  border-left: 4px solid var(--warning);
+}
+
+.change-list .card-head {
+  margin-bottom: 0.25rem;
+}
+
+.change-list p {
+  margin: 0.25rem 0 0;
+}
+
+.diff-added {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.diff-removed {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.diff-changed {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.diff-table td.diff-before {
+  background: var(--danger-bg);
+}
+
+.diff-table td.diff-after {
+  background: var(--success-bg);
+}
+
+.merge-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.is-carried {
+  outline: 2px solid var(--warning);
+  outline-offset: 2px;
+}
+
+/* Three-way merge of a pasted snapshot draft. */
+.merge-list {
+  list-style: none;
+  margin: 1rem 0;
+  padding: 0;
+}
+
+.merge-list > li {
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--border);
+}
+
+.merge-list > li.merge-conflict {
+  padding-left: 0.75rem;
+  border-left: 4px solid var(--warning);
+}
+
+.merge-list > li.is-missing {
+  border-left-color: var(--danger);
+}
+
+.merge-sides {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: 0.5rem;
+}
+
+.merge-side pre {
+  max-height: 14rem;
+  font-size: 0.8rem;
+}
+
+.merge-label {
+  margin: 0 0 0.25rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.merge-mine pre {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.merge-theirs pre {
+  box-shadow: inset 3px 0 0 var(--success);
+}
+
+.merge-absent {
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.merge-choice {
+  margin-top: 0.5rem;
+}
+
+.merge-badge-conflict {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.merge-badge-theirs {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.merge-field {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0 0 0.75rem;
+  border-left: 2px solid var(--border);
+}
+
+.merge-field.merge-conflict {
+  border-left-color: var(--warning);
+}
+
+.merge-field.is-missing {
+  border-left-color: var(--danger);
+}
+
+.merge-badge-combined {
+  background: var(--success-bg);
+  color: var(--success);
 }

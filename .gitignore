@@ -4,3 +4,6 @@ node_modules/
 dist/
 coverage/
 examples/local-dashboard/.dev-state.json
+# Playwright
+test-results/
+playwright-report/

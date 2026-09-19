@@ -10,7 +10,7 @@ export default defineConfig({
       test: {
         name: (JSON.parse(readFileSync(`packages/${dir}/package.json`, 'utf8')) as { name: string }).name,
         root: `packages/${dir}`,
-        exclude: [...configDefaults.exclude, 'integration/**'],
+        exclude: [...configDefaults.exclude, 'integration/**', 'e2e/**'],
       },
     })),
     coverage: {

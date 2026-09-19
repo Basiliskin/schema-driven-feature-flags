@@ -1,6 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { browseEnvironment, viewSnapshotVersion } from '../application/browse-environment.js';
+import { compareWithCurrent } from '../application/compare-versions.js';
+import { applyDraftMerge, mergeDraft } from '../application/merge-draft.js';
+import type { MergeChoices, Side } from '../domain/snapshot-merge.js';
 import { editFeature, type EditFeaturePorts } from '../application/edit-feature.js';
 import { describeFailure } from '../application/error-messages.js';
 import type { FlagEdit, FlagType } from '../domain/flag-edit.js';
@@ -16,6 +19,9 @@ import type { EditDraft } from './views/feature-edit-form.js';
 import { renderHomePage } from './views/home-page.js';
 import type { Notice } from './views/layout.js';
 import type { CreateDraft } from './views/new-flag-form.js';
+import { renderChangesFragment } from './views/changes-dialog.js';
+import { renderMergeFragment } from './views/merge-dialog.js';
+import { CLIENT_SCRIPT, CLIENT_SCRIPT_PATH } from './views/client-script.js';
 import { STYLESHEET, STYLESHEET_PATH } from './views/stylesheet.js';
 import { renderVersionPage } from './views/version-page.js';
 
@@ -59,17 +65,45 @@ const send = (response: ServerResponse, status: number, html: string): void => {
   response.end(html);
 };
 
-// Pages link the sheet with a content-hash query, so a new release gets a new URL and the old one can be cached for good.
-const stylesheetRoute: Route = {
+// Pages link assets with a content-hash query, so a new release gets a new URL and the old one can be cached for good.
+const assetRoute = (contentType: string, body: string): Route => ({
   method: 'GET',
   handle: (_request, response) => {
     response.writeHead(200, {
-      'content-type': 'text/css; charset=utf-8',
+      'content-type': `${contentType}; charset=utf-8`,
       'cache-control': 'public, max-age=31536000, immutable',
       'x-content-type-options': 'nosniff',
     });
-    response.end(STYLESHEET);
+    response.end(body);
   },
+});
+
+const stylesheetRoute = assetRoute('text/css', STYLESHEET);
+const clientScriptRoute = assetRoute('text/javascript', CLIENT_SCRIPT);
+
+const sendJson = (response: ServerResponse, status: number, body: unknown): void => {
+  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+  response.end(JSON.stringify(body));
+};
+
+const isSide = (value: unknown): value is Side => value === 'mine' || value === 'theirs';
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** `{ key: side }` or `{ key: { field: side } }`, as the merge dialog's script sends it. */
+const parseChoices = (text: string | null): MergeChoices => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text ?? '{}');
+  } catch {
+    throw new HttpError(400, 'The merge choices are not valid JSON.');
+  }
+  const valid =
+    isPlainObject(parsed) &&
+    Object.values(parsed).every((choice) => isSide(choice) || (isPlainObject(choice) && Object.values(choice).every(isSide)));
+  if (!valid) throw new HttpError(400, 'The merge choices must map flags to "mine" or "theirs".');
+  return parsed as MergeChoices;
 };
 
 const redirect = (response: ServerResponse, location: string): void => {
@@ -212,6 +246,9 @@ function createDashboardRequestHandler(
       const state = {
         notices: outcomeNotices(outcome),
         ...(outcome.kind === 'failure' ? draftState(fields, outcome.message, outcome.issues) : {}),
+        ...(parsed.ok && outcome.kind === 'failure' && outcome.conflict !== undefined
+          ? { conflict: { since: outcome.conflict.since, key: parsed.edit.key } }
+          : {}),
       };
       send(response, writeStatus(outcome), renderEnvironmentPage(view, state));
     },
@@ -228,7 +265,9 @@ function createDashboardRequestHandler(
         },
       };
     }
-    if (`/${segments.join('/')}` === STYLESHEET_PATH) return stylesheetRoute;
+    const path = `/${segments.join('/')}`;
+    if (path === STYLESHEET_PATH) return stylesheetRoute;
+    if (path === CLIENT_SCRIPT_PATH) return clientScriptRoute;
     if (segments[0] !== 'env' || segments.length < 2 || segments.length > 4) return undefined;
     const environment = decodeSegment(segments[1] as string);
     if (segments.length === 2) {
@@ -239,16 +278,72 @@ function createDashboardRequestHandler(
         },
       };
     }
+    // Polled by open pages so an operator learns when someone else has published in the meantime.
+    if (segments.length === 3 && segments[2] === 'current-version') {
+      return {
+        method: 'GET',
+        handle: async (_request, response) => {
+          sendJson(response, 200, { version: (await ports.readCurrentVersion(environment)) ?? null });
+        },
+      };
+    }
+    if (segments.length === 3 && segments[2] === 'changes') {
+      return {
+        method: 'GET',
+        handle: async (_request, response, url) => {
+          const comparison = await compareWithCurrent(ports, environment, parseVersion(url.searchParams.get('since')));
+          const edited = url.searchParams.get('edited') ?? undefined;
+          send(
+            response,
+            200,
+            comparison.status === 'up-to-date'
+              ? '<p class="muted">You already have the latest version.</p>'
+              : renderChangesFragment(comparison, edited),
+          );
+        },
+      };
+    }
+    // POST only because a draft can be large; it reads snapshots and writes nothing.
+    if (segments.length === 3 && segments[2] === 'merge') {
+      return {
+        method: 'POST',
+        handle: async (request, response) => {
+          const fields = await readForm(request);
+          const merge = await mergeDraft(ports, environment, parseVersion(fields.get('since')), fields.get('snapshot') ?? '');
+          send(response, 200, renderMergeFragment(merge));
+        },
+      };
+    }
+    // Applies the operator's merge choices to their draft; answers with the merged draft, never publishes it.
+    if (segments.length === 4 && segments[2] === 'merge' && segments[3] === 'apply') {
+      return {
+        method: 'POST',
+        handle: async (request, response) => {
+          const fields = await readForm(request);
+          const result = await applyDraftMerge(
+            ports,
+            environment,
+            parseVersion(fields.get('since')),
+            parseVersion(fields.get('to')),
+            fields.get('snapshot') ?? '',
+            parseChoices(fields.get('choices')),
+          );
+          sendJson(response, result.status === 'merged' ? 200 : 409, result);
+        },
+      };
+    }
     if (segments.length === 3 && segments[2] === 'publish') {
       return {
         method: 'POST',
         handle: async (request, response) => {
-          const draft = (await readForm(request)).get('snapshot') ?? '';
-          const outcome = await publishSnapshot(ports, environment, draft);
+          const fields = await readForm(request);
+          const draft = fields.get('snapshot') ?? '';
+          const outcome = await publishSnapshot(ports, environment, draft, parseBaseVersion(fields));
           const view = await browseEnvironment(ports, environment);
           const state = {
             notices: outcomeNotices(outcome),
             ...(outcome.kind === 'failure' ? { draft } : {}),
+            ...(outcome.kind === 'failure' && outcome.conflict !== undefined ? { conflict: outcome.conflict } : {}),
           };
           send(response, writeStatus(outcome), renderEnvironmentPage(view, state));
         },

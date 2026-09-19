@@ -10,6 +10,9 @@ export interface EnvironmentPageState {
   readonly draft?: string;
   readonly editDraft?: EditDraft;
   readonly createDraft?: CreateDraft;
+  /** An edit was rejected because someone published first; the page offers to review what changed since. */
+  /** `key` names the flag whose edit was rejected; absent when the rejected change was a pasted snapshot. */
+  readonly conflict?: { readonly since: number; readonly key?: string };
 }
 
 type PublishedView = Extract<EnvironmentView, { status: 'published' }>;
@@ -121,28 +124,52 @@ ${[...view.versions]
 
 // A modal dialog keeps the raw-JSON editor out of the way until it is asked for. It opens on load when
 // a publish was rejected, so the operator lands back on their draft; without JavaScript it renders inline.
-const renderPublishDialog = (view: EnvironmentView, draft: string | undefined): string => `<dialog id="publish-dialog" class="publish-dialog" aria-labelledby="publish-heading"${draft === undefined ? '' : ' data-open-on-load'}>
+// On a conflict the review dialog opens first, and offers to return to this draft from there.
+const renderPublishDialog = (view: EnvironmentView, state: EnvironmentPageState): string => `<dialog id="publish-dialog" class="publish-dialog" aria-labelledby="publish-heading"${state.draft === undefined || state.conflict !== undefined ? '' : ' data-open-on-load'}>
 <div class="dialog-head"><h2 id="publish-heading">Publish a new version</h2>
 <form method="dialog"><button type="submit" class="button-secondary" aria-label="Close">Close</button></form></div>
 <p class="muted">Starts from the current snapshot. <code>version</code>, <code>previousVersion</code> and <code>createdAt</code> are set when you publish.</p>
 <form method="post" action="${escapeHtml(`${environmentPath(view.environment)}/publish`)}" class="stack">
-<label for="snapshot">Snapshot JSON</label>
-<textarea id="snapshot" name="snapshot" rows="16" required spellcheck="false">${escapeHtml(draft ?? prefill(view))}</textarea>
+${view.status === 'published' ? `<input type="hidden" name="baseVersion" value="${String(view.currentVersion)}">\n` : ''}<label for="snapshot">Snapshot JSON</label>
+<textarea id="snapshot" name="snapshot" rows="16" required spellcheck="false">${escapeHtml(state.draft ?? prefill(view))}</textarea>
 <div class="actions"><button type="submit">Publish</button></div>
 </form>
 </dialog>`;
+
+// Filled in by the page script when a newer version shows up; hidden until then and without JavaScript.
+const renderUpdateWatch = (view: PublishedView, conflict: EnvironmentPageState['conflict']): string => {
+  const review =
+    conflict === undefined
+      ? ''
+      : ` data-review-since="${String(conflict.since)}"${conflict.key === undefined ? '' : ` data-review-key="${escapeHtml(conflict.key)}"`}`;
+  const message =
+    conflict === undefined
+      ? 'Someone published version <strong data-latest-version></strong> after you opened this page.'
+      : `${conflict.key === undefined ? 'Your snapshot draft was based on' : `Your edit to <code>${escapeHtml(conflict.key)}</code> was made on`} version ${String(conflict.since)}; the page now shows version <strong data-latest-version>${String(view.currentVersion)}</strong>.`;
+  return `<div data-watch-version="${String(view.currentVersion)}" data-watch-path="${escapeHtml(environmentPath(view.environment))}"${review} hidden></div>
+<div id="update-banner" class="update-banner" role="status"${conflict === undefined ? ' hidden' : ''}>
+<p>${message}</p>
+<button type="button" data-review-changes>Review changes</button>
+</div>
+<div id="merge-notice" class="notice warning" role="status" hidden><p></p></div>
+<dialog id="changes-dialog" class="publish-dialog" aria-labelledby="changes-heading">
+<div class="dialog-head"><h2 id="changes-heading">What changed</h2>
+<form method="dialog"><button type="submit" class="button-secondary">Close</button></form></div>
+<div id="changes-body"></div>
+</dialog>`;
+};
 
 export const renderEnvironmentPage = (view: EnvironmentView, state: EnvironmentPageState = {}): string => {
   const summary =
     view.status === 'empty'
       ? '<section class="card card-current"><p>Nothing has been published to this environment yet.</p></section>'
-      : `${renderCurrentCard(view)}\n${renderFlags(view, state)}\n${renderVersions(view)}`;
+      : `${renderUpdateWatch(view, state.conflict)}\n${renderCurrentCard(view)}\n${renderFlags(view, state)}\n${renderVersions(view)}`;
   return renderPage(
     view.environment,
     `<div class="page-head page-head-actions"><div><p class="eyebrow">Environment</p><h1>Environment ${escapeHtml(view.environment)}</h1></div>
 <button type="button" data-open-dialog="publish-dialog" hidden>Publish new version</button></div>
 ${summary}
-${renderPublishDialog(view, state.draft)}`,
+${renderPublishDialog(view, state)}`,
     state.notices,
   );
 };

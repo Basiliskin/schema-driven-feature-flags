@@ -48,6 +48,11 @@
   }
 }
 
+/* Components set display on buttons and rows; this keeps the hidden attribute authoritative. */
+[hidden] {
+  display: none !important;
+}
+
 *,
 *::before,
 *::after {

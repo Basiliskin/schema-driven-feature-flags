@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyFlagEdit, type FlagEditMeta } from '../../src/domain/flag-edit.js';
+import { applyFlagEdit, canReplayEdit, type FlagEditMeta } from '../../src/domain/flag-edit.js';
 
 const baseSnapshot = {
   schemaVersion: 1,
@@ -265,5 +265,46 @@ describe('applyFlagEdit', () => {
         error: { kind: 'UNKNOWN_FEATURE', key: 'missing' },
       });
     });
+  });
+});
+
+describe('canReplayEdit', () => {
+  const snapshot = (features: Record<string, unknown>) => JSON.stringify({ features });
+  const limits = { type: 'config', enabled: false, default: { max: 3 }, rules: [] };
+  const base = snapshot({ limits, beta: { type: 'boolean', enabled: true } });
+
+  it('replays an edit when only other fields or other flags changed', () => {
+    const latest = snapshot({ limits: { ...limits, rules: [{ when: {} }] }, beta: { type: 'boolean', enabled: false } });
+    expect(canReplayEdit(base, latest, { kind: 'enabled', key: 'limits', enabled: true })).toBe(true);
+    expect(canReplayEdit(base, latest, { kind: 'default', key: 'limits', defaultJson: '{}' })).toBe(true);
+  });
+
+  it('refuses when the field the edit touches changed', () => {
+    const latest = snapshot({ limits: { ...limits, enabled: true } });
+    expect(canReplayEdit(base, latest, { kind: 'enabled', key: 'limits', enabled: false })).toBe(false);
+    const rules = snapshot({ limits: { ...limits, rules: [{ when: {} }] } });
+    expect(canReplayEdit(base, rules, { kind: 'setRules', key: 'limits', rulesJson: '[]' })).toBe(false);
+  });
+
+  it('refuses a default edit after a type change', () => {
+    const latest = snapshot({ limits: { type: 'boolean', enabled: false, default: { max: 3 }, rules: [] } });
+    expect(canReplayEdit(base, latest, { kind: 'default', key: 'limits', defaultJson: '{}' })).toBe(false);
+  });
+
+  it('refuses any edit to a flag deleted meanwhile, and a delete of a flag changed meanwhile', () => {
+    expect(canReplayEdit(base, snapshot({}), { kind: 'enabled', key: 'limits', enabled: true })).toBe(false);
+    const latest = snapshot({ limits: { ...limits, enabled: true } });
+    expect(canReplayEdit(base, latest, { kind: 'delete', key: 'limits' })).toBe(false);
+    expect(canReplayEdit(base, base, { kind: 'delete', key: 'limits' })).toBe(true);
+  });
+
+  it('refuses when either snapshot is not JSON with features', () => {
+    expect(canReplayEdit('{', base, { kind: 'delete', key: 'limits' })).toBe(false);
+    expect(canReplayEdit(base, '{"features":1}', { kind: 'delete', key: 'limits' })).toBe(false);
+  });
+
+  it('replays a create while the key was free when the edit was made', () => {
+    expect(canReplayEdit(base, base, { kind: 'create', key: 'fresh', type: 'boolean', enabled: true })).toBe(true);
+    expect(canReplayEdit(base, base, { kind: 'create', key: 'beta', type: 'boolean', enabled: true })).toBe(false);
   });
 });

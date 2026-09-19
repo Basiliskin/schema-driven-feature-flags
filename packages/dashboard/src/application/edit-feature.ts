@@ -1,9 +1,9 @@
-import { applyFlagEdit, type FlagEdit, type FlagEditFailure } from '../domain/flag-edit.js';
+import { applyFlagEdit, canReplayEdit, type FlagEdit, type FlagEditFailure, type FlagEditMeta } from '../domain/flag-edit.js';
 import type { BrowsePorts } from './browse-environment.js';
 import {
   DEFAULT_NOT_EDITABLE_MESSAGE,
+  EDIT_REPLAYED,
   describeFailure,
-  EDIT_CONFLICT,
   EDITED_SNAPSHOT_INVALID_MESSAGE,
   FEATURE_EXISTS_MESSAGE,
   INVALID_DEFAULT_JSON_MESSAGE,
@@ -11,7 +11,7 @@ import {
   INVALID_RULES_JSON_MESSAGE,
   UNKNOWN_FEATURE_MESSAGE,
 } from './error-messages.js';
-import { write, type WriteOutcome, type WritePorts } from './publish-snapshot.js';
+import { publishExpecting, type WriteOutcome, type WritePorts } from './publish-snapshot.js';
 
 export type EditFeaturePorts = BrowsePorts & WritePorts;
 
@@ -79,20 +79,6 @@ const editFailure = (failure: FlagEditFailure): WriteOutcome => {
   }
 };
 
-// Matched structurally so this layer never loads the aws runtime just for an instanceof check.
-const publishReasonOf = (error: unknown): unknown =>
-  typeof error === 'object' && error !== null && (error as { name?: unknown }).name === 'S3PublishError'
-    ? (error as { reason?: unknown }).reason
-    : undefined;
-
-const readPointerAfterFailure = async (ports: BrowsePorts, environment: string): Promise<number | undefined> => {
-  try {
-    return await ports.readCurrentVersion(environment);
-  } catch {
-    return undefined;
-  }
-};
-
 export async function editFeature(
   ports: EditFeaturePorts,
   environment: string,
@@ -106,29 +92,45 @@ export async function editFeature(
     return { kind: 'failure', ...describeFailure(error) };
   }
 
-  const edited = applyFlagEdit(text, edit, { createdBy: CREATED_BY, reason: describeEdit(edit) });
+  const meta = { createdBy: CREATED_BY, reason: describeEdit(edit) };
+  const edited = applyFlagEdit(text, edit, meta);
   if (!edited.ok) return editFailure(edited.error);
 
-  let publishReason: unknown;
-  const outcome = await write(
-    ports,
-    async (writer) => {
-      try {
-        return await writer.publish(environment, edited.value, {
-          expectedCurrentVersion: baseVersion,
-        });
-      } catch (error) {
-        publishReason = publishReasonOf(error);
-        throw error;
-      }
-    },
-    (version) => `Published version ${String(version)} to ${environment}.`,
-  );
-  if (outcome.kind === 'success' || (publishReason !== 'CONFLICT' && publishReason !== 'VERSION_EXISTS')) {
-    return outcome;
-  }
+  const outcome = await publishExpecting(ports, environment, edited.value, baseVersion);
+  if (outcome.kind === 'success' || outcome.conflict === undefined) return outcome;
+  return (await replayOnLatest(ports, environment, text, edit, meta, baseVersion)) ?? outcome;
+}
 
-  // Both mean another writer got in first: rollbacks now append a version, so VERSION_EXISTS is only a race.
-  const current = await readPointerAfterFailure(ports, environment);
-  return { kind: 'failure', message: EDIT_CONFLICT(current), issues: [] };
+const readLatest = async (ports: EditFeaturePorts, environment: string) => {
+  try {
+    const version = await ports.readCurrentVersion(environment);
+    return version === undefined ? undefined : { version, text: await ports.fetchSnapshotText(environment, version) };
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Someone published while the operator was editing. When nothing this edit touches changed in between,
+ * the edit is re-applied to the latest version and published once more, so it goes through as if made there.
+ * Resolves to `undefined` when that isn't safe, leaving the conflict for the operator to review.
+ */
+async function replayOnLatest(
+  ports: EditFeaturePorts,
+  environment: string,
+  baseText: string,
+  edit: FlagEdit,
+  meta: FlagEditMeta,
+  baseVersion: number,
+): Promise<WriteOutcome | undefined> {
+  const latest = await readLatest(ports, environment);
+  if (latest === undefined || !canReplayEdit(baseText, latest.text, edit)) return undefined;
+  const replayed = applyFlagEdit(latest.text, edit, meta);
+  if (!replayed.ok) return editFailure(replayed.error);
+  const outcome = await publishExpecting(ports, environment, replayed.value, latest.version);
+  if (outcome.kind === 'success') {
+    return { ...outcome, message: `${outcome.message} ${EDIT_REPLAYED(latest.version)}` };
+  }
+  // Lost the race a second time: report against the version the operator actually edited.
+  return outcome.conflict === undefined ? outcome : { ...outcome, conflict: { since: baseVersion } };
 }

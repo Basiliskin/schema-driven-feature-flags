@@ -21,8 +21,18 @@ app using the SDK (S3 poll + SQS push). Every change you make should show up the
 - **Restore** v1 → it is republished as v3, new "app sees" line.
 - **Edit a flag** — toggle _Enabled_, or change _Default JSON_ of `payment-flow` → new version, "app sees" updates.
 - **Bad input** — `{not json` as a default, or an invalid snapshot in _Publish_ → error, draft kept, no new version.
-- **Stale edit** — two tabs, save in one, then the other → conflict notice.
+- **Stale edit** — two tabs, save in one, then the other. A different field → saved on top of it with a note;
+  the same field or a deleted flag → conflict notice with _Review changes_.
+- **Update banner** — two tabs, publish in one; the other shows _Someone published version N_ within 15 s.
+- **Merge a draft** — two tabs, publish in one, then paste-publish in the other → _Review changes_ opens the
+  field-by-field merge; conflicting fields must be chosen before _Apply to my draft_.
 - **Edit after rollback** — restore v1, then toggle a flag → the next version, no error.
+
+## Automated browser tests
+
+`pnpm --filter @featuresync/dashboard test:e2e` runs the Playwright suite (`packages/dashboard/e2e`) against
+an in-memory dashboard, no LocalStack needed. It uses the installed Google Chrome; set `PLAYWRIGHT_CHANNEL=`
+(empty) to use Playwright's own Chromium after `npx playwright install chromium`, e.g. in CI.
 
 ## Known gaps seen 2026-09-19 (fixed in horizon 12)
 

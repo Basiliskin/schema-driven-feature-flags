@@ -9,7 +9,7 @@ import {
   publishSnapshot,
   rollbackSnapshot,
   type SnapshotWriter,
-  type WritePorts,
+  type ConflictPorts,
 } from '../../src/application/publish-snapshot.js';
 
 const SECRET = 'AKIAIOSFODNN7EXAMPLE';
@@ -24,7 +24,8 @@ type Behaviour = (onNotifyError: NotifyErrorHandler) => Promise<number>;
 
 const fakePorts = (behaviour: Behaviour) => {
   const writer = { publish: vi.fn<SnapshotWriter['publish']>(), rollback: vi.fn<SnapshotWriter['rollback']>() };
-  const ports: WritePorts = {
+  const ports: ConflictPorts = {
+    readCurrentVersion: () => Promise.resolve(7),
     openWriter: (onNotifyError) => {
       writer.publish.mockImplementation(() => behaviour(onNotifyError));
       writer.rollback.mockImplementation(() => behaviour(onNotifyError));
@@ -42,6 +43,33 @@ const notifyThen =
   };
 
 describe('publishSnapshot', () => {
+  it('publishes only on top of the version the draft started from', async () => {
+    const { ports, writer } = fakePorts(() => Promise.resolve(4));
+
+    await publishSnapshot(ports, 'production', '{}', 3);
+
+    expect(writer.publish).toHaveBeenCalledWith('production', {}, { expectedCurrentVersion: 3 });
+  });
+
+  it.each(['CONFLICT', 'VERSION_EXISTS'])('reports %s against a base version as a reviewable conflict', async (reason) => {
+    const { ports } = fakePorts(() => Promise.reject(publishError(reason)));
+
+    await expect(publishSnapshot(ports, 'production', '{}', 3)).resolves.toEqual({
+      kind: 'failure',
+      message: 'Someone else published version 7 meanwhile, so your edit was not saved.',
+      issues: [],
+      conflict: { since: 3 },
+    });
+  });
+
+  it('keeps the generic message for a conflict with no base version to review from', async () => {
+    const { ports } = fakePorts(() => Promise.reject(publishError('CONFLICT')));
+
+    const outcome = await publishSnapshot(ports, 'production', '{}');
+
+    expect(outcome).toEqual({ kind: 'failure', message: PUBLISH_ERROR_MESSAGES.CONFLICT, issues: [] });
+  });
+
   it('publishes the parsed snapshot once and reports the new version', async () => {
     const { ports, writer } = fakePorts(() => Promise.resolve(4));
 

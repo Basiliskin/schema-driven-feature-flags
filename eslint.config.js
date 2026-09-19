@@ -31,6 +31,16 @@ export default defineConfig(
     },
   },
   {
+    // Browser script served to dashboard pages as-is; no bundler, so it names its globals here.
+    files: ['packages/dashboard/src/infrastructure/views/scripts/*.js'],
+    languageOptions: {
+      sourceType: 'script',
+      globals: Object.fromEntries(
+        ['window', 'document', 'navigator', 'fetch', 'sessionStorage', 'URLSearchParams', 'CSS', 'setTimeout', 'setInterval'].map((name) => [name, 'readonly']),
+      ),
+    },
+  },
+  {
     files: ['packages/*/src/**/*.ts'],
     plugins: { 'import-x': importX },
     settings: {

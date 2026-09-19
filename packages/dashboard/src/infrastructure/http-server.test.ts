@@ -22,6 +22,8 @@ const VALID = snapshotText({
 });
 
 
+const publishError = (reason: string) => Object.assign(new Error(reason), { name: 'S3PublishError', reason });
+
 interface Fakes {
   readonly ports: DashboardPorts;
   readonly writer: { publish: ReturnType<typeof vi.fn>; rollback: ReturnType<typeof vi.fn> };
@@ -198,6 +200,174 @@ describe('startDashboardServer', () => {
     expect((await call(dashboard, 'GET', '/env/%E0%A4%A')).status).toBe(400);
   });
 
+  describe('GET /assets/app.js', () => {
+    it('serves the page script the pages load, cacheable for good behind its content hash', async () => {
+      const dashboard = await start(fakes().ports);
+
+      const page = await call(dashboard, 'GET', '/env/production');
+      const src = /<script src="([^"]+)" defer><\/script>/.exec(page.body)?.[1] as string;
+      const script = await call(dashboard, 'GET', src);
+
+      expect(src).toMatch(/^\/assets\/app\.js\?v=[0-9a-f]{12}$/);
+      expect(script.status).toBe(200);
+      expect(script.headers['content-type']).toBe('text/javascript; charset=utf-8');
+      expect(script.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+      expect(script.body).toContain('/current-version');
+    });
+  });
+
+  describe('update checks', () => {
+    const versioned = (current: number) =>
+      fakes({
+        readCurrentVersion: () => Promise.resolve(current),
+        fetchSnapshotText: (_env, version) =>
+          Promise.resolve(
+            version === 3
+              ? VALID
+              : snapshotText({
+                  'new-dashboard': { type: 'boolean', enabled: false },
+                  'dark-mode': { type: 'boolean', enabled: true },
+                }),
+          ),
+      });
+
+    it('marks the page with the version it was rendered from', async () => {
+      const dashboard = await start(fakes().ports);
+      const page = await call(dashboard, 'GET', '/env/production');
+      expect(page.body).toContain('data-watch-version="3" data-watch-path="/env/production"');
+      expect(page.body).toContain('<div id="update-banner" class="update-banner" role="status" hidden>');
+    });
+
+    it('reports the current version as uncached JSON', async () => {
+      const dashboard = await start(versioned(5).ports);
+      const reply = await call(dashboard, 'GET', '/env/production/current-version');
+      expect(reply.status).toBe(200);
+      expect(reply.headers['content-type']).toBe('application/json; charset=utf-8');
+      expect(reply.headers['cache-control']).toBe('no-store');
+      expect(JSON.parse(reply.body)).toEqual({ version: 5 });
+    });
+
+    it('reports null for an environment with nothing published', async () => {
+      const dashboard = await start(fakes({ readCurrentVersion: () => Promise.resolve(undefined) }).ports);
+      expect(JSON.parse((await call(dashboard, 'GET', '/env/production/current-version')).body)).toEqual({ version: null });
+    });
+
+    it('renders the flag-level changes since a version for the review dialog', async () => {
+      const dashboard = await start(versioned(5).ports);
+      const reply = await call(dashboard, 'GET', '/env/production/changes?since=3');
+      expect(reply.status).toBe(200);
+      expect(reply.body).toContain('From version 3 to version 5, published by test');
+      expect(reply.body).toContain('<li data-changed-key="checkout-limits">');
+      expect(reply.body).toContain('<span class="badge diff-removed">removed</span>');
+      expect(reply.body).toContain('<li data-changed-key="dark-mode">');
+      expect(reply.body).toContain('<th scope="row">enabled</th><td class="diff-before"><code>true</code></td><td class="diff-after"><code>false</code></td>');
+      expect(reply.body).toContain('data-merge="keep"');
+    });
+
+    it('flags the rejected edit on its row, and explains when that flag was deleted', async () => {
+      const dashboard = await start(versioned(5).ports);
+      const deleted = await call(dashboard, 'GET', '/env/production/changes?since=3&edited=checkout-limits');
+      expect(deleted.body).toContain('<li data-changed-key="checkout-limits" class="has-conflict">');
+      expect(deleted.body).toContain('This flag was deleted, so your edit to it can’t be applied.');
+      const changed = await call(dashboard, 'GET', '/env/production/changes?since=3&edited=new-dashboard');
+      expect(changed.body).toContain('Your edit to this flag is kept in its form');
+    });
+
+    it('says so when nothing changed, and rejects a bad since', async () => {
+      const dashboard = await start(versioned(3).ports);
+      expect((await call(dashboard, 'GET', '/env/production/changes?since=3')).body).toContain('already have the latest');
+      expect((await call(dashboard, 'GET', '/env/production/changes?since=x')).status).toBe(400);
+    });
+  });
+
+  describe('POST /env/:env/merge', () => {
+    const limits = (enabled: boolean, max: unknown) => ({ type: 'config', enabled, default: { max } });
+    const base = snapshotText({ a: { type: 'boolean', enabled: true }, b: limits(true, 1) });
+    const latest = snapshotText({ a: { type: 'boolean', enabled: false }, b: limits(true, 9) });
+    const draft = snapshotText({ a: { type: 'boolean', enabled: true }, b: limits(false, '</script>') });
+    const ports = () =>
+      fakes({
+        readCurrentVersion: () => Promise.resolve(5),
+        fetchSnapshotText: (_env, version) => Promise.resolve(version === 3 ? base : latest),
+      }).ports;
+
+    it('preselects one-sided changes and asks only about fields changed differently on both sides', async () => {
+      const dashboard = await start(ports());
+      const reply = await call(dashboard, 'POST', '/env/production/merge', { body: form({ since: '3', snapshot: draft }) });
+
+      expect(reply.status).toBe(200);
+      expect(reply.body).toContain('<strong>1 flag was changed on both sides</strong>');
+      expect(reply.body).toContain('<input type="radio" name="pick:a" value="theirs" checked> Take version 5');
+      expect(reply.body).toContain('<li data-merge-key="b" data-by-field class="merge-conflict">');
+      expect(reply.body).toContain('<div class="merge-field merge-conflict" data-merge-field="default">');
+      expect(reply.body).toContain('<input type="radio" name="pick:b:default" value="mine"> Keep mine');
+      expect(reply.body).toContain('<input type="radio" name="pick:b:default" value="theirs"> Take version 5');
+      expect(reply.body).toContain('<input type="radio" name="pick:b:enabled" value="mine" checked> Keep mine');
+      expect(reply.body).not.toContain('data-merge-field="type"');
+    });
+
+    it('applies the choices on the server and returns the merged draft', async () => {
+      const dashboard = await start(ports());
+      const reply = await call(dashboard, 'POST', '/env/production/merge/apply', {
+        body: form({ since: '3', to: '5', snapshot: draft, choices: JSON.stringify({ b: { default: 'theirs' } }) }),
+      });
+
+      expect(reply.status).toBe(200);
+      expect(reply.headers['content-type']).toBe('application/json; charset=utf-8');
+      const result = JSON.parse(reply.body) as { status: string; snapshotText: string };
+      expect(result.status).toBe('merged');
+      expect((JSON.parse(result.snapshotText) as { features: unknown }).features).toEqual({
+        a: { type: 'boolean', enabled: false },
+        b: { type: 'config', enabled: false, default: { max: 9 } },
+      });
+    });
+
+    it('answers 409 naming the conflicts still without a choice, or a version that moved', async () => {
+      const dashboard = await start(ports());
+      const missing = await call(dashboard, 'POST', '/env/production/merge/apply', {
+        body: form({ since: '3', to: '5', snapshot: draft, choices: '{}' }),
+      });
+      expect(missing.status).toBe(409);
+      expect(JSON.parse(missing.body)).toEqual({ status: 'missing', missing: ['b.default'] });
+
+      const moved = await call(dashboard, 'POST', '/env/production/merge/apply', {
+        body: form({ since: '3', to: '4', snapshot: draft, choices: '{}' }),
+      });
+      expect(JSON.parse(moved.body)).toEqual({ status: 'moved', to: 5 });
+    });
+
+    it('treats missing fields as an empty draft and no choices', async () => {
+      const dashboard = await start(ports());
+      const merge = await call(dashboard, 'POST', '/env/production/merge', { body: form({ since: '3' }) });
+      expect(merge.body).toContain('can’t be merged');
+      const apply = await call(dashboard, 'POST', '/env/production/merge/apply', { body: form({ since: '3', to: '5' }) });
+      expect(JSON.parse(apply.body)).toEqual({ status: 'invalid-draft' });
+    });
+
+    it('rejects malformed choices with 400', async () => {
+      const dashboard = await start(ports());
+      for (const choices of ['{', '[]', '{"b":"both"}', '{"b":{"default":1}}']) {
+        const reply = await call(dashboard, 'POST', '/env/production/merge/apply', {
+          body: form({ since: '3', to: '5', snapshot: draft, choices }),
+        });
+        expect(reply.status).toBe(400);
+      }
+    });
+
+    it('explains a draft that cannot be merged', async () => {
+      const dashboard = await start(ports());
+      const reply = await call(dashboard, 'POST', '/env/production/merge', { body: form({ since: '3', snapshot: '{' }) });
+      expect(reply.body).toContain('can’t be merged');
+    });
+
+    it('requires a same-origin POST', async () => {
+      const dashboard = await start(ports());
+      expect((await call(dashboard, 'GET', '/env/production/merge')).status).toBe(405);
+      const foreign = await call(dashboard, 'POST', '/env/production/merge', { body: form({ since: '3', snapshot: draft }), sameOrigin: false });
+      expect(foreign.status).toBe(403);
+    });
+  });
+
   describe('GET /assets/app.css', () => {
     it('serves the one stylesheet the pages link, cacheable for good behind its content hash', async () => {
       const dashboard = await start(fakes().ports);
@@ -267,6 +437,34 @@ describe('startDashboardServer', () => {
   });
 
   describe('POST /env/:env/publish', () => {
+    it('publishes against the version the page showed, carried in the form', async () => {
+      const { ports, writer } = fakes();
+      const dashboard = await start(ports);
+
+      const page = await call(dashboard, 'GET', '/env/production');
+      expect(page.body).toMatch(/action="\/env\/production\/publish" class="stack">\n<input type="hidden" name="baseVersion" value="3">/);
+
+      await call(dashboard, 'POST', '/env/production/publish', { body: form({ baseVersion: '3', snapshot: VALID }) });
+      expect(writer.publish).toHaveBeenCalledWith('production', JSON.parse(VALID), { expectedCurrentVersion: 3 });
+    });
+
+    it('turns a lost race into a reviewable conflict instead of reopening the draft', async () => {
+      const { ports } = fakes(
+        { readCurrentVersion: () => Promise.resolve(5) },
+        { publish: () => Promise.reject(publishError('CONFLICT')) },
+      );
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'POST', '/env/production/publish', { body: form({ baseVersion: '3', snapshot: VALID }) });
+
+      expect(reply.status).toBe(422);
+      expect(reply.body).toContain('Someone else published version 5 meanwhile, so your edit was not saved.');
+      expect(reply.body).toContain('data-watch-version="5" data-watch-path="/env/production" data-review-since="3" hidden>');
+      expect(reply.body).toContain('Your snapshot draft was based on version 3');
+      expect(reply.body).toContain('<dialog id="publish-dialog" class="publish-dialog" aria-labelledby="publish-heading">');
+      expect(reply.body).toContain('<input type="hidden" name="baseVersion" value="5">');
+    });
+
     it('publishes the pasted JSON through a writer opened for this request', async () => {
       const { ports, writer, openWriter } = fakes();
       const dashboard = await start(ports);
@@ -380,7 +578,6 @@ describe('startDashboardServer', () => {
   describe('POST /env/:env/features', () => {
     const published = (writer: Fakes['writer']) =>
       writer.publish.mock.calls[0] as [string, { features: Record<string, unknown> }, unknown];
-    const publishError = (reason: string) => Object.assign(new Error(reason), { name: 'S3PublishError', reason });
 
     it('creates a boolean flag against the submitted base version', async () => {
       const { ports, writer } = fakes({}, { publish: () => Promise.resolve(4) });
@@ -457,7 +654,7 @@ describe('startDashboardServer', () => {
       });
 
       expect(reply.status).toBe(422);
-      expect(reply.body).toContain('Someone else published version 5 meanwhile — reload and redo your edit.');
+      expect(reply.body).toContain('Someone else published version 5 meanwhile, so your edit was not saved.');
       expect(published(writer)[2]).toEqual({ expectedCurrentVersion: 3 });
     });
 
@@ -481,7 +678,6 @@ describe('startDashboardServer', () => {
   describe('POST /env/:env/features/:key', () => {
     const published = (writer: Fakes['writer']) => writer.publish.mock.calls[0] as [string, Snapshot, unknown];
     type Snapshot = { version: number; createdAt: string; createdBy: string; features: Record<string, Record<string, unknown>> };
-    const publishError = (reason: string) => Object.assign(new Error(reason), { name: 'S3PublishError', reason });
 
     it('publishes the edit against the submitted base version and re-renders with the new version', async () => {
       const fetchSnapshotText = vi.fn(() => Promise.resolve(VALID));
@@ -631,8 +827,33 @@ describe('startDashboardServer', () => {
       });
 
       expect(reply.status).toBe(422);
-      expect(reply.body).toContain('Someone else published version 7 meanwhile — reload and redo your edit.');
+      expect(reply.body).toContain('Someone else published version 7 meanwhile, so your edit was not saved.');
       expect(published(writer)[2]).toEqual({ expectedCurrentVersion: 3 });
+    });
+
+    it('offers to review what changed since the version the rejected edit was made on', async () => {
+      const { ports } = fakes(
+        { readCurrentVersion: () => Promise.resolve(7) },
+        { publish: () => Promise.reject(publishError('CONFLICT')) },
+      );
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'POST', '/env/production/features/new-dashboard', {
+        body: form({ baseVersion: '3', field: 'enabled', enabled: 'on' }),
+      });
+
+      expect(reply.body).toContain('data-watch-version="7" data-watch-path="/env/production" data-review-since="3" data-review-key="new-dashboard"');
+      expect(reply.body).toContain('<div id="update-banner" class="update-banner" role="status">');
+      expect(reply.body).toContain('Your edit to <code>new-dashboard</code> was made on version 3');
+    });
+
+    it('does not offer a review for failures that are not conflicts', async () => {
+      const dashboard = await start(fakes().ports);
+      const reply = await call(dashboard, 'POST', '/env/production/features/new-dashboard', {
+        body: form({ baseVersion: '3', field: 'default', default: '{' }),
+      });
+      expect(reply.body).not.toContain('data-review-since');
+      expect(reply.body).toContain('<div id="update-banner" class="update-banner" role="status" hidden>');
     });
 
     it('treats a taken next version as a concurrent publish', async () => {
@@ -644,7 +865,7 @@ describe('startDashboardServer', () => {
       });
 
       expect(reply.status).toBe(422);
-      expect(reply.body).toContain('meanwhile — reload and redo your edit.');
+      expect(reply.body).toContain('meanwhile, so your edit was not saved.');
       expect(reply.body).not.toContain('paste-publish');
     });
 
@@ -717,7 +938,7 @@ describe('startDashboardServer', () => {
       });
 
       expect(reply.status).toBe(422);
-      expect(reply.body).toContain('Someone else published version 5 meanwhile — reload and redo your edit.');
+      expect(reply.body).toContain('Someone else published version 5 meanwhile, so your edit was not saved.');
     });
 
     it('rejects a foreign Origin, or a missing Origin, before opening a writer', async () => {
