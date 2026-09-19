@@ -11,7 +11,9 @@ One bucket can hold many environments. An **environment** is a key prefix (`prod
 | Key | Content | Mutability |
 |---|---|---|
 | `<env>/snapshots/<n>.json` | One snapshot, as defined by [evaluation-semantics.md](evaluation-semantics.md) | Immutable. Written once, never overwritten or deleted while any pointer may name it. |
-| `<env>/current.json` | The current pointer (below) | The only mutable key. Replacing it is how a new version goes live. |
+| `<env>/current.json` | The current pointer (below) | Mutable. Replacing it is how a new version goes live. |
+| `<env>/segments/<key>/<n>.json` | One segment version ([Segments](#segments)) | Immutable, like a snapshot. |
+| `<env>/segments/<key>/current.json` | The segment's current pointer | Mutable. Replacing it is how a new segment upload goes live. |
 
 `<n>` is the snapshot version: a positive integer (`1`, `2`, `43`) written in decimal with no
 leading zeros, sign or padding.
@@ -65,6 +67,97 @@ Invalid, because `snapshotKey` does not match `version`:
 
 A pointer is also invalid when a field is missing, `version` is not a positive integer, or the
 content is not JSON.
+
+## Segments
+
+A segment is a population, usually uploaded from a CSV file, that snapshots refer to by key
+(evaluation rules in [evaluation-semantics.md](evaluation-semantics.md#segments)). Each segment is
+versioned on its own, next to the environment's snapshots:
+
+```text
+production/
+    current.json
+    snapshots/
+        43.json
+    segments/
+        beta-testers/
+            current.json
+            1.json
+            2.json
+```
+
+A segment key is 1 to 64 characters from `A-Z`, `a-z`, `0-9`, `-` and `_`, starting with a letter or
+digit. Segment versions follow the snapshot version rules, and uploading one is the same two steps
+with the same conditional writes as [publishing](#publishing--write-access): write
+`segments/<key>/<n>.json` with `IfNoneMatch: '*'`, then replace `segments/<key>/current.json`.
+
+A snapshot names a segment by key only, never by version. SDKs always use the version the segment's
+own pointer names, so a new upload takes effect without republishing any flag, and a segment
+rollback is a pointer that names a lower version.
+
+### Segment file
+
+The CSV is converted to JSON before upload; SDKs never parse CSV.
+
+```json
+{
+  "schemaVersion": 1,
+  "key": "beta-testers",
+  "version": 2,
+  "memberAttribute": "userId",
+  "members": ["user-42", "user-77", "12345"]
+}
+```
+
+| Field | Rule |
+|---|---|
+| `schemaVersion` | The segment format version. Currently `1`. |
+| `key` | Must equal the `<key>` in the object's S3 key. |
+| `version` | Positive integer; must equal the `<n>` in the object's S3 key. |
+| `memberAttribute` | Non-empty string: the CSV column the members came from. Informational only: membership is checked against the attribute named in the `inSegment` condition. |
+| `members` | Array of unique strings, each 1 to 256 characters, at most **100000** entries. Numeric identifiers are stored in their [canonical string](evaluation-semantics.md#canonical-string) form (`12345`, not `12345.0`). |
+
+A segment file that breaks any rule, including one with more than 100000 members, is invalid; an
+SDK handles it as described in [evaluation-semantics.md](evaluation-semantics.md#segments). Unknown
+extra fields are ignored.
+
+**Members are personal data.** SDKs, the CLI and the dashboard never log, print or put into an
+error message a member value or a whole segment file. They may report the segment key, version and
+member count.
+
+### Segment pointer
+
+```json
+{
+  "schemaVersion": 1,
+  "environment": "production",
+  "segmentKey": "beta-testers",
+  "version": 2,
+  "objectKey": "production/segments/beta-testers/2.json"
+}
+```
+
+`objectKey` must equal `<environment>/segments/<segmentKey>/<version>.json`. As with the snapshot
+pointer, the reader derives the key itself, rejects a pointer that disagrees, and ignores unknown
+extra fields.
+
+### Loading and change detection
+
+An SDK loads the segments that the active snapshot references and no others.
+
+- **New snapshot.** Before a new snapshot goes live, the SDK loads every segment it references that
+  it does not already hold, then switches snapshot and segments together, so no evaluation sees a
+  mix. A referenced segment that cannot be loaded does not hold the switch back: the snapshot goes
+  live and that segment's conditions do not match until it loads.
+- **Segment updates.** The SDK polls each referenced segment's `current.json` exactly as it polls
+  the snapshot pointer ([Change detection](#change-detection)): conditional GET, `304` means no
+  change, version dedup, periodic full reconciliation. A new segment version replaces the old one
+  in the same atomic way.
+- **No notification.** A segment upload sends no [change notification](change-notification.md);
+  segment changes are picked up by polling only.
+
+Segment objects sit under the `<env>/` prefix, so the existing Reader and Publisher policies already
+cover them; no IAM change is needed.
 
 ## Rollback
 

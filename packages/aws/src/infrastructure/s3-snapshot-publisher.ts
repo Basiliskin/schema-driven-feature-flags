@@ -9,7 +9,7 @@ import {
   stampSnapshot,
   validateEnvironmentName,
 } from '../domain/publishing.js';
-import { errorShape } from './s3-errors.js';
+import { isPreconditionFailed } from './s3-errors.js';
 import { isNotFound, readObjectText } from './s3-read.js';
 import { createSnsChangeNotifier } from './sns-change-notifier.js';
 
@@ -103,12 +103,6 @@ interface ReadPointer {
   readonly etag: string;
   readonly lastModified: Date | undefined;
 }
-
-// S3 answers a lost conditional-write race with 412, or 409 while a competing write is in flight.
-const isPreconditionFailed = (error: unknown): boolean => {
-  const { name, status } = errorShape(error);
-  return name === 'PreconditionFailed' || name === 'ConditionalRequestConflict' || status === 412 || status === 409;
-};
 
 const warnNotifyFailure: NotifyErrorHandler = (error, { environment, version }) => {
   const detail = error instanceof Error ? error.message : String(error);

@@ -13,6 +13,21 @@ export {
   type SnapshotValidation,
 } from './infrastructure/s3-snapshot-publisher.js';
 export {
+  createS3SegmentPublisher,
+  S3SegmentPublishError,
+  type S3SegmentPublishErrorReason,
+  type S3SegmentPublisher,
+  type S3SegmentPublisherOptions,
+  type SegmentDraft,
+} from './infrastructure/s3-segment-publisher.js';
+export type { SegmentPointer } from './domain/segment-pointer.js';
+export {
+  parseSegmentCsv,
+  type SegmentCsvError,
+  type SegmentCsvErrorReason,
+  type SegmentCsvTarget,
+} from './domain/segment-csv.js';
+export {
   createS3SnapshotFetcher,
   S3FetchError,
   type FetchedSnapshot,

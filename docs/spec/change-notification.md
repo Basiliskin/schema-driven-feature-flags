@@ -4,6 +4,9 @@ This is the contract between the snapshot publisher and every application that l
 versions. The publisher sends one message each time a new version goes live; `@featuresync/aws`
 builds and parses it in `src/domain/change-notification.ts`.
 
+Only snapshot publishes send a notification. A [segment](s3-layout.md#segments) upload sends none;
+applications pick segment changes up by polling the segment's pointer.
+
 ## The message is only a hint
 
 The [current pointer](s3-layout.md#current-pointer) (`<env>/current.json`) stays the source of truth.

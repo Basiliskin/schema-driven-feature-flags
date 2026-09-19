@@ -8,7 +8,7 @@ export {
 } from './application/flag-client.js';
 export { StartupError } from './application/errors.js';
 export type { Logger } from './application/logger.port.js';
-export type { SnapshotSource, Unsubscribe } from './application/snapshot-source.port.js';
+export type { SnapshotBundle, SnapshotSource, Unsubscribe } from './application/snapshot-source.port.js';
 export {
   ConfigurationError,
   createFeatureFlagsFromEnv,
@@ -35,5 +35,14 @@ export type { BooleanRule, Condition, ConfigRule, OperatorExpression } from './d
  * Validates raw snapshot JSON with the same rules every reader applies. Returns a Result holding either
  * a frozen Snapshot or a SnapshotValidationError whose issues list each field-level {path, message}.
  */
-export { parseSnapshot } from './domain/snapshot.js';
+export { parseSnapshot, referencedSegmentKeys } from './domain/snapshot.js';
 export type { DeepReadonly, Snapshot } from './domain/snapshot.js';
+export {
+  MAX_SEGMENT_MEMBERS,
+  MAX_SEGMENT_MEMBER_LENGTH,
+  SEGMENT_SCHEMA_VERSION,
+  SegmentValidationError,
+  parseSegment,
+  segmentKeySchema,
+  type Segment,
+} from './domain/segment-contract.js';

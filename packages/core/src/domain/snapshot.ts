@@ -53,3 +53,17 @@ function deepFreeze<T>(value: T): DeepReadonly<T> {
   }
   return value as DeepReadonly<T>;
 }
+
+export function referencedSegmentKeys(snapshot: Snapshot): ReadonlySet<string> {
+  const keys = new Set<string>();
+  for (const feature of Object.values(snapshot.features)) {
+    for (const rule of feature.rules) {
+      for (const expected of Object.values(rule.when)) {
+        if (typeof expected === 'object' && expected.inSegment !== undefined) {
+          keys.add(expected.inSegment);
+        }
+      }
+    }
+  }
+  return keys;
+}

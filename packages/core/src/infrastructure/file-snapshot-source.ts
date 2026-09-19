@@ -1,8 +1,9 @@
 import { watch } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { consoleLogger, type Logger } from '../application/logger.port.js';
-import type { SnapshotSource, Unsubscribe } from '../application/snapshot-source.port.js';
+import type { SnapshotBundle, SnapshotSource, Unsubscribe } from '../application/snapshot-source.port.js';
+import { parseSnapshot, referencedSegmentKeys } from '../domain/snapshot.js';
 
 /** Why a snapshot file could not be turned into a raw snapshot. */
 export type SnapshotFileErrorReason = 'READ_FAILED' | 'INVALID_JSON';
@@ -36,7 +37,16 @@ export interface FileSnapshotSourceOptions {
 
 const DEFAULT_DEBOUNCE_MS = 100;
 
-/** A {@link SnapshotSource} that reads a snapshot from a local JSON file. */
+interface SegmentPointer {
+  readonly segmentKey?: unknown;
+  readonly version?: unknown;
+}
+
+/**
+ * A {@link SnapshotSource} that reads a snapshot from a local JSON file. Segments the snapshot
+ * references are read from `segments/<key>/current.json` and the version file it names, next to the
+ * snapshot file; a segment that cannot be read is left out, so its conditions do not match.
+ */
 export function createFileSnapshotSource(options: FileSnapshotSourceOptions): SnapshotSource {
   const { path } = options;
   const logger = options.logger ?? consoleLogger;
@@ -57,7 +67,32 @@ export function createFileSnapshotSource(options: FileSnapshotSourceOptions): Sn
     }
   };
 
-  const load = async (): Promise<unknown> => parse(await readText());
+  const segmentsDir = join(dirname(path), 'segments');
+
+  const readJson = async (file: string): Promise<unknown> => JSON.parse(await readFile(file, 'utf8'));
+
+  // Segment files hold personal data, so a failure is reported by key only, never with its cause.
+  const readSegment = async (key: string): Promise<unknown> => {
+    try {
+      const pointer = (await readJson(join(segmentsDir, key, 'current.json'))) as SegmentPointer | null;
+      if (pointer?.segmentKey !== key || !Number.isSafeInteger(pointer.version)) throw new Error('Invalid pointer');
+      return await readJson(join(segmentsDir, key, `${String(pointer.version)}.json`));
+    } catch {
+      logger.error('Ignoring unloadable segment; its conditions will not match', new Error(`Segment "${key}"`));
+      return undefined;
+    }
+  };
+
+  const withSegments = async (snapshot: unknown): Promise<unknown> => {
+    const parsed = parseSnapshot(snapshot);
+    if (!parsed.ok) return snapshot;
+    const keys = [...referencedSegmentKeys(parsed.value)];
+    if (keys.length === 0) return snapshot;
+    const loaded = await Promise.all(keys.map(readSegment));
+    return { snapshot, segments: loaded.filter((segment) => segment !== undefined) } satisfies SnapshotBundle;
+  };
+
+  const load = async (): Promise<unknown> => withSegments(parse(await readText()));
 
   if (options.watch !== true) return { load };
 
@@ -73,9 +108,9 @@ export function createFileSnapshotSource(options: FileSnapshotSourceOptions): Sn
     const reload = async () => {
       const text = await readText();
       if (text === lastDelivered) return;
-      const snapshot = parse(text);
+      const payload = await withSegments(parse(text));
       lastDelivered = text;
-      onChange(snapshot);
+      onChange(payload);
     };
 
     // The directory is watched, not the file: atomic saves replace the file's inode, which ends a file watch.

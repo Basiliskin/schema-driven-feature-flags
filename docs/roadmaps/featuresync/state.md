@@ -24,3 +24,9 @@
 - 2026-09-19 | horizon 10 | completed | 5 phases; 3 amendments, 0 overrides — local dashboard first slice (browse, publish, rollback) via featuresync-dashboard
 - 2026-09-19 | horizon 11 | planned | 6 phases (Flag Edit domain function, publisher expectedCurrentVersion CAS, edit use case, edit forms, POST route, LocalStack proof); gate passed, 1 major fixed, 1 minor debt
 - 2026-09-19 | horizon 11 | completed | 6 phases; 1 amendment, 0 overrides — in-browser flag editing (enabled + config default) with expected-version CAS, proven on LocalStack
+
+- 2026-09-19 | horizon 12 | completed | landed outside the pipeline (markdown plan, no JSON/ledger); linear rollback, ENVIRONMENT_MISMATCH, Origin fix, new-flag form, merge/diff dialogs in code
+- 2026-09-19 | horizon 13 | planned | 5 phases (segment/rollout spec, murmur3 bucket hash, schemaVersion-2 contract, evaluate + vectors, FlagClient snapshot+segments bundle); 6 deferred to horizon 14; gate — see horizon-13 roadmap.md
+- 2026-09-19 | horizon 13 | completed | 5 phases done, 1 amendment, 0 overrides; segments + sticky rollout in core client and file source, S3 segment loading still open
+- 2026-09-19 | horizon 14 | planned | 4 phases (CSV parser + core exports, segment pointer, S3 segment publisher, segment upload CLI); S3 source loading deferred; gate passed, 0 blockers, 10 minor debt
+- 2026-09-19 | horizon 14 | completed | 4 phases | 1 amendment

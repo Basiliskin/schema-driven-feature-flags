@@ -1,9 +1,10 @@
 import type { ConfigOf, ContextOf, FeatureDefinition } from '../domain/define-feature.js';
-import { evaluate, type EvaluationReason, type EvaluationResult } from '../domain/evaluation/evaluate.js';
-import { parseSnapshot, type Snapshot } from '../domain/snapshot.js';
+import { evaluate, type EvaluationReason, type EvaluationResult, type Segments } from '../domain/evaluation/evaluate.js';
+import { parseSegment } from '../domain/segment-contract.js';
+import { parseSnapshot, referencedSegmentKeys, type Snapshot } from '../domain/snapshot.js';
 import { StartupError } from './errors.js';
 import { consoleLogger, type Logger } from './logger.port.js';
-import { SnapshotStore } from './snapshot-store.js';
+import { SnapshotStore, type ActiveSnapshot } from './snapshot-store.js';
 import type { SnapshotSource, Unsubscribe } from './snapshot-source.port.js';
 
 type Definitions = readonly FeatureDefinition[];
@@ -65,6 +66,9 @@ export interface FeatureFlags<Defs extends Definitions = Definitions> {
 
 const NO_FEATURES: SnapshotFeatures = Object.freeze({});
 
+const isBundle = (raw: unknown): raw is { snapshot: unknown; segments: unknown } =>
+  typeof raw === 'object' && raw !== null && Object.hasOwn(raw, 'snapshot');
+
 /** Creates a {@link FeatureFlags} client and starts loading the first snapshot. */
 export function createFeatureFlags<const Defs extends Definitions = []>(
   options: FeatureFlagsOptions<Defs>,
@@ -77,14 +81,41 @@ export function createFeatureFlags<const Defs extends Definitions = []>(
 
   let lastFailure: unknown;
 
+  const resolveSegments = (snapshot: Snapshot, rawSegments: readonly unknown[]): Segments => {
+    const referenced = referencedSegmentKeys(snapshot);
+    const resolved = new Map<string, ReadonlySet<string>>();
+    for (const raw of rawSegments) {
+      const parsed = parseSegment(raw);
+      if (!parsed.ok) {
+        logger.error('Rejected invalid segment; treating it as missing', parsed.error);
+        continue;
+      }
+      if (referenced.has(parsed.value.key)) resolved.set(parsed.value.key, new Set(parsed.value.members));
+    }
+    const held = store.current?.segments;
+    for (const key of referenced) {
+      const previous = held?.get(key);
+      if (!resolved.has(key) && previous !== undefined) resolved.set(key, previous);
+    }
+    return resolved;
+  };
+
   const apply = (raw: unknown, ticket: number): boolean => {
-    const parsed = parseSnapshot(raw, { definitions });
+    const bundled = isBundle(raw);
+    const rawSegments = bundled ? raw.segments : [];
+    if (!Array.isArray(rawSegments)) {
+      lastFailure = new TypeError('Snapshot bundle segments must be an array');
+      logger.error('Rejected invalid snapshot bundle; keeping the active one', lastFailure);
+      return false;
+    }
+    const parsed = parseSnapshot(bundled ? raw.snapshot : raw, { definitions });
     if (!parsed.ok) {
       lastFailure = parsed.error;
       logger.error('Rejected invalid snapshot; keeping the active one', parsed.error);
       return false;
     }
-    return store.replace(parsed.value, ticket);
+    const next: ActiveSnapshot = { snapshot: parsed.value, segments: resolveSegments(parsed.value, rawSegments) };
+    return store.replace(next, ticket);
   };
 
   const refresh = async (): Promise<boolean> => {
@@ -109,18 +140,23 @@ export function createFeatureFlags<const Defs extends Definitions = []>(
   });
   readiness.catch(() => undefined);
 
-  const featureOf = (key: string) => {
-    const features = store.current?.features;
+  const featureOf = (key: string, active = store.current) => {
+    const features = active?.snapshot.features;
     return features !== undefined && Object.hasOwn(features, key) ? features[key] : undefined;
   };
 
   const evaluateKey = (key: string, context: unknown): FlagEvaluation<unknown> => {
     const definition = definitionsByKey.get(key);
     const fallback = { value: definition?.default ?? false, enabled: false, reason: 'NOT_FOUND' } as const;
-    const feature = featureOf(key);
-    if (feature === undefined) return fallback;
+    const active = store.current;
+    const feature = featureOf(key, active);
+    if (active === undefined || feature === undefined) return fallback;
     try {
-      return evaluate(feature, context, definition?.context ? { contextSchema: definition.context } : {});
+      return evaluate(feature, context, {
+        flagKey: key,
+        segments: active.segments,
+        ...(definition?.context ? { contextSchema: definition.context } : {}),
+      });
     } catch (error) {
       logger.error(`Evaluation of "${key}" failed; returning the default`, error);
       return fallback;
@@ -131,9 +167,9 @@ export function createFeatureFlags<const Defs extends Definitions = []>(
     isEnabled: (key, context = {}) => evaluateKey(key, context).enabled,
     get: (key) => evaluateKey(key, {}).value as never,
     evaluate: (key, context) => evaluateKey(key, context) as never,
-    version: () => store.current?.version,
+    version: () => store.current?.snapshot.version,
     has: (key) => featureOf(key) !== undefined,
-    getAll: () => store.current?.features ?? NO_FEATURES,
+    getAll: () => store.current?.snapshot.features ?? NO_FEATURES,
     ready: () => readiness,
     refresh,
     close: () => {

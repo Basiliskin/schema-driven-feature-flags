@@ -81,7 +81,7 @@ describe('parseSnapshot', () => {
 
   it.each([
     ['non-object input', 'nope', '(root)'],
-    ['unsupported schemaVersion', { ...validSnapshot(), schemaVersion: 2 }, 'schemaVersion'],
+    ['unsupported schemaVersion', { ...validSnapshot(), schemaVersion: 3 }, 'schemaVersion'],
     ['non-positive version', { ...validSnapshot(), version: 0 }, 'version'],
     ['fractional version', { ...validSnapshot(), version: 1.5 }, 'version'],
     ['non-ISO createdAt', { ...validSnapshot(), createdAt: 'yesterday' }, 'createdAt'],

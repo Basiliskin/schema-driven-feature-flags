@@ -814,6 +814,756 @@
         "reason": "RULE_MATCH",
         "ruleIndex": 0
       }
+    },
+    {
+      "name": "in-segment-member-matches",
+      "segments": {
+        "beta-testers": [
+          "u-1",
+          "u-2",
+          "42"
+        ]
+      },
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "userId": {
+                "inSegment": "beta-testers"
+              }
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "userId": "u-1"
+      },
+      "expected": {
+        "value": true,
+        "enabled": true,
+        "reason": "RULE_MATCH",
+        "ruleIndex": 0
+      }
+    },
+    {
+      "name": "in-segment-non-member-does-not-match",
+      "segments": {
+        "beta-testers": [
+          "u-1",
+          "u-2",
+          "42"
+        ]
+      },
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "userId": {
+                "inSegment": "beta-testers"
+              }
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "userId": "u-3"
+      },
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "in-segment-is-case-sensitive",
+      "segments": {
+        "beta-testers": [
+          "u-1",
+          "u-2",
+          "42"
+        ]
+      },
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "userId": {
+                "inSegment": "beta-testers"
+              }
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "userId": "U-1"
+      },
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "in-segment-missing-segment-does-not-match",
+      "segments": {},
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "userId": {
+                "inSegment": "beta-testers"
+              }
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "userId": "u-1"
+      },
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "in-segment-integer-uses-canonical-string",
+      "segments": {
+        "beta-testers": [
+          "u-1",
+          "u-2",
+          "42"
+        ]
+      },
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "userId": {
+                "inSegment": "beta-testers"
+              }
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "userId": 42
+      },
+      "expected": {
+        "value": true,
+        "enabled": true,
+        "reason": "RULE_MATCH",
+        "ruleIndex": 0
+      }
+    },
+    {
+      "name": "in-segment-fraction-has-no-canonical-string",
+      "segments": {
+        "beta-testers": [
+          "42.5"
+        ]
+      },
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "userId": {
+                "inSegment": "beta-testers"
+              }
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "userId": 42.5
+      },
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "in-segment-missing-attribute-does-not-match",
+      "segments": {
+        "beta-testers": [
+          "u-1",
+          "u-2",
+          "42"
+        ]
+      },
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "userId": {
+                "inSegment": "beta-testers"
+              }
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {},
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "in-segment-missing-segment-falls-through-to-next-rule",
+      "segments": {},
+      "feature": {
+        "type": "config",
+        "enabled": true,
+        "default": "default",
+        "rules": [
+          {
+            "when": {
+              "userId": {
+                "inSegment": "beta-testers"
+              }
+            },
+            "value": "beta"
+          },
+          {
+            "when": {},
+            "value": "everyone"
+          }
+        ]
+      },
+      "context": {
+        "userId": "u-1"
+      },
+      "expected": {
+        "value": "everyone",
+        "enabled": true,
+        "reason": "RULE_MATCH",
+        "ruleIndex": 1
+      }
+    },
+    {
+      "name": "rollout-zero-percent-puts-no-one-in",
+      "flagKey": "new-checkout",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {},
+            "rollout": {
+              "percentage": 0,
+              "bucketBy": "userId",
+              "salt": "2026-q3"
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "userId": 12345
+      },
+      "bucket": 1891,
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "rollout-hundred-percent-puts-everyone-in",
+      "flagKey": "new-checkout",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {},
+            "rollout": {
+              "percentage": 100,
+              "bucketBy": "userId",
+              "salt": "2026-q3"
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "userId": "user-42"
+      },
+      "bucket": 6247,
+      "expected": {
+        "value": true,
+        "enabled": true,
+        "reason": "RULE_MATCH",
+        "ruleIndex": 0
+      }
+    },
+    {
+      "name": "rollout-boundary-below-bucket-is-out",
+      "flagKey": "new-checkout",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {},
+            "rollout": {
+              "percentage": 62.46,
+              "bucketBy": "userId",
+              "salt": "2026-q3"
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "userId": "user-42"
+      },
+      "bucket": 6247,
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "rollout-boundary-at-bucket-is-out",
+      "flagKey": "new-checkout",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {},
+            "rollout": {
+              "percentage": 62.47,
+              "bucketBy": "userId",
+              "salt": "2026-q3"
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "userId": "user-42"
+      },
+      "bucket": 6247,
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "rollout-boundary-above-bucket-is-in",
+      "flagKey": "new-checkout",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {},
+            "rollout": {
+              "percentage": 62.48,
+              "bucketBy": "userId",
+              "salt": "2026-q3"
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "userId": "user-42"
+      },
+      "bucket": 6247,
+      "expected": {
+        "value": true,
+        "enabled": true,
+        "reason": "RULE_MATCH",
+        "ruleIndex": 0
+      }
+    },
+    {
+      "name": "rollout-monotonic-in-at-25",
+      "flagKey": "new-checkout",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {},
+            "rollout": {
+              "percentage": 25,
+              "bucketBy": "userId",
+              "salt": "2026-q3"
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "userId": 12345
+      },
+      "bucket": 1891,
+      "expected": {
+        "value": true,
+        "enabled": true,
+        "reason": "RULE_MATCH",
+        "ruleIndex": 0
+      }
+    },
+    {
+      "name": "rollout-monotonic-still-in-at-70",
+      "flagKey": "new-checkout",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {},
+            "rollout": {
+              "percentage": 70,
+              "bucketBy": "userId",
+              "salt": "2026-q3"
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "userId": 12345
+      },
+      "bucket": 1891,
+      "expected": {
+        "value": true,
+        "enabled": true,
+        "reason": "RULE_MATCH",
+        "ruleIndex": 0
+      }
+    },
+    {
+      "name": "rollout-hashes-utf8-bytes-out",
+      "flagKey": "new-checkout",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {},
+            "rollout": {
+              "percentage": 2.3,
+              "bucketBy": "userId",
+              "salt": "2026-q3"
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "userId": "ünïcødé"
+      },
+      "bucket": 230,
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "rollout-hashes-utf8-bytes-in",
+      "flagKey": "new-checkout",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {},
+            "rollout": {
+              "percentage": 2.31,
+              "bucketBy": "userId",
+              "salt": "2026-q3"
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "userId": "ünïcødé"
+      },
+      "bucket": 230,
+      "expected": {
+        "value": true,
+        "enabled": true,
+        "reason": "RULE_MATCH",
+        "ruleIndex": 0
+      }
+    },
+    {
+      "name": "rollout-missing-bucket-by-is-out",
+      "flagKey": "new-checkout",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {},
+            "rollout": {
+              "percentage": 100,
+              "bucketBy": "userId",
+              "salt": "2026-q3"
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "plan": "pro"
+      },
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "rollout-fraction-bucket-by-is-out",
+      "flagKey": "new-checkout",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {},
+            "rollout": {
+              "percentage": 100,
+              "bucketBy": "userId",
+              "salt": "2026-q3"
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "userId": 12345.5
+      },
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "rollout-boolean-bucket-by-is-out",
+      "flagKey": "new-checkout",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {},
+            "rollout": {
+              "percentage": 100,
+              "bucketBy": "userId",
+              "salt": "2026-q3"
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "userId": true
+      },
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "rollout-applies-only-after-when-matches",
+      "flagKey": "new-checkout",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "country": "IL"
+            },
+            "rollout": {
+              "percentage": 100,
+              "bucketBy": "userId",
+              "salt": "2026-q3"
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "country": "US",
+        "userId": "user-42"
+      },
+      "expected": {
+        "value": false,
+        "enabled": false,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "rollout-miss-falls-through-to-next-rule",
+      "flagKey": "new-checkout",
+      "feature": {
+        "type": "config",
+        "enabled": true,
+        "default": "default",
+        "rules": [
+          {
+            "when": {},
+            "rollout": {
+              "percentage": 25,
+              "bucketBy": "userId",
+              "salt": "2026-q3"
+            },
+            "value": "canary"
+          },
+          {
+            "when": {},
+            "value": "stable"
+          }
+        ]
+      },
+      "context": {
+        "userId": "user-42"
+      },
+      "bucket": 6247,
+      "expected": {
+        "value": "stable",
+        "enabled": true,
+        "reason": "RULE_MATCH",
+        "ruleIndex": 1
+      }
+    },
+    {
+      "name": "rollout-miss-falls-through-to-default",
+      "flagKey": "new-checkout",
+      "feature": {
+        "type": "config",
+        "enabled": true,
+        "default": "default",
+        "rules": [
+          {
+            "when": {},
+            "rollout": {
+              "percentage": 25,
+              "bucketBy": "userId",
+              "salt": "2026-q3"
+            },
+            "value": "canary"
+          }
+        ]
+      },
+      "context": {
+        "userId": "user-42"
+      },
+      "bucket": 6247,
+      "expected": {
+        "value": "default",
+        "enabled": true,
+        "reason": "DEFAULT"
+      }
+    },
+    {
+      "name": "rollout-miss-does-not-apply-switch-off-rule",
+      "flagKey": "new-checkout",
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {},
+            "rollout": {
+              "percentage": 25,
+              "bucketBy": "userId",
+              "salt": "2026-q3"
+            },
+            "enabled": false
+          },
+          {
+            "when": {},
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "userId": "user-42"
+      },
+      "bucket": 6247,
+      "expected": {
+        "value": true,
+        "enabled": true,
+        "reason": "RULE_MATCH",
+        "ruleIndex": 1
+      }
+    },
+    {
+      "name": "segment-and-rollout-combine",
+      "flagKey": "new-checkout",
+      "segments": {
+        "beta-testers": [
+          "12345"
+        ]
+      },
+      "feature": {
+        "type": "boolean",
+        "enabled": true,
+        "rules": [
+          {
+            "when": {
+              "userId": {
+                "inSegment": "beta-testers"
+              }
+            },
+            "rollout": {
+              "percentage": 25,
+              "bucketBy": "userId",
+              "salt": "2026-q3"
+            },
+            "enabled": true
+          }
+        ]
+      },
+      "context": {
+        "userId": 12345
+      },
+      "bucket": 1891,
+      "expected": {
+        "value": true,
+        "enabled": true,
+        "reason": "RULE_MATCH",
+        "ruleIndex": 0
+      }
     }
   ]
 }

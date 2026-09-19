@@ -1,7 +1,8 @@
-import { mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { validSnapshot } from '../domain/fixtures.js';
 import type { Logger } from '../../src/application/logger.port.js';
 import type { Unsubscribe } from '../../src/application/snapshot-source.port.js';
 import { createFileSnapshotSource, SnapshotFileError } from '../../src/infrastructure/file-snapshot-source.js';
@@ -182,6 +183,134 @@ describe('createFileSnapshotSource', () => {
         );
       });
       consoleError.mockRestore();
+    });
+  });
+
+  describe('segments', () => {
+    const snapshot = {
+      ...validSnapshot(),
+      schemaVersion: 2,
+      features: {
+        beta: {
+          type: 'boolean',
+          enabled: true,
+          rules: [
+            { when: { userId: { inSegment: 'beta-testers' } }, enabled: true },
+            { when: { team: { inSegment: 'staff' } }, enabled: true },
+          ],
+        },
+      },
+    };
+    const segmentFile = (key: string, version: number) => ({
+      schemaVersion: 1,
+      key,
+      version,
+      memberAttribute: 'userId',
+      members: ['secret-member'],
+    });
+
+    const writeSegment = async (key: string, pointer: unknown, files: Record<string, string> = {}) => {
+      const segmentDir = join(dir, 'segments', key);
+      await mkdir(segmentDir, { recursive: true });
+      await writeFile(join(segmentDir, 'current.json'), JSON.stringify(pointer));
+      await Promise.all(Object.entries(files).map(([name, content]) => writeFile(join(segmentDir, name), content)));
+    };
+
+    const pointerTo = (key: string, version: number) => ({
+      segmentKey: key,
+      version,
+      objectKey: `production/segments/${key}/${String(version)}.json`,
+    });
+
+    it('bundles each referenced segment the current pointer names', async () => {
+      await writeFile(path, JSON.stringify(snapshot));
+      await writeSegment('beta-testers', pointerTo('beta-testers', 2), {
+        '1.json': JSON.stringify(segmentFile('beta-testers', 1)),
+        '2.json': JSON.stringify(segmentFile('beta-testers', 2)),
+      });
+      await writeSegment('staff', pointerTo('staff', 1), {
+        '1.json': JSON.stringify(segmentFile('staff', 1)),
+      });
+
+      await expect(createFileSnapshotSource({ path }).load()).resolves.toEqual({
+        snapshot,
+        segments: [segmentFile('beta-testers', 2), segmentFile('staff', 1)],
+      });
+    });
+
+    it('leaves out segments that are missing, unreadable or badly pointed, and logs only their keys', async () => {
+      const logger = spyLogger();
+      await writeFile(path, JSON.stringify(snapshot));
+      await writeSegment('beta-testers', pointerTo('other', 1), {
+        '1.json': JSON.stringify(segmentFile('beta-testers', 1)),
+      });
+
+      await expect(createFileSnapshotSource({ path, logger }).load()).resolves.toEqual({ snapshot, segments: [] });
+      expect(logger.error).toHaveBeenCalledTimes(2);
+      expect(logger.error).toHaveBeenCalledWith(expect.any(String), new Error('Segment "staff"'));
+      expect(JSON.stringify(logger.error.mock.calls)).not.toContain('secret-member');
+    });
+
+    it('leaves out a segment whose version file is not valid JSON, without its content in the log', async () => {
+      const logger = spyLogger();
+      await writeFile(
+        path,
+        JSON.stringify({
+          ...snapshot,
+          features: {
+            beta: {
+              ...snapshot.features.beta,
+              rules: [snapshot.features.beta.rules[0]],
+            },
+          },
+        }),
+      );
+      await writeSegment('beta-testers', pointerTo('beta-testers', 1), {
+        '1.json': 'secret-member,',
+      });
+
+      await expect(createFileSnapshotSource({ path, logger }).load()).resolves.toMatchObject({ segments: [] });
+      expect(String(logger.error.mock.calls[0]?.[1])).not.toContain('secret-member');
+    });
+
+    it('rejects a null pointer', async () => {
+      const logger = spyLogger();
+      await writeFile(
+        path,
+        JSON.stringify({
+          ...snapshot,
+          features: {
+            beta: {
+              ...snapshot.features.beta,
+              rules: [snapshot.features.beta.rules[0]],
+            },
+          },
+        }),
+      );
+      await writeSegment('beta-testers', null);
+
+      await expect(createFileSnapshotSource({ path, logger }).load()).resolves.toMatchObject({ segments: [] });
+    });
+
+    it('passes invalid snapshots and snapshots without segment references through unbundled', async () => {
+      await writeFile(path, JSON.stringify(validSnapshot()));
+      await expect(createFileSnapshotSource({ path }).load()).resolves.toEqual(validSnapshot());
+    });
+
+    it('pushes a bundle when watching', async () => {
+      await writeSegment('beta-testers', pointerTo('beta-testers', 1), {
+        '1.json': JSON.stringify(segmentFile('beta-testers', 1)),
+      });
+      const { onChange } = watching();
+
+      await writeFile(path, JSON.stringify(snapshot));
+
+      await vi.waitFor(() => {
+        expect(onChange).toHaveBeenCalledWith({
+          snapshot,
+          segments: [segmentFile('beta-testers', 1)],
+        });
+      });
     });
   });
 });

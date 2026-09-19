@@ -19,3 +19,13 @@
 - 2026-09-19 | horizon 10 | Is 1..current version browsing usable for many versions, or is pagination needed?
 - 2026-09-19 | horizon 10 | Can hand-written HTML strings keep 100% branch coverage as the dashboard grows?
 - 2026-09-19 | horizon 10 | Do operators need in-browser flag editing, or is pasted/uploaded JSON enough?
+- 2026-09-19 | horizon 13 | Is a segment pointer change detected only by polling each referenced segment current.json, or does a segment upload also send a Change Notification? — resolved by decision 2026-09-19
+- 2026-09-19 | horizon 13 | When a snapshot starts referencing a new segment key, does the S3 source hold the swap until that segment loads, or emit and rely on the missing-segment fail-safe? — resolved by decision 2026-09-19
+- 2026-09-19 | horizon 13 | How does the dashboard show which segment version an SDK uses without ListObjects?
+- 2026-09-19 | horizon 13 | Real memory/load cost of a segment at the documented maximum member count in a Node SDK.
+- 2026-09-19 | horizon 15 | Does a 100,000-member Segment Version fit the Node SDK's memory and poll-latency budget when N segments reload in one tick?
+- 2026-09-19 | horizon 15 | How should a poll tick be ordered when the snapshot pointer and several segment pointers move together, so one bundle is emitted rather than several stale ones?
+- 2026-09-19 | horizon 15 | Does LocalStack handle many concurrent IfNoneMatch pointer GETs like real S3, or must tests run them serially?
+- 2026-09-19 | horizon 15 | Should a push-triggered snapshot re-read also re-check segment pointers?
+- 2026-09-19 | horizon 15 | After a segment fails to load, is it retried every tick or only when its pointer ETag changes?
+- 2026-09-19 | horizon 14 | dashboard LocalStack edit-conflict tests (sequential + concurrent same-base edits) return 200 instead of 422; fails identically at commit c0c62ee, so pre-existing — needs its own fix.

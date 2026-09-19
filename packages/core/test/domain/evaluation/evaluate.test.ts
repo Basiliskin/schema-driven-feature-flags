@@ -128,3 +128,23 @@ describe('condition schema', () => {
     ).toBe(true);
   });
 });
+
+describe('evaluate with a rollout', () => {
+  const rolloutFeature = featureSchema.parse({
+    type: 'boolean',
+    enabled: true,
+    rules: [{ when: {}, rollout: { percentage: 100, bucketBy: 'userId', salt: 's' }, enabled: true }],
+  });
+
+  it('keeps every context out of the rollout when no flag key is given', () => {
+    expect(evaluate(rolloutFeature, { userId: 'u-1' })).toStrictEqual({
+      value: false,
+      enabled: false,
+      reason: 'DEFAULT',
+    });
+  });
+
+  it('puts the context in the rollout when the flag key is given', () => {
+    expect(evaluate(rolloutFeature, { userId: 'u-1' }, { flagKey: 'f' }).reason).toBe('RULE_MATCH');
+  });
+});

@@ -1,0 +1,230 @@
+{
+  "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-13-segments-rollout-roadmap.json",
+  "roadmapTask": "Feature flags that target a CSV-uploaded population set (segment) referenced by key, plus persistent (sticky, hash-based) percentage rollout",
+  "roadmapRevision": 0,
+  "createdAt": "2026-09-19T18:37:55Z",
+  "updatedAt": "2026-09-19T19:09:49Z",
+  "phases": [
+    {
+      "phaseId": "segment-rollout-spec",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-19T18:37:55Z",
+      "baseRef": "c0c62eeb6e82dda310fed7f3508154b75ea83edd",
+      "baseDirty": true,
+      "notes": "Already dirty at start: docs/roadmaps/featuresync/{blockers,decisions,discoveries,state}.md, horizon-13 roadmap json/md, next-horizon-brief.md. Changed: docs/spec/evaluation-semantics.md, docs/spec/s3-layout.md, docs/spec/change-notification.md (+ memory: decisions.md 3 lines, blockers.md 2 resolved). Spec now defines inSegment, rule-level rollout {percentage,bucketBy,salt} with murmur3_32 bucket + worked examples, canonical string rule, schemaVersion 2 rule, segment S3 layout/file/pointer, polling-only segment change detection, fail-safe rules. Verify: grader gap — spec does not state outcome of a malformed rollout object in a snapshot (implied: snapshot invalid); core-segment-snapshot-contract should pin it.",
+      "unplannedFiles": [],
+      "completedAt": "2026-09-19T18:40:58Z",
+      "gateRun": "pnpm run verify (build all, typecheck, lint, vitest --coverage 100%): pass",
+      "gradeResult": {
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "hash-reproducible-from-text",
+            "score": 10,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "fail-safe-rules-closed",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "segment-layout-contract",
+            "score": 10,
+            "minScore": 7,
+            "passed": true
+          },
+          {
+            "dimensionId": "schema-version-compat",
+            "score": 10,
+            "minScore": 7,
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "phaseId": "core-rollout-bucket",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-19T18:41:44Z",
+      "baseRef": "c0c62eeb6e82dda310fed7f3508154b75ea83edd",
+      "baseDirty": true,
+      "unplannedFiles": [],
+      "notes": "Already dirty at start: horizon-13 memory/roadmap/ledger files and phase-1 docs/spec changes. Changed: packages/core/src/domain/evaluation/bucket.ts (new), packages/core/test/domain/evaluation/bucket.test.ts (new). Pure-TS murmur3_32 (DataView LE blocks, Math.imul, >>> 0), toCanonicalString (strings as-is, safe integers decimal, else undefined), computeBucket(flagKey, salt, value) -> 0..9999 | undefined, isInRollout(bucket, pct) = bucket < round(pct*100). Tests: published SMHasher vectors for tail lengths 0-3, Cyrillic/emoji/Latin-1, spec worked examples, 0/100 exhaustive, boundaries, monotonicity property. pnpm run verify passed during implementation (lint required DataView instead of indexed access).",
+      "completedAt": "2026-09-19T18:46:01Z",
+      "gateRun": "pnpm run verify (build all, typecheck, lint, vitest --coverage 100%): pass",
+      "gradeResult": {
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "murmur-reference-parity",
+            "score": 10,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "bucket-boundaries",
+            "score": 10,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "domain-purity",
+            "score": 10,
+            "minScore": 8,
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "phaseId": "core-segment-snapshot-contract",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-19T18:47:24Z",
+      "baseRef": "c0c62eeb6e82dda310fed7f3508154b75ea83edd",
+      "baseDirty": true,
+      "unplannedFiles": [
+        "docs/spec/evaluation-semantics.md"
+      ],
+      "notes": "Already dirty at start: horizon-13 memory/roadmap/ledger, phase-1 docs/spec, phase-2 bucket.ts + bucket.test.ts. Changed: packages/core/src/domain/segment-contract.ts (new: segmentKeySchema, MAX_SEGMENT_MEMBERS=100000, parseSegment -> frozen Segment | SegmentValidationError, position-only messages, duplicate check), rule.ts (inSegment operand in operator expression shape; strict rolloutSchema {percentage 0-100 max 2 decimals, bucketBy, salt} optional on both rule kinds; Rollout type), snapshot-contract.ts (SNAPSHOT_SCHEMA_VERSION=1 replaced by SNAPSHOT_SCHEMA_VERSIONS=[1,2]; superRefine rejects rollout/inSegment under v1), test/domain/segment-contract.test.ts (new), test/domain/snapshot-segments-rollout.test.ts (new), test/domain/snapshot.test.ts (unsupported-version case 2 -> 3, since 2 is now valid). Unplanned: one paragraph in docs/spec/evaluation-semantics.md stating a malformed rollout or inSegment key invalidates the whole snapshot (phase-1 grader gap). inSegment is in the schema only, not the operators registry, so until core-evaluate-segments-rollout it evaluates as an unknown operator (no match, fail-safe). parseSegment not yet exported from index.ts. Compensation: revert these schema changes before any publisher writes v2 snapshots. pnpm run verify passed. Verify: compensation known (revert rule.ts/snapshot-contract.ts/segment-contract.ts before any v2 publish; nothing publishes v2 yet).",
+      "completedAt": "2026-09-19T18:52:37Z",
+      "gateRun": "pnpm run verify (build all, typecheck, lint, vitest --coverage 100%): pass",
+      "gradeResult": {
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "version-gated-fields",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "rollout-validation-strict",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "segment-contract-limits",
+            "score": 9,
+            "minScore": 7,
+            "passed": true
+          },
+          {
+            "dimensionId": "domain-layer-respected",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "phaseId": "core-evaluate-segments-rollout",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-19T18:55:01Z",
+      "baseRef": "c0c62eeb6e82dda310fed7f3508154b75ea83edd",
+      "baseDirty": true,
+      "notes": "Already dirty at start: horizon-13 memory/roadmap/ledger, phases 1-3 changes (docs/spec, bucket.ts, segment-contract.ts, rule.ts, snapshot-contract.ts and their tests). Changed: evaluate.ts (EvaluateOptions.flagKey?/segments? as ReadonlyMap<string, ReadonlySet<string>>; inSegment resolved via canonical string against segments, missing segment = no match; rollout checked after when matches via computeBucket/isInRollout, miss falls through; no flagKey or no canonical bucketBy = not in rollout), evaluation-vectors.json (+25 vectors: segment in/out/case/missing/integer/fraction/missing attr/fall-through; rollout 0/100, boundary 62.46/62.47/62.48 at bucket 6247, monotonic 25->70 at bucket 1891, UTF-8 2.30/2.31 at bucket 230, missing/fraction/boolean bucketBy, when-first, fall-through to next rule/default/past switch-off rule, segment+rollout), vectors.test.ts (runner passes optional flagKey/segments, asserts optional pinned bucket), evaluate.test.ts (unplanned: no-flagKey fail-safe + with-flagKey tests), evaluation-semantics.md (unplanned: vector names listed per rule + vector optional fields documented). operators.ts untouched (inSegment needs segments, so it lives in evaluate.ts, not the operator registry). pnpm run verify passed during implementation. Verify: grader gap — no vector combining inSegment with not (DSL has no negated segment operator; spec documents it). Compensation: none needed (optional options fields; revert evaluate.ts + vectors).",
+      "unplannedFiles": [
+        "packages/core/test/domain/evaluation/evaluate.test.ts",
+        "docs/spec/evaluation-semantics.md"
+      ],
+      "amendments": [
+        {
+          "at": "2026-09-19T18:56:52Z",
+          "by": "execute",
+          "reason": "Spec bucket input is <flagKey>:<salt>:<value>, but Feature has no key and evaluate() never receives one; changes did not say how the key reaches evaluate().",
+          "grounding": "packages/core/src/domain/feature.ts has no key field; flag-client.ts:123 calls evaluate(feature, context, {contextSchema}). discoveries.md 2026-09-19 evaluate line.",
+          "before": {
+            "changes": [
+              "Add an optional segments map to EvaluateOptions so the evaluate() signature stays compatible and pure",
+              "Resolve inSegment in evaluate.ts against the segments map; a missing segment does not match",
+              "Apply rollout after a rule's conditions match, using computeBucket; a missing bucketBy attribute means not in rollout",
+              "Add vectors for segment in/not-in, missing segment, missing bucketBy, rollout 0/100/boundary with pinned buckets, and monotonicity",
+              "Pass an optional per-vector segments field through the vector runner"
+            ]
+          },
+          "after": {
+            "changes": [
+              "Add optional segments map and optional flagKey to EvaluateOptions so the evaluate() signature stays compatible and pure; with no flagKey a context is never in a rollout",
+              "Resolve inSegment in evaluate.ts against the segments map; a missing segment does not match",
+              "Apply rollout after a rule's conditions match, using computeBucket; a missing bucketBy attribute means not in rollout",
+              "Add vectors for segment in/not-in, missing segment, missing bucketBy, rollout 0/100/boundary with pinned buckets, and monotonicity",
+              "Pass an optional per-vector segments field through the vector runner"
+            ]
+          }
+        }
+      ],
+      "completedAt": "2026-09-19T19:00:13Z",
+      "gateRun": "pnpm run verify (build all, typecheck, lint, vitest --coverage 100%): pass",
+      "gradeResult": {
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "vectors-cover-edges",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "fail-safe-semantics",
+            "score": 10,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "purity-and-signature",
+            "score": 10,
+            "minScore": 8,
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "phaseId": "core-client-segment-bundle",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-19T19:01:14Z",
+      "baseRef": "c0c62eeb6e82dda310fed7f3508154b75ea83edd",
+      "baseDirty": true,
+      "notes": "Already dirty at start: horizon-13 memory/roadmap/ledger, phases 1-4 changes (docs/spec, bucket.ts, segment-contract.ts, rule.ts, snapshot-contract.ts, evaluate.ts, vectors and their tests). Changed: snapshot-source.port.ts (SnapshotBundle {snapshot, segments[]}; payload is bare snapshot or bundle), snapshot-store.ts (stores ActiveSnapshot {snapshot, segments} as one value under one ticket), flag-client.ts (bundle detected by own snapshot key; non-array segments rejects payload; each segment parseSegment-ed, invalid logged with position-only SegmentValidationError and treated as missing; only referenced keys kept; held version of a referenced key carried over when new one invalid/absent; evaluate() gets flagKey + segments from the same stored value), file-snapshot-source.ts (loads <dir>/segments/<key>/current.json then <version>.json for referenced keys; unloadable segment omitted, logged by key only), test/application/flag-client-segments.test.ts (new). Unplanned: domain/snapshot.ts referencedSegmentKeys() (shared by client and file source), file-snapshot-source.test.ts segment cases. pnpm run verify passed. Not covered: aws S3 source and segment polling (see discoveries.md). Verify: grader gaps — absent (not just invalid) segment also inherits held version, untested vs spec not-loaded case; file source re-parses snapshot to find keys. Compensation: none needed.",
+      "unplannedFiles": [
+        "packages/core/src/domain/snapshot.ts",
+        "packages/core/test/infrastructure/file-snapshot-source.test.ts"
+      ],
+      "completedAt": "2026-09-19T19:09:49Z",
+      "gateRun": "pnpm run verify (build all, typecheck, lint, vitest --coverage 100%): pass",
+      "gradeResult": {
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "atomic-swap",
+            "score": 10,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "bundle-validation",
+            "score": 9,
+            "minScore": 8,
+            "passed": true
+          },
+          {
+            "dimensionId": "layer-and-file-source",
+            "score": 9,
+            "minScore": 7,
+            "passed": true
+          }
+        ]
+      }
+    }
+  ]
+}
