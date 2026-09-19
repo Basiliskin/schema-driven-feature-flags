@@ -149,10 +149,26 @@ An SDK loads the segments that the active snapshot references and no others.
   it does not already hold, then switches snapshot and segments together, so no evaluation sees a
   mix. A referenced segment that cannot be loaded does not hold the switch back: the snapshot goes
   live and that segment's conditions do not match until it loads.
-- **Segment updates.** The SDK polls each referenced segment's `current.json` exactly as it polls
-  the snapshot pointer ([Change detection](#change-detection)): conditional GET, `304` means no
-  change, version dedup, periodic full reconciliation. A new segment version replaces the old one
-  in the same atomic way.
+- **Segment updates.** On every Poll Tick, including one where the snapshot pointer answers `304`,
+  the SDK then checks each referenced Segment Pointer (`segments/<key>/current.json`) the way it
+  checks the snapshot pointer ([Change detection](#change-detection)): a GET with `IfNoneMatch` set
+  to the ETag it last saw, where `304` means no change. Full reconciliation ticks send no
+  `IfNoneMatch`. A Segment Version is fetched only when the Segment Pointer names a different
+  version from the one held; the same version is not fetched again. A new Segment Version replaces
+  the old one in the same atomic way.
+- **One delivery per Poll Tick.** All Segment Pointer checks of a tick finish before anything is
+  delivered. When the snapshot, a Segment Version, or both changed, the S3 source delivers exactly
+  one Snapshot Bundle (the snapshot together with its loaded Segment Versions); when nothing
+  changed it delivers nothing. A snapshot that references no segments is delivered on its own, as
+  before.
+- **Unloadable segments.** A segment whose Segment Pointer or Segment Version is missing,
+  unreadable, invalid, or names another environment or key is logged by segment key only, never
+  with the underlying error, since that could contain member values. If the S3 source already
+  holds a Segment Version for that key, it keeps it in the Snapshot Bundle as the last-known-good
+  copy; otherwise the segment is left out of the bundle and Fail-safe No-match applies: its
+  conditions do not match. The failed segment is read again on every Poll Tick until it loads.
+- **Unreferenced segments.** When a new snapshot no longer references a segment, the S3 source
+  drops its Segment Version and stops checking its Segment Pointer.
 - **No notification.** A segment upload sends no [change notification](change-notification.md);
   segment changes are picked up by polling only.
 

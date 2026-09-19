@@ -1,6 +1,14 @@
 import { S3Client } from '@aws-sdk/client-s3';
-import type { Logger, SnapshotSource, Unsubscribe } from '@featuresync/core';
+import {
+  parseSnapshot,
+  referencedSegmentKeys,
+  type Logger,
+  type SnapshotBundle,
+  type SnapshotSource,
+  type Unsubscribe,
+} from '@featuresync/core';
 import { parseCurrentPointer, snapshotKeyFor, type CurrentPointer } from '../domain/current-pointer.js';
+import { parseSegmentPointer, segmentObjectKeyFor, segmentPointerKeyFor } from '../domain/segment-pointer.js';
 import { errorShape } from './s3-errors.js';
 import { isMissing, parseJsonObject, readObjectText, type S3Text } from './s3-read.js';
 import { S3SnapshotError } from './s3-snapshot-error.js';
@@ -33,6 +41,16 @@ interface LoadedSnapshot {
   readonly etag: string;
   readonly version: number;
   readonly snapshot: unknown;
+  /** Keys of the segments the snapshot references; `undefined` when it is delivered bare. */
+  readonly segmentKeys: readonly string[] | undefined;
+  /** The raw snapshot, or a {@link SnapshotBundle} when it references segments. */
+  readonly payload: unknown;
+}
+
+interface LoadedSegment {
+  readonly etag: string | undefined;
+  readonly version: number;
+  readonly segment: unknown;
 }
 
 const DEFAULT_POLL_INTERVAL_MS = 30_000;
@@ -50,7 +68,11 @@ const isNotModified = (error: unknown): boolean => {
   return status === 304 || name === 'NotModified';
 };
 
-/** A {@link SnapshotSource} that follows `<environment>/current.json` to the immutable snapshot it names. */
+/**
+ * A {@link SnapshotSource} that follows `<environment>/current.json` to the immutable snapshot it names.
+ * Segments the snapshot references are read through their own Segment Pointer
+ * and delivered with it as a {@link SnapshotBundle}; a segment that cannot be read is left out.
+ */
 export function createS3SnapshotSource(options: S3SnapshotSourceOptions): SnapshotSource {
   const { bucket, environment } = options;
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
@@ -67,6 +89,7 @@ export function createS3SnapshotSource(options: S3SnapshotSourceOptions): Snapsh
   const logger = options.logger ?? consoleLogger;
   const pointerKey = `${environment}/current.json`;
   let loaded: LoadedSnapshot | undefined;
+  const segments = new Map<string, LoadedSegment>();
 
   const fetchText = (key: string, ifNoneMatch?: string): Promise<S3Text> =>
     readObjectText(client, bucket, key, ifNoneMatch);
@@ -104,17 +127,74 @@ export function createS3SnapshotSource(options: S3SnapshotSourceOptions): Snapsh
     return pointer.value;
   };
 
-  const loadVersion = async (pointerObject: S3Text, version: number): Promise<unknown> => {
+  // Segment objects hold personal data, so a failure is reported by key only, never with its cause.
+  // A segment that fails keeps its last loaded copy and is read again on the next check.
+  const refreshSegment = async (key: string, conditional: boolean): Promise<boolean> => {
+    const cached = segments.get(key);
+    const segmentPointerKey = segmentPointerKeyFor(environment, key);
+    try {
+      const pointerObject = await fetchText(segmentPointerKey, conditional ? cached?.etag : undefined);
+      const pointer = parseSegmentPointer(parseJsonObject(segmentPointerKey, pointerObject.text));
+      if (!pointer.ok || pointer.value.environment !== environment || pointer.value.segmentKey !== key) {
+        throw new Error('Invalid segment pointer');
+      }
+      const { version } = pointer.value;
+      if (cached?.version === version) {
+        segments.set(key, { ...cached, etag: pointerObject.etag });
+        return false;
+      }
+      const objectKey = segmentObjectKeyFor(environment, key, version);
+      const segment = parseJsonObject(objectKey, (await fetchText(objectKey)).text);
+      segments.set(key, { etag: pointerObject.etag, version, segment });
+      return true;
+    } catch (error) {
+      if (isNotModified(error)) return false;
+      logger.error('Ignoring unloadable segment; its conditions will not match', new Error(`Segment "${key}"`));
+      return false;
+    }
+  };
+
+  const refreshSegments = async (keys: readonly string[], conditional: boolean): Promise<boolean> => {
+    const changed = await Promise.all(keys.map((key) => refreshSegment(key, conditional)));
+    for (const key of segments.keys()) if (!keys.includes(key)) segments.delete(key);
+    return changed.includes(true);
+  };
+
+  const segmentKeysOf = (snapshot: unknown): readonly string[] | undefined => {
+    const parsed = parseSnapshot(snapshot);
+    if (!parsed.ok) return undefined;
+    const keys = [...referencedSegmentKeys(parsed.value)];
+    return keys.length === 0 ? undefined : keys;
+  };
+
+  const payloadOf = (snapshot: unknown, keys: readonly string[] | undefined): unknown =>
+    keys === undefined
+      ? snapshot
+      : ({
+          snapshot,
+          segments: keys.flatMap((key) => {
+            const loadedSegment = segments.get(key);
+            return loadedSegment === undefined ? [] : [loadedSegment.segment];
+          }),
+        } satisfies SnapshotBundle);
+
+  const loadVersion = async (pointerObject: S3Text, version: number, conditional: boolean): Promise<unknown> => {
     const snapshotKey = snapshotKeyFor(environment, version);
     const snapshot = parseJsonObject(snapshotKey, (await getObject(snapshotKey, 'SNAPSHOT_NOT_FOUND')).text);
-    loaded = pointerObject.etag === undefined ? undefined : { etag: pointerObject.etag, version, snapshot };
-    return snapshot;
+    const segmentKeys = segmentKeysOf(snapshot);
+    await refreshSegments(segmentKeys ?? [], conditional);
+    const payload = payloadOf(snapshot, segmentKeys);
+    loaded =
+      pointerObject.etag === undefined
+        ? undefined
+        : { etag: pointerObject.etag, version, snapshot, segmentKeys, payload };
+    return payload;
   };
 
   const load = async (): Promise<unknown> => {
     const pointerObject = await getObject(pointerKey, 'POINTER_NOT_FOUND');
-    if (loaded !== undefined && pointerObject.etag === loaded.etag) return loaded.snapshot;
-    return loadVersion(pointerObject, readPointer(pointerObject.text).version);
+    if (loaded !== undefined && pointerObject.etag === loaded.etag) return loaded.payload;
+    return loadVersion(pointerObject, readPointer(pointerObject.text).version, true);
   };
 
   const subscribe = (onChange: (snapshot: unknown) => void): Unsubscribe => {
@@ -130,25 +210,36 @@ export function createS3SnapshotSource(options: S3SnapshotSourceOptions): Snapsh
       return run;
     };
 
-    const deliver = async (pointerObject: S3Text | undefined) => {
-      if (pointerObject === undefined) return;
-      const { version } = readPointer(pointerObject.text);
-      if (loaded !== undefined && version === loaded.version) {
+    const emit = (payload: unknown) => {
+      if (!stopped) onChange(payload);
+    };
+
+    // A snapshot pointer check is always followed by a segment pointer check, because segment
+    // uploads send no Change Notification; either change yields exactly one delivery.
+    const deliver = async (pointerObject: S3Text | undefined, conditional: boolean) => {
+      if (pointerObject !== undefined) {
+        const { version } = readPointer(pointerObject.text);
+        if (loaded?.version !== version) {
+          emit(await loadVersion(pointerObject, version, conditional));
+          return;
+        }
         if (pointerObject.etag !== undefined) loaded = { ...loaded, etag: pointerObject.etag };
-        return;
       }
-      const snapshot = await loadVersion(pointerObject, version);
-      if (!stopped) onChange(snapshot);
+      const current = loaded;
+      if (current?.segmentKeys === undefined) return;
+      if (!(await refreshSegments(current.segmentKeys, conditional))) return;
+      loaded = { ...current, payload: payloadOf(current.snapshot, current.segmentKeys) };
+      emit(loaded.payload);
     };
 
     const tick = async () => {
       const reconciling = Date.now() - lastReconciledAt >= reconcileIntervalMs;
       if (reconciling) lastReconciledAt = Date.now();
-      await deliver(await getPointerIfChanged(reconciling ? undefined : loaded?.etag));
+      await deliver(await getPointerIfChanged(reconciling ? undefined : loaded?.etag), !reconciling);
     };
 
     const push = async () => {
-      await deliver(await getObject(pointerKey, 'POINTER_NOT_FOUND'));
+      await deliver(await getObject(pointerKey, 'POINTER_NOT_FOUND'), false);
     };
 
     const schedule = () => {

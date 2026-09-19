@@ -1,0 +1,186 @@
+{
+  "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-15-s3-source-segment-loading-roadmap.json",
+  "roadmapTask": "Horizon 15 of FeatureSync: make createS3SnapshotSource load and poll the segments a snapshot references, emitting snapshot+segments bundles; prove it end-to-end on LocalStack; document segment polling in the spec.",
+  "createdAt": "2026-09-19T20:09:43Z",
+  "updatedAt": "2026-09-19T20:36:19Z",
+  "roadmapRevision": 0,
+  "phases": [
+    {
+      "phaseId": "s3-source-segment-bundle-load",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-19T20:09:43Z",
+      "baseRef": "c830542fd661b6ecf0c36d60ba6dd0bf1ad6dea1",
+      "baseDirty": true,
+      "notes": "Already dirty at start: docs/roadmaps/featuresync/{decisions,discoveries,state}.md and horizon-15 roadmap json/md (planning output). | Changed: packages/aws/src/infrastructure/s3-snapshot-source.ts, packages/aws/test/infrastructure/{fake-s3.ts,s3-snapshot-source.load.test.ts,s3-snapshot-source.subscribe.test.ts}. The source now parses the loaded snapshot, reads each referenced Segment Pointer and Segment Version in parallel, and emits {snapshot, segments}; bare snapshot when none referenced or invalid; unloadable segments omitted and logged by key only; per-segment cache {etag, version, segment} filled for polling. Pre-check: 88 source tests pass, file coverage 100%, aws tsc + eslint clean (prettier not a repo gate; many aws test files already unformatted). | VERIFY: grading payload notes + 4 files, 171 source-diff lines (tests read by the grader). No 10s to demote. No compensation defined.",
+      "unplannedFiles": [],
+      "completedAt": "2026-09-19T20:40:00Z",
+      "gateRun": "pnpm verify (build, typecheck, lint, vitest --coverage 100% thresholds): pass",
+      "gradeResult": {
+        "phaseId": "s3-source-segment-bundle-load",
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "single-bundle-emission",
+            "score": 9,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "One bundle {snapshot, segments[]}; exactly-once asserted; Promise.all inside loadVersion. Not 10: the call-count check uses a single-segment snapshot."
+          },
+          {
+            "dimensionId": "bare-snapshot-passthrough",
+            "score": 9,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "Raw snapshot emitted when there are no keys or parsing fails; no segment GETs recorded; the existing pass-through tests are unchanged."
+          },
+          {
+            "dimensionId": "unloadable-segment-omitted-pii-safe",
+            "score": 9,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "it.each covers 8 failure cases; env and segmentKey are both checked; logs hold the key only, with a 'secret-member' leak probe; the all-fail case gives empty segments."
+          },
+          {
+            "dimensionId": "layer-boundary-aws-adapter",
+            "score": 9,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "No core/src changes; reuses core and aws helpers; no '/segments/' literal."
+          },
+          {
+            "dimensionId": "coverage-and-stop-safety",
+            "score": 8,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "100% coverage with no ignore comments; a stop-mid-load test uses a deferred GET; the cache is filled but only exercised indirectly."
+          }
+        ]
+      }
+    },
+    {
+      "phaseId": "s3-source-segment-pointer-polling",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-19T20:18:08Z",
+      "baseRef": "c830542fd661b6ecf0c36d60ba6dd0bf1ad6dea1",
+      "baseDirty": true,
+      "notes": "Already dirty at start: phase 1 changes (s3-snapshot-source.ts, fake-s3.ts, load/subscribe tests) plus featuresync memory and horizon-15 planning files. | Changed (vs pre-phase copy): packages/aws/src/infrastructure/s3-snapshot-source.ts, packages/aws/test/infrastructure/{s3-snapshot-source.push.test.ts,s3-snapshot-source.load.test.ts}. deliver() now checks the snapshot pointer, then (if the version is unchanged) every referenced Segment Pointer with IfNoneMatch (none on reconcile ticks or pushes); fetches a Segment Version only when the pointer version changed; emits one bundle per tick only when something changed; drops unreferenced keys; retries never-loaded segments every tick. A new snapshot load reuses unchanged cached segments. 12 new tests. Pre-check: pnpm verify exit 0 (1157 tests, 100% coverage, typecheck, lint). | VERIFY: grading payload notes + 3 files, 400 diff lines (grader read files). First grade failed push-poll-serialized 7/8 (no test for push during pending poll segment GET); healerHint-scoped fix added that ordering test to push.test.ts; re-graded push-poll-serialized only (8), other 4 dimensions carried forward. No 10s to demote. No compensation defined.",
+      "unplannedFiles": [],
+      "amendments": [
+        {
+          "phaseId": "s3-source-segment-pointer-polling",
+          "at": "2026-09-19T20:20:42Z",
+          "reason": "Clearing the cache entry for an etag-less pointer would re-fetch and re-emit an unchanged segment every tick, which breaks the phase goal; comparing versions keeps the dedupe. A segment that was loaded but becomes unreadable keeps its last copy, matching FlagClient last-known-good (decisions.md horizon 15).",
+          "changes": {
+            "before": "If a pointer has no etag, clear that key's cache entry, mirroring the loaded=undefined handling.",
+            "after": "If a pointer has no etag, keep the cache entry with etag undefined and dedupe on version; a failed read keeps the last loaded copy and is retried next tick."
+          }
+        }
+      ],
+      "completedAt": "2026-09-19T20:24:49Z",
+      "gateRun": "pnpm verify (build, typecheck, lint, vitest --coverage 100% thresholds): pass (run twice: before and after healer fix)",
+      "gradeResult": {
+        "phaseId": "s3-source-segment-pointer-polling",
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "segment-only-change-emits-once",
+            "score": 8,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "deliver() falls through to refreshSegments on unchanged snapshot and emits once; snapshot-change path emits once from loadVersion; push tests assert exactly-once for segment-only, combined, and no-change cases."
+          },
+          {
+            "dimensionId": "conditional-fetch-no-refetch",
+            "score": 8,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "IfNoneMatch=cached etag on conditional reads, none on reconcile/push; same version only updates etag; tests assert IfNoneMatch, pointer-only reads over 3 ticks, reconcile without header, etag-less dedupe per amendment, load reuse."
+          },
+          {
+            "dimensionId": "failed-segment-recovery-and-pruning",
+            "score": 8,
+            "minScore": 7,
+            "pass": true,
+            "evidence": "Every tick re-reads all segmentKeys so failed keys retry; recovery, last-good retention and pruning of unreferenced keys each covered by a test."
+          },
+          {
+            "dimensionId": "push-poll-serialized",
+            "score": 8,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "Re-graded after healer fix: push and tick share serially() and deliver(); new test holds the poll's segment GET, fires a push, asserts no emission before release, exact emission sequence and a single staff/2.json GET. Not higher: the two asserted bundles are identical, so order is shown by the hold/single-GET checks, not distinguishable contents."
+          },
+          {
+            "dimensionId": "adapter-boundary-and-coverage",
+            "score": 8,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "Changes confined to packages/aws; no core changes; pnpm verify exit 0 with 100% coverage thresholds."
+          }
+        ]
+      }
+    },
+    {
+      "phaseId": "segment-chain-localstack-e2e",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-19T20:26:00Z",
+      "baseRef": "c830542fd661b6ecf0c36d60ba6dd0bf1ad6dea1",
+      "baseDirty": true,
+      "notes": "Already dirty at start: phases 1-2 changes (s3-snapshot-source.ts, fake-s3.ts, load/push/subscribe tests), featuresync memory and horizon-15 planning files. This phase adds one new untracked file. | Changed: packages/aws/integration/s3-segment-source-chain.localstack.test.ts (new). Publishes a schemaVersion-2 snapshot (inSegment flag + 100% rollout flag gated by inSegment) via createS3SnapshotPublisher, uploads CSV via parseSegmentCsv + createS3SegmentPublisher, runs createS3SnapshotSource (pollIntervalMs 200) into createFeatureFlags; asserts alice true / bob false on both flags, re-uploads CSV swapping membership, vi.waitFor (10s timeout) until bob flips, asserts swapped values, unchanged client.version() and unchanged current.json ETag. Imports only src/index.js and @featuresync/core. Same AWS_ENDPOINT_URL_S3 throw-guard as sibling suites (no skip). Pre-check: integration config 8 files/22 tests pass; pnpm verify exit 0. | VERIFY: grading payload notes + 1 new file (116 lines, grader read it). Passed first grade; no 10s to demote. No compensation defined.",
+      "unplannedFiles": [],
+      "completedAt": "2026-09-19T20:34:10Z",
+      "gateRun": "pnpm verify: pass; packages/aws pnpm test:integration (LocalStack, 8 files/22 tests): pass",
+      "gradeResult": {
+        "phaseId": "segment-chain-localstack-e2e",
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "full-chain-public-api",
+            "score": 9,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "Imports only @aws-sdk/client-s3, @featuresync/core and ../src/index.js; no fake-s3 or /infrastructure/ deep imports; the real publishers write the pointers. Not 10: relative src/index.js rather than the package name."
+          },
+          {
+            "dimensionId": "membership-flip-without-snapshot-republish",
+            "score": 9,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "Initial and flipped values asserted on both flags; snapshot published once; client.version() and current.json HeadObject ETag equal before and after. Not 10: the 100% rollout adds no bucketing signal."
+          },
+          {
+            "dimensionId": "deadline-polling-not-sleep",
+            "score": 9,
+            "minScore": 7,
+            "pass": true,
+            "evidence": "vi.waitFor with a 10s timeout and 25ms interval and a clear message; no sleep; POLL_INTERVAL_MS 200."
+          },
+          {
+            "dimensionId": "fail-not-skip-without-token",
+            "score": 8,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "No skip; same AWS_ENDPOINT_URL_S3 throw-guard as the sibling suites; afterAll closes the client, empties and deletes the bucket, and destroys the S3 client."
+          }
+        ]
+      }
+    },
+    {
+      "phaseId": "spec-segment-polling-docs",
+      "status": "awaiting-verification",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-19T20:35:59Z",
+      "baseRef": "c830542fd661b6ecf0c36d60ba6dd0bf1ad6dea1",
+      "baseDirty": true,
+      "notes": "Already dirty at start: phases 1-3 changes (s3-snapshot-source.ts, fake-s3.ts, source tests, new localstack test), featuresync memory and horizon-15 planning files. docs/spec was clean. | Changed: docs/spec/s3-layout.md, docs/spec/change-notification.md. s3-layout Loading and change detection now states per-poll segment pointer checks with IfNoneMatch (none on reconcile), fetch only on version change, one bundle per poll only when something changed, unloadable segments omitted + logged by key only with last-good kept else no-match, retried each poll, unreferenced dropped. change-notification adds a Segment re-check bullet (push reads re-check pointers without IfNoneMatch).",
+      "unplannedFiles": []
+    }
+  ]
+}

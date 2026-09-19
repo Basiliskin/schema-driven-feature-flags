@@ -91,6 +91,10 @@ next poll. The source applies these rules to every notification:
 - **Version dedupe.** The Snapshot is delivered only when the pointer's version differs from the one
   already loaded, so a redelivered or duplicate notification calls `onChange` at most once. Push and
   poll loads run one at a time, so an older Snapshot is never delivered after a newer one.
+- **Segment re-check.** A notification-triggered read also checks the Segment Pointers of every
+  segment the active Snapshot references, without `IfNoneMatch`, exactly as a
+  [poll does](s3-layout.md#loading-and-change-detection). A changed segment is delivered in the
+  same single bundle as the Snapshot, or in a new bundle when the Snapshot version is unchanged.
 - **Poison Message policy.** A message that cannot be parsed is deleted immediately; retrying it can
   never succeed. When loading the Snapshot fails, the message is left on the queue so SQS redelivers
   it. Configure a dead-letter queue with a `maxReceiveCount` (for example 5) on the queue's redrive

@@ -2,7 +2,18 @@ import { GetObjectCommand, type S3Client } from '@aws-sdk/client-s3';
 import { describe, expect, it, vi } from 'vitest';
 import { S3SnapshotError, type S3SnapshotErrorReason } from '../../src/infrastructure/s3-snapshot-error.js';
 import { createS3SnapshotSource } from '../../src/infrastructure/s3-snapshot-source.js';
-import { current, fakeS3, pointer, s3Error, type StoredObject } from './fake-s3.js';
+import type { Logger } from '@featuresync/core';
+import {
+  current,
+  fakeS3,
+  pointer,
+  publishedSegment,
+  s3Error,
+  segmentFile,
+  segmentPointer,
+  snapshotUsing,
+  type StoredObject,
+} from './fake-s3.js';
 
 const { constructedWith } = vi.hoisted(() => ({
   constructedWith: [] as unknown[],
@@ -318,6 +329,149 @@ describe('createS3SnapshotSource load', () => {
       expect(constructedWith).toEqual([]);
       expect(send).toHaveBeenCalledTimes(2);
     });
+  });
+});
+
+describe('createS3SnapshotSource segments', () => {
+  const withSnapshot = (snapshot: unknown, objects: Record<string, StoredObject> = {}) => {
+    const stored: Record<string, StoredObject> = {
+      'production/current.json': current(1),
+      'production/snapshots/1.json': { body: JSON.stringify(snapshot) },
+      ...objects,
+    };
+    const fake = fakeS3(stored);
+    const logger = { error: vi.fn<Logger['error']>() };
+    const source = createS3SnapshotSource({ bucket: 'flags', environment: 'production', client: fake.client, logger });
+    return { ...fake, objects: stored, source, logger };
+  };
+
+  const expectOnlyKeysLogged = (logger: { error: ReturnType<typeof vi.fn<Logger['error']>> }, keys: string[]) => {
+    expect(logger.error.mock.calls.map(([, error]) => error)).toEqual(keys.map((key) => new Error(`Segment "${key}"`)));
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('secret-member');
+  };
+
+  it('delivers a snapshot and every segment it references as one bundle', async () => {
+    const snapshot = snapshotUsing('beta-testers', 'staff');
+    const { source, keys } = withSnapshot(snapshot, {
+      ...publishedSegment('beta-testers', 2),
+      ...publishedSegment('staff', 1),
+    });
+
+    await expect(source.load()).resolves.toEqual({
+      snapshot,
+      segments: [segmentFile('beta-testers', 2), segmentFile('staff', 1)],
+    });
+    expect(keys).toEqual([
+      'production/current.json',
+      'production/snapshots/1.json',
+      'production/segments/beta-testers/current.json',
+      'production/segments/staff/current.json',
+      'production/segments/beta-testers/2.json',
+      'production/segments/staff/1.json',
+    ]);
+  });
+
+  it('returns the cached bundle while the pointer ETag is unchanged', async () => {
+    const { source, keys } = withSnapshot(snapshotUsing('staff'), publishedSegment('staff', 1));
+
+    const first = await source.load();
+    const second = await source.load();
+
+    expect(second).toBe(first);
+    expect(keys.filter((key) => key.includes('segments'))).toHaveLength(2);
+  });
+
+  it('reuses an unchanged segment when the pointer moves to a new snapshot', async () => {
+    const { source, keys, send, objects } = withSnapshot(snapshotUsing('staff'), publishedSegment('staff', 1));
+    await source.load();
+    objects['production/current.json'] = current(2);
+    objects['production/snapshots/2.json'] = { body: JSON.stringify(snapshotUsing('staff')) };
+    keys.length = 0;
+
+    await expect(source.load()).resolves.toEqual({ snapshot: snapshotUsing('staff'), segments: [segmentFile('staff', 1)] });
+    expect(keys).toEqual(['production/current.json', 'production/snapshots/2.json', 'production/segments/staff/current.json']);
+    expect(send.mock.lastCall?.[0].input.IfNoneMatch).toBe('"staff-1"');
+  });
+
+  it('delivers the bare snapshot, reading no segment, when none is referenced', async () => {
+    const snapshot = snapshotUsing();
+    const { source, keys } = withSnapshot(snapshot);
+
+    await expect(source.load()).resolves.toEqual(snapshot);
+    expect(keys).toEqual(['production/current.json', 'production/snapshots/1.json']);
+  });
+
+  it('delivers an invalid snapshot unchanged without reading segments', async () => {
+    const { source, keys } = withSnapshot({ features: { beta: { rules: [{ when: { a: { inSegment: 'x' } } }] } } });
+
+    await expect(source.load()).resolves.toEqual({ features: { beta: { rules: [{ when: { a: { inSegment: 'x' } } }] } } });
+    expect(keys).toHaveLength(2);
+  });
+
+  it.each([
+    ['a missing pointer', {}],
+    ['a pointer S3 refuses', { 'production/segments/staff/current.json': { error: s3Error('AccessDenied', 403) } }],
+    ['a pointer that is not JSON', { 'production/segments/staff/current.json': { body: '{' } }],
+    [
+      'a pointer that fails validation',
+      { 'production/segments/staff/current.json': { body: JSON.stringify({ ...segmentPointer('staff', 1), version: 0 }) } },
+    ],
+    [
+      'a pointer for another environment',
+      {
+        'production/segments/staff/current.json': { body: JSON.stringify(segmentPointer('staff', 1, 'staging')) },
+        'staging/segments/staff/1.json': { body: JSON.stringify(segmentFile('staff', 1)) },
+      },
+    ],
+    [
+      'a pointer naming another segment',
+      {
+        'production/segments/staff/current.json': { body: JSON.stringify(segmentPointer('other', 1)) },
+        'production/segments/other/1.json': { body: JSON.stringify(segmentFile('other', 1)) },
+      },
+    ],
+    [
+      'a missing segment version',
+      { 'production/segments/staff/current.json': { body: JSON.stringify(segmentPointer('staff', 1)) } },
+    ],
+    [
+      'a segment version that is not JSON',
+      {
+        'production/segments/staff/current.json': { body: JSON.stringify(segmentPointer('staff', 1)) },
+        'production/segments/staff/1.json': { body: 'secret-member' },
+      },
+    ],
+  ])('leaves out a segment with %s and logs only its key', async (_, objects: Record<string, StoredObject>) => {
+    const snapshot = snapshotUsing('beta-testers', 'staff');
+    const { source, logger } = withSnapshot(snapshot, { ...publishedSegment('beta-testers', 1), ...objects });
+
+    await expect(source.load()).resolves.toEqual({ snapshot, segments: [segmentFile('beta-testers', 1)] });
+    expectOnlyKeysLogged(logger, ['staff']);
+  });
+
+  it('still delivers one bundle when every segment fails', async () => {
+    const snapshot = snapshotUsing('beta-testers', 'staff');
+    const { source, logger } = withSnapshot(snapshot);
+
+    await expect(source.load()).resolves.toEqual({ snapshot, segments: [] });
+    expectOnlyKeysLogged(logger, ['beta-testers', 'staff']);
+  });
+
+  it('logs to console.error by default', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const fake = fakeS3({
+      'production/current.json': current(1),
+      'production/snapshots/1.json': { body: JSON.stringify(snapshotUsing('staff')) },
+    });
+    const source = createS3SnapshotSource({ bucket: 'flags', environment: 'production', client: fake.client });
+
+    await source.load();
+
+    expect(error).toHaveBeenCalledWith(
+      '[featuresync] Ignoring unloadable segment; its conditions will not match',
+      new Error('Segment "staff"'),
+    );
+    error.mockRestore();
   });
 });
 

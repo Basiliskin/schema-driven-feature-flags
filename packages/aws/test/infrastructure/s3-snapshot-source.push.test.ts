@@ -3,7 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChangeNotification } from '../../src/domain/change-notification.js';
 import { createS3SnapshotSource } from '../../src/infrastructure/s3-snapshot-source.js';
 import type { NotificationHandler, NotificationQueue } from '../../src/infrastructure/sqs-notification-queue.js';
-import { current, fakeS3, s3Error, type StoredObject } from './fake-s3.js';
+import {
+  current,
+  fakeS3,
+  publishedSegment,
+  s3Error,
+  segmentFile,
+  segmentPointer,
+  snapshotUsing,
+  type StoredObject,
+} from './fake-s3.js';
 
 const INTERVAL = 1_000;
 
@@ -230,5 +239,212 @@ describe('createS3SnapshotSource push detection', () => {
     await vi.advanceTimersByTimeAsync(INTERVAL);
 
     expect(onChange).toHaveBeenCalledExactlyOnceWith({ v: 2 });
+  });
+});
+
+describe('createS3SnapshotSource segment polling', () => {
+  const staffPointer = 'production/segments/staff/current.json';
+
+  const withSegments = (...keys: string[]): Record<string, StoredObject> => ({
+    'production/current.json': current(1),
+    'production/snapshots/1.json': { body: JSON.stringify(snapshotUsing(...keys)) },
+    ...Object.fromEntries(keys.flatMap((key) => Object.entries(publishedSegment(key, 1)))),
+  });
+
+  const segmentReads = (keys: readonly string[]) => keys.filter((key) => key.includes('/segments/'));
+
+  it('delivers one bundle when only a segment changed, although the snapshot pointer is unchanged', async () => {
+    const { source, subscribe, onChange, objects } = setup(withSegments('staff', 'beta-testers'));
+    await source.load();
+    subscribe();
+    Object.assign(objects, publishedSegment('staff', 2));
+
+    await vi.advanceTimersByTimeAsync(INTERVAL);
+    await vi.advanceTimersByTimeAsync(INTERVAL);
+
+    expect(onChange).toHaveBeenCalledExactlyOnceWith({
+      snapshot: snapshotUsing('staff', 'beta-testers'),
+      segments: [segmentFile('staff', 2), segmentFile('beta-testers', 1)],
+    });
+  });
+
+  it('checks unchanged segments with their ETag and never re-reads their versions', async () => {
+    const { source, subscribe, onChange, keys, send } = setup(withSegments('staff'));
+    await source.load();
+    subscribe();
+    keys.length = 0;
+
+    await vi.advanceTimersByTimeAsync(INTERVAL * 3);
+
+    expect(onChange).not.toHaveBeenCalled();
+    expect(segmentReads(keys)).toEqual([staffPointer, staffPointer, staffPointer]);
+    expect(send.mock.lastCall?.[0].input).toEqual({ Bucket: 'flags', Key: staffPointer, IfNoneMatch: '"staff-1"' });
+  });
+
+  it('delivers one bundle when the snapshot and a segment change together', async () => {
+    const { source, subscribe, onChange, objects } = setup(withSegments('staff'));
+    await source.load();
+    subscribe();
+    objects['production/current.json'] = current(2);
+    objects['production/snapshots/2.json'] = { body: JSON.stringify(snapshotUsing('staff')) };
+    Object.assign(objects, publishedSegment('staff', 2));
+
+    await vi.advanceTimersByTimeAsync(INTERVAL);
+    await vi.advanceTimersByTimeAsync(INTERVAL);
+
+    expect(onChange).toHaveBeenCalledExactlyOnceWith({
+      snapshot: snapshotUsing('staff'),
+      segments: [segmentFile('staff', 2)],
+    });
+  });
+
+  it('retries a segment that failed to load on every tick until it loads', async () => {
+    const { source, subscribe, onChange, logger } = setup({
+      ...withSegments('staff'),
+      [staffPointer]: { error: s3Error('InternalError', 500) },
+    });
+    await expect(source.load()).resolves.toEqual({ snapshot: snapshotUsing('staff'), segments: [] });
+    subscribe();
+
+    await vi.advanceTimersByTimeAsync(INTERVAL * 2);
+
+    expect(onChange).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledTimes(3);
+  });
+
+  it('loads a segment that failed before once it becomes readable', async () => {
+    const { source, subscribe, onChange, objects } = setup(withSegments('staff'));
+    const published = objects[staffPointer];
+    objects[staffPointer] = { error: s3Error('InternalError', 500) };
+    await source.load();
+    subscribe();
+
+    await vi.advanceTimersByTimeAsync(INTERVAL);
+    if (published !== undefined) objects[staffPointer] = published;
+    await vi.advanceTimersByTimeAsync(INTERVAL);
+
+    expect(onChange).toHaveBeenCalledExactlyOnceWith({ snapshot: snapshotUsing('staff'), segments: [segmentFile('staff', 1)] });
+  });
+
+  it('keeps the loaded copy of a segment whose pointer stops being readable', async () => {
+    const { source, subscribe, onChange, objects, logger } = setup(withSegments('staff'));
+    await source.load();
+    subscribe();
+    objects[staffPointer] = { error: s3Error('InternalError', 500) };
+
+    await vi.advanceTimersByTimeAsync(INTERVAL);
+    objects['production/current.json'] = current(2, '"v2"');
+    objects['production/snapshots/2.json'] = { body: JSON.stringify(snapshotUsing('staff')) };
+    await vi.advanceTimersByTimeAsync(INTERVAL);
+
+    expect(logger.error).toHaveBeenCalledTimes(2);
+    expect(onChange).toHaveBeenCalledExactlyOnceWith({ snapshot: snapshotUsing('staff'), segments: [segmentFile('staff', 1)] });
+  });
+
+  it('forgets segments the new snapshot no longer references', async () => {
+    const { source, subscribe, onChange, objects, keys } = setup(withSegments('staff'));
+    await source.load();
+    subscribe();
+    objects['production/current.json'] = current(2);
+    objects['production/snapshots/2.json'] = { body: JSON.stringify(snapshotUsing()) };
+
+    await vi.advanceTimersByTimeAsync(INTERVAL);
+    keys.length = 0;
+    await vi.advanceTimersByTimeAsync(INTERVAL);
+
+    expect(onChange).toHaveBeenCalledExactlyOnceWith(snapshotUsing());
+    expect(segmentReads(keys)).toEqual([]);
+  });
+
+  it('re-reads a segment pointer without a conditional header on a reconcile tick', async () => {
+    const fake = fakeS3(withSegments('staff'));
+    const source = createS3SnapshotSource({
+      bucket: 'flags',
+      environment: 'production',
+      client: fake.client,
+      pollIntervalMs: INTERVAL,
+      reconcileIntervalMs: INTERVAL,
+    });
+    await source.load();
+    source.subscribe?.(vi.fn());
+
+    await vi.advanceTimersByTimeAsync(INTERVAL);
+
+    expect(fake.send.mock.lastCall?.[0].input).toEqual({ Bucket: 'flags', Key: staffPointer });
+  });
+
+  it('does not re-read an unchanged segment whose pointer carries no ETag', async () => {
+    const { source, subscribe, onChange, keys } = setup({
+      ...withSegments('staff'),
+      [staffPointer]: { body: JSON.stringify(segmentPointer('staff', 1)) },
+    });
+    await source.load();
+    subscribe();
+    keys.length = 0;
+
+    await vi.advanceTimersByTimeAsync(INTERVAL * 2);
+
+    expect(onChange).not.toHaveBeenCalled();
+    expect(segmentReads(keys)).toEqual([staffPointer, staffPointer]);
+  });
+
+  it('checks segments after a push that finds the snapshot unchanged, delivering once', async () => {
+    const { source, subscribe, onChange, objects, notify, send } = setup(withSegments('staff'));
+    await source.load();
+    subscribe();
+    Object.assign(objects, publishedSegment('staff', 2));
+
+    await notify(notification(1));
+    await vi.advanceTimersByTimeAsync(INTERVAL);
+
+    expect(onChange).toHaveBeenCalledExactlyOnceWith({ snapshot: snapshotUsing('staff'), segments: [segmentFile('staff', 2)] });
+    expect(send.mock.calls.map(([command]) => command.input)).toContainEqual({ Bucket: 'flags', Key: staffPointer });
+  });
+
+  it('queues a push behind a poll tick whose segment read is pending, delivering in load order', async () => {
+    const { source, subscribe, onChange, objects, notify, send } = setup(withSegments('staff'));
+    await source.load();
+    subscribe();
+    const answer = send.getMockImplementation();
+    if (answer === undefined) throw new Error('expected a fake send implementation');
+    let releasePoll = () => {};
+    const pollHeld = new Promise<void>((resolve) => {
+      releasePoll = resolve;
+    });
+    send.mockImplementation((command) =>
+      command.input.Key === 'production/segments/staff/2.json' ? pollHeld.then(() => answer(command)) : answer(command),
+    );
+    Object.assign(objects, publishedSegment('staff', 2));
+
+    await vi.advanceTimersByTimeAsync(INTERVAL);
+    objects['production/current.json'] = current(2);
+    objects['production/snapshots/2.json'] = { body: JSON.stringify(snapshotUsing('staff')) };
+    const pushed = notify(notification(2));
+    await Promise.resolve();
+    expect(onChange).not.toHaveBeenCalled();
+
+    releasePoll();
+    await pushed;
+
+    expect(onChange.mock.calls).toEqual([
+      [{ snapshot: snapshotUsing('staff'), segments: [segmentFile('staff', 2)] }],
+      [{ snapshot: snapshotUsing('staff'), segments: [segmentFile('staff', 2)] }],
+    ]);
+    expect(send.mock.calls.filter(([command]) => command.input.Key === 'production/segments/staff/2.json')).toHaveLength(1);
+  });
+
+  it('never calls onChange for a segment change still loading at Unsubscribe', async () => {
+    const { source, subscribe, onChange, objects, notify, keys } = setup(withSegments('staff'));
+    await source.load();
+    const unsubscribe = subscribe();
+    Object.assign(objects, publishedSegment('staff', 2));
+    keys.length = 0;
+
+    const pending = notify(notification(1));
+    await untilRead(keys, 3);
+    unsubscribe();
+    await pending;
+
+    expect(onChange).not.toHaveBeenCalled();
   });
 });

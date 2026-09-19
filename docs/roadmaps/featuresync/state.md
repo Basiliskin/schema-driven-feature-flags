@@ -30,3 +30,6 @@
 - 2026-09-19 | horizon 13 | completed | 5 phases done, 1 amendment, 0 overrides; segments + sticky rollout in core client and file source, S3 segment loading still open
 - 2026-09-19 | horizon 14 | planned | 4 phases (CSV parser + core exports, segment pointer, S3 segment publisher, segment upload CLI); S3 source loading deferred; gate passed, 0 blockers, 10 minor debt
 - 2026-09-19 | horizon 14 | completed | 4 phases | 1 amendment
+
+- 2026-09-19 | horizon 15 | planned | 4 phases (S3 source segment bundle load, segment pointer polling, LocalStack re-upload chain test, spec docs); gate passed, 0 healed, 10 minor debt
+- 2026-09-19 | horizon 15 | completed | 4 phases (segment bundle load, Segment Pointer polling, LocalStack re-upload chain test, spec docs); 0 amendments, 0 overrides

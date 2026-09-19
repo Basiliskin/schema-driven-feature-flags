@@ -44,3 +44,6 @@
 - 2026-09-19 | horizon 13 | Membership and bucketBy use one canonical string: strings as-is, safe integers in decimal, all else none (no match / not in rollout) — because float formatting differs across languages.
 - 2026-09-19 | horizon 14 | The segment CSV parser is pure domain code in @featuresync/aws built on core's exported parseSegment — because core keeps zod as its only dependency and the CLI stays thin.
 - 2026-09-19 | horizon 14 | segment upload maps CSV/segment errors to exit 1, CONFLICT/VERSION_EXISTS to 2, usage/I-O to 3; no new exit codes — because scripts already rely on the four existing codes.
+- 2026-09-19 | horizon 15 | The S3 source emits a bare Snapshot when it references no segments, else one Snapshot Bundle per change — because it mirrors the file source and keeps existing consumers unchanged (user accepted at preview).
+- 2026-09-19 | horizon 15 | S3 source segment load failures are reported via the existing Logger by segment key only; no onError option — because segments hold PII and horizon 8 fixed the options surface.
+- 2026-09-19 | horizon 15 | An omitted segment keeps FlagClient's last-known-good copy; only a never-loaded segment gets no-match — because that is existing core behaviour and needs no core change (user accepted at preview).

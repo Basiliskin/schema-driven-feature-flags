@@ -6,7 +6,16 @@ import {
   createS3SnapshotSource,
   type S3SnapshotSourceOptions,
 } from '../../src/infrastructure/s3-snapshot-source.js';
-import { current, fakeS3, pointer, s3Error, type StoredObject } from './fake-s3.js';
+import {
+  current,
+  fakeS3,
+  pointer,
+  publishedSegment,
+  s3Error,
+  segmentFile,
+  snapshotUsing,
+  type StoredObject,
+} from './fake-s3.js';
 
 const INTERVAL = 1_000;
 
@@ -268,6 +277,54 @@ describe('createS3SnapshotSource subscribe', () => {
 
     expect(onChange).not.toHaveBeenCalled();
     expect(send).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('delivers one bundle with the segments of a new version', async () => {
+    const snapshot = snapshotUsing('staff');
+    const { subscribe, onChange } = setup({
+      'production/current.json': current(1),
+      'production/snapshots/1.json': { body: JSON.stringify(snapshot) },
+      ...publishedSegment('staff', 3),
+    });
+    subscribe();
+
+    await vi.advanceTimersByTimeAsync(INTERVAL);
+
+    expect(onChange).toHaveBeenCalledExactlyOnceWith({ snapshot, segments: [segmentFile('staff', 3)] });
+  });
+
+  it('delivers nothing when unsubscribed while segments are still loading', async () => {
+    const segmentKey = 'production/segments/staff/1.json';
+    const objects: Record<string, StoredObject> = {
+      'production/current.json': current(1),
+      'production/snapshots/1.json': { body: JSON.stringify(snapshotUsing('staff')) },
+      ...publishedSegment('staff', 1),
+    };
+    const { client, send } = fakeS3(objects);
+    const answer = send.getMockImplementation();
+    if (answer === undefined) throw new Error('expected a fake S3 implementation');
+    let release: (() => void) | undefined;
+    send.mockImplementation((command: GetObjectCommand) =>
+      command.input.Key === segmentKey
+        ? new Promise((resolve) => {
+            release = () => {
+              resolve(answer(command));
+            };
+          })
+        : answer(command),
+    );
+    const onChange = vi.fn();
+    const source = createS3SnapshotSource({ bucket: 'flags', environment: 'production', client, pollIntervalMs: INTERVAL });
+    const unsubscribe = source.subscribe?.(onChange);
+    await vi.advanceTimersByTimeAsync(INTERVAL);
+
+    unsubscribe?.();
+    release?.();
+    await vi.advanceTimersByTimeAsync(INTERVAL * 5);
+
+    expect(release).toBeDefined();
+    expect(onChange).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
   });
 
