@@ -35,3 +35,4 @@
 - 2026-09-20 | horizon 17 | Does the app.js FileReader upload work in real browsers? Nothing tests it end to end yet.
 - 2026-09-20 | horizon 17 | Should setRollout on a schemaVersion 1 snapshot upgrade it to 2, or keep failing and force an explicit migration?
 - 2026-09-20 | horizon 17 | Should a rollout edit that only changes `enabled` on the same flag really auto-replay, or does per-rule editing need a finer conflict check?
+- 2026-09-20 | horizon 17 | A segment publish that loses the pointer IfMatch race leaves an orphaned version object from the IfNoneMatch body put. Readers never see it, but nothing cleans it up. Lifecycle rule, or delete on CONFLICT?
