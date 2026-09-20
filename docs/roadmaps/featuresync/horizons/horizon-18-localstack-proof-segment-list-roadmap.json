@@ -1,0 +1,626 @@
+{
+  "task": "Horizon 18 of FeatureSync: prove horizon 17's browser CSV Segment Upload and per-rule Percentage Rollout editing work end to end against LocalStack by asserting on the S3 objects the dashboard wrote, and add a read-only Segment List Page showing each Referenced Segment Key with its Current Segment Pointer version.",
+  "analysis": {
+    "objective": "Prove horizon 17's browser CSV Segment Upload and per-rule Percentage Rollout editing work end to end against LocalStack, and add a read-only Segment list page in the dashboard that shows each referenced segment key from the snapshot's referencedSegmentKeys with its Current Segment Pointer version.",
+    "successDefinition": "Done when: (1) packages/dashboard/integration/dashboard-segments.localstack.test.ts seeds its own schemaVersion 2 snapshot and covers a segment CSV upload and a setRollout/removeRollout edit driven through the dashboard's HTTP routes against LocalStack, asserting on the actual S3 objects written (segment version object body located via the Segment Pointer's objectKey, the <env>/segments/<key>/current.json pointer itself, and the new snapshot version object carrying the rule's rollout); (2) a read-only Segment List Page exists in the dashboard, built from core's referencedSegmentKeys surfaced through browse-environment plus the readSegmentVersion port already on DashboardPorts, rendering each Referenced Segment Key with its current pointer version and explicit 'not published' / 'unavailable' states, reachable from the environment page; (3) no member value is ever rendered or logged; (4) SegmentPointer and segment version object shapes are byte-for-byte unchanged from horizon 17; (5) `pnpm verify` passes with 100% line/branch/function/statement coverage including every new src/*.ts file, ESLint layer boundaries hold, and the LocalStack integration suite passes in its existing out-of-root-coverage config. The browser-level (Playwright) proof of the FileReader upload path is deliberately NOT part of this horizon: it is carried to the next Planning Horizon so it can land together with the CI job that runs it.",
+    "assumptions": [
+      "createS3SegmentVersionReader(bucket).readVersion(env, key) \u2014 already exported from @featuresync/aws (horizon 17) and returning number | null with null only for a missing pointer \u2014 is the 'public segment pointer reader' the task asks for; the horizon reuses it rather than adding a second reader, extending it only if the list page needs a shape it cannot give.",
+      "The Segment list page derives its key set only from the current snapshot's referencedSegmentKeys (core export), never from S3 ListObjectsV2, per the horizon-10 no-listing decision and reader IAM.",
+      "Reading N segment pointers for the list page is N GETs of small current.json objects on page render, with no caching layer; a referenced key whose pointer is missing renders as unpublished rather than failing the page.",
+      "The Playwright spec reuses the existing packages/dashboard/e2e/support fixtures and the existing LocalStack seeding pattern from dashboard.localstack.test.ts; LocalStack runs on the pinned image already used in CI and Playwright uses its existing playwright.config.ts.",
+      "The e2e CSV fixture is small (tens of members), not a 100k-member file \u2014 the 25 MiB/32 MiB memory question stays an open blocker, not a horizon-18 measurement.",
+      "The rollout edit under test targets a schemaVersion 2 snapshot, since parseSnapshot rejects a rollout on schemaVersion 1 and the v1-upgrade question is an unresolved horizon-17 blocker.",
+      "Segment list is read-only: no upload form, delete, or member view is added on it beyond linking to the existing upload page."
+    ],
+    "risks": [
+      "The horizon-17 FileReader upload path in views/scripts/app.js has never run in a real browser; the Playwright spec may surface genuine bugs (encoding, field name, 32 MiB route cap, form submit wiring) that turn a 'prove it' horizon into a fix horizon.",
+      "views/scripts/app.js is untested browser JS copied verbatim by the build script; the 100% coverage gate is enforced by vitest over src, and Playwright/LocalStack suites live outside root coverage \u2014 so an e2e-only proof may leave app.js formally uncovered, forcing either a jsdom/unit harness for app.js or an explicit coverage-scope decision.",
+      "Rendering the Segment list needs one pointer GET per referenced key on every page render; a snapshot referencing many segments makes the page slow, and a per-key failure must not take the page down.",
+      "The horizon-16/17 concurrent-replay 200+422 race is unresolved; a Playwright spec that races a rollout edit against another write could be flaky in CI.",
+      "PII risk: segment member values must never reach HTML, logs, or Playwright trace/screenshot artifacts \u2014 an e2e failure trace could capture uploaded CSV content, so fixtures must use synthetic ids.",
+      "An orphaned segment version object left by a lost pointer IfMatch race (open horizon-17 blocker) can make S3-object assertions in the integration test see objects no reader will use; assertions must key off the pointer, not object existence.",
+      "The 'no stored-format change' criterion forbids putting memberCount/createdAt into the pointer, which is exactly what would make the list page cheap \u2014 accepted per the user's explicit rejection, but it locks the page to N pointer reads.",
+      "LocalStack + Playwright are both required for the proof; if CI lacks LOCALSTACK_AUTH_TOKEN the suite fails rather than skips (horizon-3 decision), so the horizon's proof can red the pipeline for environment reasons."
+    ],
+    "outOfScope": [
+      "Starting a real @featuresync/core FlagClient or SDK S3 snapshot source process that reads the uploaded segment/rollout back from LocalStack \u2014 the user capped the proof at asserting the S3 objects the dashboard wrote.",
+      "Showing segment member count or createdAt on the Segment list \u2014 the user rejected it because it would require changing what publish writes to S3.",
+      "Any change to the SegmentPointer shape or the segment version object format \u2014 pinned by caller acceptance criteria.",
+      "Rendering, exporting, searching or logging segment member values anywhere in the dashboard \u2014 PII invariant.",
+      "Listing segments via S3 ListObjectsV2, or showing segments not referenced by the current snapshot \u2014 the dashboard never lists the bucket (horizon-10 decision) and reader IAM does not grant it.",
+      "Deleting segments, or cleaning up orphaned segment version objects from a lost pointer race \u2014 that blocker needs its own lifecycle decision.",
+      "Structured inSegment condition editing (a segment picker) \u2014 the raw 'Edit rules' JSON textarea already covers it; deferred from horizon 17.",
+      "Per-SDK segment version telemetry \u2014 decided against in horizon 17; no telemetry exists to read.",
+      "Measuring or hardening the 100k-member (~25 MiB) upload path through FileReader and the 32 MiB urlencoded route \u2014 an open blocker requiring a load measurement, not a feature.",
+      "Deciding whether setRollout should auto-upgrade a schemaVersion 1 snapshot to 2 \u2014 an unresolved horizon-17 blocker needing a migration decision.",
+      "Fixing the horizon-16 concurrent-replay 200+422 race for rollout edits \u2014 a separate correctness investigation, not part of this proof.",
+      "Any multipart/form-data upload parser or transport change \u2014 horizon 17 decided on FileReader + urlencoded."
+    ],
+    "domainShape": "business",
+    "domainShapeReason": "Even though the work is test- and UI-heavy, the objective is about the FeatureSync domain \u2014 Segments, Segment Pointers, referenced segment keys, snapshot versions and percentage rollout rules \u2014 which are the rule-bearing concepts a flag operator would name.",
+    "ubiquitousLanguage": [
+      {
+        "term": "Segment",
+        "meaning": "A named, versioned set of member values under one member attribute, stored in S3 and referenced by flag rules by key only."
+      },
+      {
+        "term": "Segment Pointer",
+        "meaning": "The <env>/segments/<key>/current.json object {schemaVersion, environment, segmentKey, version, objectKey} naming the live Segment Version; its shape is frozen this horizon."
+      },
+      {
+        "term": "Segment Version",
+        "meaning": "One immutable published segment body object; its version number is what the Segment list page displays."
+      },
+      {
+        "term": "Referenced Segment Key",
+        "meaning": "A segment key that the current snapshot's rules mention, obtained from core's referencedSegmentKeys(snapshot) \u2014 the sole source of rows on the Segment list page."
+      },
+      {
+        "term": "Segment Upload",
+        "meaning": "The dashboard flow that reads a CSV in the browser via FileReader, posts it urlencoded, and publishes a new Segment Version plus pointer through the S3 Segment Publisher with expectedCurrentVersion CAS."
+      },
+      {
+        "term": "Percentage Rollout",
+        "meaning": "The optional per-rule {percentage, bucketBy, salt} block edited via the setRollout/removeRollout Flag Edit kinds through the existing CAS/replay edit path."
+      },
+      {
+        "term": "Segment List Page",
+        "meaning": "The new read-only dashboard page listing each Referenced Segment Key with its current Segment Pointer version, and nothing else."
+      },
+      {
+        "term": "End-to-end Proof",
+        "meaning": "A LocalStack integration test plus a Playwright browser spec that exercise Segment Upload and rollout editing and assert on the S3 objects the dashboard actually wrote."
+      }
+    ]
+  },
+  "discoveryFindings": [
+    {
+      "area": "Playwright wiring",
+      "finding": "playwright.config.ts has testDir 'e2e', no webServer block, no projects, no env plumbing; it uses the locally installed Chrome by default (PLAYWRIGHT_CHANNEL='' selects bundled Chromium). The server under test is started inside the fixture, not by Playwright.",
+      "filePath": "packages/dashboard/playwright.config.ts",
+      "implication": "A LocalStack-backed spec does not need a webServer; it needs a new fixture that starts the dashboard with AWS ports. But CI has no Playwright job at all, so config likely needs PLAYWRIGHT_CHANNEL handling plus a browser-install step."
+    },
+    {
+      "area": "Playwright fixtures are purely in-memory",
+      "finding": "e2e/support/fixtures.ts defines InMemoryEnvironment implementing DashboardPorts directly and calls startDashboardServer({ports, port:0}). Its publishSegment rejects ('Segment upload is not used in these tests.') and readSegmentVersion resolves null. Seed snapshots are schemaVersion 1.",
+      "filePath": "packages/dashboard/e2e/support/fixtures.ts",
+      "implication": "The existing fixture cannot be reused for the S3-asserting spec - a NEW fixture (e.g. e2e/support/localstack-fixtures.ts) is needed that creates a per-test bucket, builds ports via createAwsDashboardPorts({bucket}), exposes bucket + an S3 client for assertions, and tears the bucket down. Don't bolt segments onto InMemoryEnvironment."
+    },
+    {
+      "area": "Dashboard entrypoint supports LocalStack with zero code change",
+      "finding": "main(argv, io) takes --bucket/--port and io.createPorts = createAwsDashboardPorts; createAwsDashboardPorts builds S3 clients from the standard AWS SDK env (AWS_ENDPOINT_URL_S3 etc.) and optionally accepts config.client. The LocalStack integration test already starts the dashboard this way.",
+      "filePath": "packages/dashboard/src/main.ts",
+      "implication": "No entrypoint/env work is needed - the LocalStack Playwright fixture can call main() or createAwsDashboardPorts directly. Only AWS_* env must reach the Playwright process; vitest.integration.config.ts loads ../../.env manually - Playwright has NO equivalent, so the plan must add .env loading (or CI env) to playwright.config.ts."
+    },
+    {
+      "area": "CI has no Playwright job",
+      "finding": ".github/workflows/ci.yml has exactly two jobs: 'verify' (pnpm verify + example) and 'localstack' (docker compose up --wait on pinned localstack/localstack:2026.08.3, then pnpm test:integration). `pnpm test:e2e` is not run anywhere in CI, and root package.json has no e2e script.",
+      "filePath": ".github/workflows/ci.yml",
+      "implication": "Running Playwright + LocalStack together is NEW infrastructure: the plan needs a phase for a CI step (browser install, PLAYWRIGHT_CHANNEL='', AWS_* env, running e2e inside the localstack job or a new job), plus a root script."
+    },
+    {
+      "area": "LocalStack integration test shape",
+      "finding": "integration/dashboard.localstack.test.ts creates a per-test bucket (featuresync-it-<uuid>), starts the dashboard through main(), drives everything over HTTP with x-www-form-urlencoded POSTs carrying an `origin` header, and asserts by GET-ing S3 objects (snapshotText, currentPointerText, snapshotExists, listKeys) plus a local differingPaths helper. Every snapshot is schemaVersion 1; there are NO segment or rollout tests. ~350 lines.",
+      "filePath": "packages/dashboard/integration/dashboard.localstack.test.ts",
+      "implication": "Adding segment-upload and rollout scenarios is additive over HTTP. A schemaVersion 2 seed snapshot with a rule must be ADDED - none exists today. The file is already large, so a sibling dashboard-segments.localstack.test.ts is warranted."
+    },
+    {
+      "area": "Coverage scope excludes app.js entirely",
+      "finding": "Root vitest.config.ts is the only coverage config: projects per package with exclude ['integration/**','e2e/**'], coverage include ['packages/*/src/**/*.ts'], thresholds 100 on lines/branches/functions/statements. vitest.integration.config.ts sets coverage.enabled=false.",
+      "filePath": "vitest.config.ts",
+      "implication": "packages/dashboard/src/infrastructure/views/scripts/app.js is a .js file, already OUTSIDE the coverage include glob - browser JS is structurally uncoverable today and the 100% gate cannot see it. The plan must NOT try to 'cover' app.js; the proof is behavioural via Playwright, and that boundary should be stated explicitly."
+    },
+    {
+      "area": "How app.js is built/served",
+      "finding": "client-script.ts readFileSync's ./scripts/app.js at module load, content-hashes it into CLIENT_SCRIPT_HREF, and http-server serves it at /assets/app.js. The dashboard build is tsc plus a cpSync of views/styles and views/scripts into dist. stylesheet.ts concatenates STYLE_FILES = base, layout, forms, components, tables, rollout, segments.css.",
+      "filePath": "packages/dashboard/src/infrastructure/views/client-script.ts",
+      "implication": "Playwright running against src picks up app.js from src, so no build step is needed for the e2e spec. Any new CSS file must be registered in stylesheet.ts's STYLE_FILES array. eslint.config.js has a block declaring browser globals for scripts/*.js including FileReader."
+    },
+    {
+      "area": "CSV upload path (the thing to prove)",
+      "finding": "app.js [data-segment-upload] handler intercepts submit only when csv.value==='' and a file is selected, uses FileReader.readAsText then form.submit(). The form in views/segment-page.ts has hidden expectedCurrentVersion and csv inputs, a text memberAttribute (default 'userId') and <input type=file data-segment-file>. Route POST/GET /env/<env>/segments/<key> lives in segment-routes.ts with MAX_SEGMENT_CSV_BYTES=32MiB.",
+      "filePath": "packages/dashboard/src/infrastructure/segment-routes.ts",
+      "implication": "The Playwright spec uses page.setInputFiles on [data-segment-file], clicks 'Upload members' and asserts on the success notice plus S3 objects. Selectors data-segment-upload / data-segment-file already exist and are stable."
+    },
+    {
+      "area": "Segment page is unreachable from the UI",
+      "finding": "environment-page.ts contains no segment link at all; /env/<env>/segments/<key> is reachable only by typing a URL. The only place segment keys are rendered today is rollout-form.ts's renderSegmentKeys, which derives them locally from rule.when[*].inSegment - it does NOT use core's referencedSegmentKeys.",
+      "filePath": "packages/dashboard/src/infrastructure/views/rollout-form.ts",
+      "implication": "The new Segment list page is the first navigation entry point for segments - the plan needs an explicit change to environment-page.ts and a new GET route. The duplicated segment-key extraction is a DRY smell worth calling out."
+    },
+    {
+      "area": "referencedSegmentKeys availability",
+      "finding": "packages/core exports referencedSegmentKeys(snapshot): ReadonlySet<string> from index.ts; it takes a PARSED Snapshot, not raw JSON. packages/dashboard already depends on @featuresync/core and @featuresync/aws and already calls parseSnapshot in browse-environment.ts and aws-adapters.ts.",
+      "filePath": "packages/core/src/domain/snapshot.ts",
+      "implication": "No dependency work needed. But browse-environment's SnapshotContents exposes only flags/metadata/raw - NOT the parsed Snapshot - so the list-page use case must either re-parse the raw snapshot text or browse-environment must surface segment keys. Adding a segmentKeys field to SnapshotContents is the smaller change and keeps parseSnapshot in one place."
+    },
+    {
+      "area": "createS3SegmentVersionReader signature and port composition",
+      "finding": "createS3SegmentVersionReader({bucket, client?}) returns { readVersion(environment, segmentKey): Promise<number|null> }; null ONLY for a missing pointer, every other failure throws S3SegmentPublishError. It is already exported from @featuresync/aws and already wired in aws-adapters.ts as DashboardPorts.readSegmentVersion. DashboardPorts = EditFeaturePorts & SegmentUploadPorts.",
+      "filePath": "packages/aws/src/infrastructure/s3-segment-version-reader.ts",
+      "implication": "The list page needs NO new port and NO new aws reader - it reuses ports.readSegmentVersion. Because non-missing failures throw, the 'a per-key failure must not take the page down' requirement forces an explicit per-key try/catch in the new application use case, and each branch needs a unit test to hold 100% branch coverage."
+    },
+    {
+      "area": "Existing S3 assertion helpers",
+      "finding": "There is no shared test-helper module; each LocalStack suite redefines its own local helpers. packages/aws/integration/s3-segment-publisher.localstack.test.ts has listKeys/readJson and asserts segment bodies via core's parseSegment and pointers via parseSegmentPointer at <env>/segments/beta/{current.json,1.json,2.json}.",
+      "filePath": "packages/aws/integration/s3-segment-publisher.localstack.test.ts",
+      "implication": "Convention is per-file local helpers, not a shared package. Follow it: add segmentPointerText/segmentVersionText helpers inside the dashboard integration file and inside the Playwright LocalStack fixture rather than inventing a shared test-utils package."
+    },
+    {
+      "area": "Routing and view composition conventions",
+      "finding": "http-server.ts matches routes by split path segments with explicit length/name checks inside a match(segments, method) closure; segment routes are delegated to matchSegmentRoute(ports, environment, segments, method) in a separate module returning Route|undefined. Views are template-literal functions: renderPage(title, bodyHtml, notices) from layout.ts, escapeHtml/environmentPath from escape.ts, styles registered in stylesheet.ts.",
+      "filePath": "packages/dashboard/src/infrastructure/http-server.ts",
+      "implication": "The Segment list page should be a GET matched at segments.length===3 && segments[2]==='segments' - most naturally added INSIDE matchSegmentRoute (which currently early-returns unless length===4), keeping http-server untouched except for the environment-page link. New view file views/segment-list-page.ts plus reuse of segments.css."
+    },
+    {
+      "area": "schemaVersion 2 / rollout precondition",
+      "finding": "No snapshot anywhere in the dashboard integration test or e2e fixtures uses schemaVersion 2; both use schemaVersion 1 exclusively, and environment-page's firstVersionTemplate hardcodes schemaVersion 1. The rollout edit path exists end-to-end already: rollout-form renders percentage/bucketBy/salt plus field=setRollout|removeRollout, http-server parses ruleIndex, flag-edit.ts implements both with typed failures.",
+      "implication": "Both the new LocalStack scenario and the Playwright rollout scenario must seed a bespoke schemaVersion 2 snapshot with at least one rule and an inSegment condition. That seed is a shared prerequisite - make it one early phase artifact reused by both proofs rather than duplicating it in three places."
+    }
+  ],
+  "requiredMaterials": [],
+  "phases": [
+    {
+      "id": "localstack-segment-and-rollout-test",
+      "order": 0,
+      "name": "Add LocalStack test for segment upload and rollout",
+      "goal": "Prove, against a real S3 (LocalStack), that driving the dashboard's HTTP routes performs a Segment Upload and a Percentage Rollout edit, by asserting on the S3 objects the dashboard actually wrote.",
+      "rationale": "The dashboard's CSV Segment Upload and per-rule rollout editing shipped last horizon with no test that touches real object storage, so nobody knows whether the objects landing in S3 are the ones the system later reads. This test drives the running dashboard over HTTP exactly as a browser would and then reads the resulting S3 objects back. It has to define its own starting snapshot because a Percentage Rollout is only accepted when a snapshot declares schemaVersion 2, and no schemaVersion 2 snapshot exists anywhere in the repository today.",
+      "filesAffected": [
+        "packages/dashboard/integration/dashboard-segments.localstack.test.ts"
+      ],
+      "changes": [
+        "Create a sibling integration test file (the existing dashboard.localstack.test.ts is already ~350 lines; do not grow it) that creates a per-test bucket named featuresync-it-<uuid> and starts the dashboard through main() exactly as the existing suite does.",
+        "Define in this file a seed snapshot literal with schemaVersion 2, one flag, and one rule whose `when` carries an inSegment condition referencing a segment key such as 'beta' \u2014 this is the first schemaVersion 2 snapshot in the repository, and a Percentage Rollout cannot be saved without one. Reference the segment by key only; never put member values in it.",
+        "PUT that seed snapshot and its pointer into the bucket before each scenario.",
+        "POST an x-www-form-urlencoded CSV body (with the `origin` header the routes require) to /env/<env>/segments/<key>, then assert the published Segment Version object body parses via core's parseSegment, and that <env>/segments/<key>/current.json parses via parseSegmentPointer and points at that version.",
+        "POST a setRollout edit for a rule index, then assert the NEW snapshot version object in S3 contains that rule's {percentage, bucketBy, salt}; then POST removeRollout and assert the rollout block is gone from the next snapshot version.",
+        "Key every assertion off the Segment Pointer, never off mere object existence, so an orphaned version object from a lost compare-and-set race cannot make the test pass falsely.",
+        "Define local segmentPointerText / segmentVersionText / snapshotText helpers inside this file, matching the per-file-helper convention used by the other LocalStack suites.",
+        "Use synthetic member ids only in the CSV body, so no real personal data can reach logs or failure output."
+      ],
+      "boundedContext": "End-to-end Proof",
+      "layer": "cross-cutting",
+      "blastRadius": "medium",
+      "inputs": [
+        "packages/dashboard/integration/dashboard.localstack.test.ts (bucket setup, main() startup and HTTP-POST patterns)",
+        "@featuresync/core parseSnapshot / parseSegment and the schemaVersion 2 rules+rollout shape",
+        "parseSegmentPointer from @featuresync/aws",
+        "Running LocalStack via the existing docker compose service and `pnpm test:integration`"
+      ],
+      "expectedResult": "A new LocalStack integration test file that seeds its own schemaVersion 2 snapshot and asserts on the segment version object, the Segment Pointer and the rollout-bearing snapshot version written by the dashboard.",
+      "dependsOn": [],
+      "compensation": "Delete the test file; it creates only its own throwaway bucket and touches no production source.",
+      "rubric": [
+        {
+          "id": "asserts-on-real-s3-objects",
+          "label": "Assertions read back real S3 objects",
+          "ruleStatement": "Every scenario must assert on bytes fetched from the LocalStack bucket after the dashboard wrote them, parsed with the real parsers, not on HTTP status codes or in-memory values; 10 means every write the flow performs is read back and parsed, 8 means segment version, pointer and rollout snapshot are all read back and parsed, minScore is the bar for acceptable.",
+          "passCriteria": [
+            "The test file contains GetObject (or equivalent S3 client read) calls issued AFTER the HTTP POST, and the assertions run on the fetched body",
+            "The fetched segment body is passed through core's parseSegment and the fetched <env>/segments/<key>/current.json through parseSegmentPointer, rather than JSON.parse plus a hand-written shape check",
+            "No scenario's only assertion is the HTTP response status or response HTML",
+            "The rollout assertion reads the NEW snapshot version object from S3 and checks the rule's {percentage, bucketBy, salt}"
+          ],
+          "failureExamples": [
+            "The test POSTs the CSV, asserts a 302 redirect and asserts the segment page HTML now lists the key, never fetching the S3 object",
+            "parseSegment is imported but only the pointer is parsed; the version body is checked with JSON.parse and a truthy check on a field",
+            "The rollout test re-reads the snapshot via the dashboard's own read route instead of S3, so a write that never reached S3 would still pass"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "pointer-keyed-assertions",
+          "label": "Assertions keyed off the Segment Pointer",
+          "ruleStatement": "The test must locate the segment version object through the objectKey read from current.json, so an orphaned version object left by a lost compare-and-set race cannot make the test pass; 10 means every version lookup derives its key from the pointer and the test would visibly fail on an orphan, 8 means no version object is fetched by a key the test constructed itself.",
+          "passCriteria": [
+            "The S3 key used to fetch the segment version body comes from the parsed pointer's objectKey field, not from a string built in the test",
+            "The test asserts the pointer's version field equals the version inside the fetched body",
+            "No assertion is of the form 'an object exists under <env>/segments/<key>/' or a ListObjects count"
+          ],
+          "failureExamples": [
+            "The test builds the version key as `${env}/segments/${key}/v1.json` because it knows the publisher's naming, so an orphaned v1 from a failed CAS still passes",
+            "The test asserts both the pointer and the version object exist and separately parse, but never checks that the pointer actually points at the object it parsed",
+            "ListObjectsV2 length === 2 is used as the success signal after upload"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "seed-snapshot-schema-v2",
+          "label": "Self-contained schemaVersion 2 seed",
+          "ruleStatement": "The file must define and PUT its own schemaVersion 2 snapshot with a rule carrying an inSegment condition before each scenario, since no such snapshot exists in the repo and a rollout cannot be saved without one; 10 means the seed is re-PUT per scenario with a fresh bucket and the pointer, 8 means a valid v2 seed plus pointer is written before the scenarios that need it.",
+          "passCriteria": [
+            "A snapshot literal in this file has schemaVersion 2, at least one flag, and a rule whose `when` contains an inSegment condition referencing a segment key",
+            "Both the snapshot object AND its pointer object are PUT into the bucket before the HTTP calls",
+            "The bucket name is generated per test run (e.g. featuresync-it-<uuid>) and the dashboard is started via main() as in dashboard.localstack.test.ts",
+            "Running the file twice in a row with `pnpm test:integration` passes both times"
+          ],
+          "failureExamples": [
+            "The seed snapshot is written once in a beforeAll, so the rollout scenario runs against the snapshot version the segment scenario already mutated and breaks when test order changes",
+            "The snapshot is PUT but its pointer is not, so the dashboard reads no current snapshot and the setRollout POST silently 404s",
+            "A fixed bucket name is reused, leaving objects behind that make a re-run pass for the wrong reason"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "rollout-add-and-remove",
+          "label": "setRollout and removeRollout both proven",
+          "ruleStatement": "The rollout scenario must prove the block both appears and disappears across successive snapshot versions in S3; 10 means the removal assertion checks the key is absent (not merely falsy) and the snapshot version number advanced on each edit, 8 means both directions are asserted against S3 bodies.",
+          "passCriteria": [
+            "A setRollout POST is followed by an S3 read whose parsed rule carries percentage, bucketBy and salt with the posted values",
+            "A removeRollout POST is followed by an S3 read of the NEXT snapshot version showing the rule has no rollout property",
+            "The test asserts the snapshot version number increased between the two reads",
+            "Requests include the `origin` header and an x-www-form-urlencoded body, as the routes require"
+          ],
+          "failureExamples": [
+            "Only setRollout is exercised; removeRollout is assumed symmetric and never posted",
+            "After removeRollout the test re-reads the same snapshot key it read before and passes because the object is unchanged",
+            "The removal check is `expect(rule.rollout).toBeFalsy()`, which would also pass if the route wrote `rollout: null` into the stored format"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "no-pii-in-fixtures",
+          "label": "Synthetic member values only",
+          "ruleStatement": "CSV bodies and any failure output must contain only synthetic member ids, since failure dumps of this test are printed in CI; 10 means member values are obviously synthetic and never echoed in an assertion message, 8 means no realistic personal data appears anywhere in the file.",
+          "passCriteria": [
+            "Member values in the CSV literal are clearly synthetic (e.g. user-1, user-2) with no email addresses, names or phone numbers",
+            "No console.log or assertion message interpolates the CSV body or the parsed member list",
+            "The seed snapshot references the segment by key only and contains no member values"
+          ],
+          "failureExamples": [
+            "The CSV uses plausible emails like alice@example.com to make the fixture realistic",
+            "A debugging console.log of the parsed segment body is left in, printing all member values into CI logs on every run",
+            "An assertion message embeds the raw CSV to aid diagnosis, so a failure dumps every member value"
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "The usual miss is asserting on the HTTP response or a self-constructed S3 key instead of re-reading the object named by the parsed Segment Pointer \u2014 fix by fetching current.json first and deriving every version lookup from its objectKey."
+    },
+    {
+      "id": "snapshot-contents-segment-keys",
+      "order": 1,
+      "name": "Add referenced segment keys to snapshot contents",
+      "goal": "Expose the set of segment keys that the current snapshot's rules reference from the existing environment-browsing use case, so pages can list them without re-parsing the snapshot themselves.",
+      "rationale": "The snapshot parser already knows which segment keys a snapshot's rules mention, but the use case that reads an environment's snapshot returns only flags, metadata and the raw text \u2014 so any consumer wanting segment keys would have to parse the snapshot a second time. Surfacing the keys once keeps parsing in a single place.",
+      "filesAffected": [
+        "packages/dashboard/src/application/browse-environment.ts"
+      ],
+      "changes": [
+        "Add a readonly segmentKeys field to the snapshot-contents result, populated from @featuresync/core's referencedSegmentKeys applied to the snapshot that is already parsed there.",
+        "Return the keys in a stable sorted order so pages and tests render deterministically.",
+        "Return an empty collection (never an error) when the snapshot references no segments.",
+        "Extend the existing unit tests for this use case to cover both the keys-present and no-keys cases, keeping the project's 100% line/branch/function/statement coverage gate green."
+      ],
+      "boundedContext": "Segment List Page",
+      "layer": "application",
+      "blastRadius": "small",
+      "inputs": [
+        "referencedSegmentKeys exported from @featuresync/core",
+        "The existing parseSnapshot call inside browse-environment.ts"
+      ],
+      "expectedResult": "browse-environment's snapshot-contents result carries a deterministic, unit-tested set of referenced segment keys.",
+      "dependsOn": [],
+      "rubric": [
+        {
+          "id": "single-parse-reuse",
+          "label": "Keys derived from the already-parsed snapshot",
+          "ruleStatement": "segmentKeys must be computed by calling core's referencedSegmentKeys on the snapshot object parseSnapshot already produced in this function, with no second parse and no local key-scanning logic; 10 means the call sits directly beside the existing parse with no added parsing surface, 8 means referencedSegmentKeys is used once on the existing parsed value.",
+          "passCriteria": [
+            "browse-environment.ts calls referencedSegmentKeys exactly once, on the variable returned by the existing parseSnapshot call",
+            "There is no second parseSnapshot / JSON.parse of the snapshot text in the file",
+            "No loop over flags or rules inside browse-environment.ts collects segment keys by hand"
+          ],
+          "failureExamples": [
+            "The function re-parses snapshotText into a fresh object to feed referencedSegmentKeys, keeping the two code paths independent",
+            "A small local helper walks rules looking for inSegment conditions because it seemed clearer than importing from core",
+            "referencedSegmentKeys is called once per flag inside an existing loop, quietly making the work quadratic"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "deterministic-ordering",
+          "label": "Stable sorted, immutable result",
+          "ruleStatement": "The returned segmentKeys must be a readonly, deterministically sorted collection so page output and tests do not depend on rule order; 10 means the sort is explicit and a test asserts exact order from deliberately unsorted input, 8 means the sort exists and the field is readonly.",
+          "passCriteria": [
+            "The field is declared readonly (e.g. `readonly segmentKeys: readonly string[]`) on the snapshot-contents result type",
+            "An explicit sort is applied before returning; the raw output of referencedSegmentKeys is not returned as-is",
+            "A unit test feeds a snapshot whose rules mention keys in non-alphabetical order and asserts the exact returned array",
+            "The returned array contains no duplicate keys when two rules reference the same segment"
+          ],
+          "failureExamples": [
+            "The Set from referencedSegmentKeys is spread into an array and returned, so order follows rule order and happens to look sorted in the test fixture",
+            "The test fixture lists keys already in alphabetical order, so the missing sort is never detected",
+            "The array is typed `string[]` and mutated in place by a later caller"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "empty-not-error",
+          "label": "No-segments case returns empty",
+          "ruleStatement": "A snapshot whose rules reference no segments must yield an empty collection, never undefined, null or a thrown error; 10 means the field is always present with the same type in every branch, 8 means the empty case is covered by a passing test.",
+          "passCriteria": [
+            "A unit test parses a snapshot with no inSegment conditions and asserts segmentKeys equals []",
+            "The field is not optional in the result type (no `?`)",
+            "No branch returns undefined for segmentKeys, including any early-return or error path already in the function"
+          ],
+          "failureExamples": [
+            "The field is typed optional and left off when there are no keys, forcing every consumer to write `?? []`",
+            "A schemaVersion 1 snapshot, which has no rules at all, makes referencedSegmentKeys throw because the field is accessed unguarded",
+            "The empty case is only implicitly covered by an existing test that never asserts on segmentKeys"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "application-layer-purity",
+          "label": "Application layer stays inward-facing",
+          "ruleStatement": "This application use case must import only core and its own port types \u2014 no HTTP, S3 SDK, view or formatting concerns may appear alongside the new field; 10 means the new code adds zero imports outside core, 8 means no outward-layer import is introduced.",
+          "passCriteria": [
+            "The import list added in browse-environment.ts references only @featuresync/core",
+            "No string is formatted for display (no HTML escaping, no 'not published' label) in this file",
+            "The result field holds plain segment keys, not pre-rendered links or labels"
+          ],
+          "failureExamples": [
+            "The keys are returned pre-escaped for HTML because the only consumer is a page",
+            "A count or display string like `3 segments` is added next to the keys for the view's convenience",
+            "An import from ../infrastructure is added to reuse a sorting or escaping helper that already lives there"
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "The usual miss is returning referencedSegmentKeys' output unsorted (or optional) and testing it with an already-alphabetical fixture \u2014 fix by sorting explicitly and adding a deliberately unsorted-input test."
+    },
+    {
+      "id": "list-referenced-segments-use-case",
+      "order": 2,
+      "name": "Add segment list use case",
+      "goal": "Add an application use case that turns the snapshot's referenced segment keys into rows of {segment key, current published version or 'not published'}, using the segment version reader already present on the dashboard's ports.",
+      "rationale": "The page needs, per referenced segment key, the version number of the segment currently published for it. That reader already exists on the dashboard's port interface, but it reports a missing pointer as an empty result while reporting every other failure by throwing \u2014 so one unreadable key must not be allowed to blow up the whole list.",
+      "filesAffected": [
+        "packages/dashboard/src/application/list-referenced-segments.ts"
+      ],
+      "changes": [
+        "Add a use case taking the environment name and the dashboard ports, reading the snapshot's referenced segment keys via the segmentKeys field added in phase snapshot-contents-segment-keys.",
+        "For each key, call ports.readSegmentVersion(environment, key) and map the result to a row: a version number, or an explicit 'not published' state when no pointer exists.",
+        "Wrap each per-key read in its own error handling so a failing key becomes an explicit 'unavailable' row rather than failing the whole page.",
+        "Never read, expose or log segment member values \u2014 the use case deals only in keys and version numbers.",
+        "Add unit tests for all four outcomes (version found, no pointer, read failure, no referenced keys) so the 100% branch-coverage gate stays green."
+      ],
+      "boundedContext": "Segment List Page",
+      "layer": "application",
+      "blastRadius": "small",
+      "inputs": [
+        "The segmentKeys field added in phase snapshot-contents-segment-keys",
+        "readSegmentVersion, already present on the dashboard's ports interface"
+      ],
+      "expectedResult": "A unit-tested use case returning one row per referenced segment key with its current version or an explicit unpublished/unavailable state.",
+      "dependsOn": [
+        "snapshot-contents-segment-keys"
+      ],
+      "rubric": [
+        {
+          "id": "per-key-failure-isolation",
+          "label": "One bad key cannot break the list",
+          "ruleStatement": "Each readSegmentVersion call must be individually guarded so a throw becomes an 'unavailable' row while every other key still resolves; 10 means isolation is proven by a test where a middle key throws and the rows before and after are still correct, 8 means the try/catch is per key rather than around the loop.",
+          "passCriteria": [
+            "The try/catch (or equivalent) is inside the per-key loop/map, not wrapped around the whole iteration",
+            "A unit test makes readSegmentVersion throw for one of at least three keys and asserts the other two rows still carry their versions",
+            "The row count always equals the number of referenced segment keys, even when some reads fail",
+            "The use case itself never rethrows a per-key read error"
+          ],
+          "failureExamples": [
+            "A single try/catch wraps a Promise.all over all keys, so one rejection collapses the whole list to an error",
+            "Per-key catch exists but the test only has one key, so the isolation claim is never exercised",
+            "The catch returns nothing, so the failing key is silently dropped and the row count no longer matches the key count"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "three-distinct-row-states",
+          "label": "Version, not-published and unavailable are distinct",
+          "ruleStatement": "A missing pointer (empty result) and a failed read (throw) must map to two different, machine-distinguishable row states, neither of which is confusable with a real version; 10 means the states are a discriminated union that makes a wrong render impossible, 8 means the two are distinguishable without string matching.",
+          "passCriteria": [
+            "The row type distinguishes at least three cases: a numeric version, 'not published', and 'unavailable'",
+            "A unit test with readSegmentVersion returning the empty/no-pointer result asserts the 'not published' state, and a separate test with a throw asserts 'unavailable'",
+            "Neither absent state is represented as version 0, -1, null or an empty string",
+            "The no-referenced-keys case returns an empty row list"
+          ],
+          "failureExamples": [
+            "Both the missing-pointer and the failed-read case produce `version: undefined`, so the page cannot tell an unpublished segment from a broken one",
+            "'not published' is encoded as the string in the version field, forcing the view to string-compare and making a future copy change silently break it",
+            "The empty result from readSegmentVersion is treated as a falsy version and falls into the same branch as a legitimate version 0"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "keys-and-versions-only",
+          "label": "No member values touched or logged",
+          "ruleStatement": "The use case must handle only segment keys and version numbers \u2014 never member values \u2014 and must not log the caught error object if it could carry a segment body; 10 means nothing beyond key and version ever enters a variable here, 8 means no member data is read, returned or logged.",
+          "passCriteria": [
+            "The row type has no field holding member values, member counts or a segment body",
+            "No console.* / logger call in this file interpolates a segment body or a caught error's response payload",
+            "Only readSegmentVersion (not a full segment-body reader) is called on ports"
+          ],
+          "failureExamples": [
+            "The caught error is logged in full for diagnosis, and it carries the S3 response body of a partially read segment",
+            "A memberCount field is added because it was cheap to compute from the reader's result",
+            "The use case calls a broader read-segment port to get the version because that method was more familiar"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "consumes-phase-4-field",
+          "label": "Reads keys from browse-environment, not S3",
+          "ruleStatement": "Referenced keys must come from the snapshot-contents segmentKeys field added in phase snapshot-contents-segment-keys rather than a fresh snapshot fetch or parse, keeping parsing in one place; 10 means the use case composes the existing use case with no new snapshot I/O, 8 means no parseSnapshot or raw snapshot read appears here.",
+          "passCriteria": [
+            "The file contains no parseSnapshot call and no direct snapshot-object read",
+            "The keys come from the snapshot-contents result's segmentKeys field",
+            "The use case's parameters are the environment name and the dashboard ports, with no extra snapshot argument threaded through"
+          ],
+          "failureExamples": [
+            "The use case fetches and parses the snapshot itself because calling another use case felt like indirection",
+            "The caller is required to pass segmentKeys in, pushing the composition into the route and duplicating it per caller",
+            "referencedSegmentKeys is imported from core and re-applied here, recreating the double-parse the prior phase removed"
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "The usual miss is collapsing 'no pointer' and 'read failed' into one falsy version state \u2014 fix by making the row a three-way discriminated union and adding the throwing-key test."
+    },
+    {
+      "id": "segment-list-page",
+      "order": 3,
+      "name": "Add Segment List Page with environment link",
+      "goal": "Render a read-only page listing each referenced segment key with its current published version, and link to it from the environment page so segments are reachable without typing a URL.",
+      "rationale": "Segment pages exist but nothing in the dashboard links to them, so segments are invisible unless a user guesses the URL. A simple read-only list gives operators an entry point and shows at a glance which referenced segments have actually been published.",
+      "filesAffected": [
+        "packages/dashboard/src/infrastructure/segment-routes.ts",
+        "packages/dashboard/src/infrastructure/views/segment-list-page.ts",
+        "packages/dashboard/src/infrastructure/views/environment-page.ts",
+        "packages/dashboard/src/infrastructure/views/styles/"
+      ],
+      "changes": [
+        "Add the GET route inside the existing segment route matcher (matched when the path has three segments and the third is 'segments'), so the main HTTP router needs no change.",
+        "Add a view module rendering a table of segment key plus current version, with an explicit 'not published' cell for a referenced key that has no pointer and an 'unavailable' cell for a failed read; each key links to its existing segment page.",
+        "Render only keys and version numbers \u2014 no member values, no member counts, no timestamps.",
+        "Add a link to this page from the environment page.",
+        "Put any new styling in an existing or new per-feature file under views/styles/ and register it in the stylesheet module's STYLE_FILES list \u2014 never one growing monolithic stylesheet.",
+        "Add unit tests covering the route match, each row state and the environment-page link, keeping coverage at 100%."
+      ],
+      "boundedContext": "Segment List Page",
+      "layer": "interface",
+      "blastRadius": "medium",
+      "inputs": [
+        "The segment list use case from phase list-referenced-segments-use-case",
+        "matchSegmentRoute in segment-routes.ts and the renderPage/escapeHtml view helpers",
+        "The STYLE_FILES registration list in the stylesheet module"
+      ],
+      "expectedResult": "A read-only Segment List Page served at the environment's /segments path and linked from the environment page.",
+      "dependsOn": [
+        "list-referenced-segments-use-case"
+      ],
+      "compensation": "Remove the route branch, the view module, the environment-page link and the stylesheet registration; no stored data is affected since the page is read-only.",
+      "rubric": [
+        {
+          "id": "route-inside-existing-matcher",
+          "label": "Route added to the existing segment matcher",
+          "ruleStatement": "The GET listing must be matched inside segment-routes.ts's existing matcher for three-part paths whose third element is 'segments', leaving the main HTTP router untouched; 10 means the new branch reuses the matcher's existing parsing with no duplicated path splitting, 8 means the router file is unchanged and the branch lives in the matcher.",
+          "passCriteria": [
+            "git diff shows no change to the main HTTP router/dispatch file",
+            "The new branch is inside matchSegmentRoute and distinguishes GET from the existing POST on the same path shape",
+            "A unit test asserts the matcher returns the list route for GET /env/<env>/segments and still returns the existing routes for the previously matched paths",
+            "An unmatched near-miss path (e.g. a four-part path, or POST to the list path) does not resolve to the list page"
+          ],
+          "failureExamples": [
+            "The GET is added as a new top-level branch in the router because the matcher's shape checks were awkward to extend",
+            "The new branch matches on path length alone and swallows POST /env/<env>/segments, breaking the upload route",
+            "The matcher change is tested only for the happy path, so the regression on the existing segment-detail route ships unnoticed"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "all-row-states-rendered",
+          "label": "Every row state has a visible cell",
+          "ruleStatement": "The table must render a distinct cell for a found version, an explicit 'not published' and an explicit 'unavailable', with each key linking to its existing segment page; 10 means an empty list also renders a sensible empty-state row rather than a bare table, 8 means all three states plus the link are covered by tests.",
+          "passCriteria": [
+            "Unit tests render the view with each of the three row states and assert the distinct output text for each",
+            "Each rendered key is an anchor whose href is the existing segment page path for that key",
+            "Rendering with zero rows produces valid HTML without a broken/empty table body",
+            "Segment keys pass through the shared escapeHtml helper before being interpolated"
+          ],
+          "failureExamples": [
+            "'not published' and 'unavailable' render as the same blank or em-dash cell, so operators cannot tell a missing pointer from a broken read",
+            "The version cell renders `${row.version}` directly and prints 'undefined' for the non-version states",
+            "The key is escaped in the cell text but injected raw into the href, so a key with a quote breaks the attribute"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "no-member-data-rendered",
+          "label": "Keys and versions only, nothing else",
+          "ruleStatement": "The page must show only segment keys and version numbers \u2014 no member values, member counts or timestamps \u2014 even though the underlying objects carry more; 10 means the view's data type structurally cannot hold member data, 8 means the rendered output contains none.",
+          "passCriteria": [
+            "The rendered HTML in the tests contains no member value, member count or date/timestamp",
+            "The view module's parameter type exposes only key and version/state fields",
+            "The view does not import or call any segment-body reader"
+          ],
+          "failureExamples": [
+            "A 'last updated' column is added from the pointer object because it looked useful on a list page",
+            "A member count is rendered to show at a glance which segments are populated, leaking set sizes",
+            "The view is handed the whole use-case result plus the raw snapshot 'just in case', so member data is one template edit away"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "per-feature-stylesheet",
+          "label": "Styles in a registered per-feature file",
+          "ruleStatement": "Any new CSS must live in a file under views/styles/ registered in the stylesheet module's STYLE_FILES list, never appended to a growing monolith or inlined in the view; 10 means the new file is scoped to this page's selectors only, 8 means the file exists and is registered.",
+          "passCriteria": [
+            "New CSS lives in a file under views/styles/ and that filename appears in STYLE_FILES",
+            "The view module contains no <style> block and no inline style attributes",
+            "The served stylesheet response includes the new file's rules (covered by the existing stylesheet test or a new one)"
+          ],
+          "failureExamples": [
+            "The file is created but not added to STYLE_FILES, so the page renders unstyled while every test still passes",
+            "The two rules needed are appended to an existing shared stylesheet file because creating a file for them felt excessive",
+            "Styles are inlined on the table element to avoid touching the stylesheet registration"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "interface-layer-thinness",
+          "label": "Interface layer holds no segment logic",
+          "ruleStatement": "The route and view must only call the list-referenced-segments-use-case use case and format its result; deciding what a row means, sorting keys, or catching read errors must not appear in infrastructure; 10 means the route body is a call plus a render, 8 means no state-deciding or error-recovery logic lives in these files.",
+          "passCriteria": [
+            "No try/catch around readSegmentVersion or any ports call appears in segment-routes.ts or the view module",
+            "No sorting or de-duplication of segment keys happens in the view or route",
+            "The view receives the use case's rows and maps them to markup without re-deriving the not-published/unavailable distinction from raw values",
+            "No S3/AWS import appears in the view module"
+          ],
+          "failureExamples": [
+            "The route catches errors from the use case and substitutes 'unavailable' rows itself, duplicating logic the use case already owns",
+            "The view sorts rows before rendering because the ordering guarantee wasn't obvious from the use case's type",
+            "The route calls ports.readSegmentVersion directly for one key to avoid a use-case round trip"
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "The usual miss is a new styles file that is never added to STYLE_FILES, or 'not published' and 'unavailable' collapsing into one blank cell \u2014 fix by asserting the registration and rendering all three states in the view tests."
+    }
+  ],
+  "successCriteria": [
+    "Done when: (1) packages/dashboard/integration/dashboard-segments.localstack.test.ts seeds its own schemaVersion 2 snapshot and covers a segment CSV upload and a setRollout/removeRollout edit driven through the dashboard's HTTP routes against LocalStack, asserting on the actual S3 objects written (segment version object body located via the Segment Pointer's objectKey, the <env>/segments/<key>/current.json pointer itself, and the new snapshot version object carrying the rule's rollout); (2) a read-only Segment List Page exists in the dashboard, built from core's referencedSegmentKeys surfaced through browse-environment plus the readSegmentVersion port already on DashboardPorts, rendering each Referenced Segment Key with its current pointer version and explicit 'not published' / 'unavailable' states, reachable from the environment page; (3) no member value is ever rendered or logged; (4) SegmentPointer and segment version object shapes are byte-for-byte unchanged from horizon 17; (5) `pnpm verify` passes with 100% line/branch/function/statement coverage including every new src/*.ts file, ESLint layer boundaries hold, and the LocalStack integration suite passes in its existing out-of-root-coverage config. The browser-level (Playwright) proof of the FileReader upload path is deliberately NOT part of this horizon: it is carried to the next Planning Horizon so it can land together with the CI job that runs it.",
+    "Add LocalStack test for segment upload and rollout: A new LocalStack integration test file that seeds its own schemaVersion 2 snapshot and asserts on the segment version object, the Segment Pointer and the rollout-bearing snapshot version written by the dashboard.",
+    "Add referenced segment keys to snapshot contents: browse-environment's snapshot-contents result carries a deterministic, unit-tested set of referenced segment keys.",
+    "Add segment list use case: A unit-tested use case returning one row per referenced segment key with its current version or an explicit unpublished/unavailable state.",
+    "Add Segment List Page with environment link: A read-only Segment List Page served at the environment's /segments path and linked from the environment page."
+  ],
+  "deferred": [
+    "Starting a real @featuresync/core FlagClient or SDK S3 snapshot source process that reads the uploaded segment/rollout back from LocalStack \u2014 the user capped the proof at asserting the S3 objects the dashboard wrote.",
+    "Showing segment member count or createdAt on the Segment list \u2014 the user rejected it because it would require changing what publish writes to S3.",
+    "Any change to the SegmentPointer shape or the segment version object format \u2014 pinned by caller acceptance criteria.",
+    "Rendering, exporting, searching or logging segment member values anywhere in the dashboard \u2014 PII invariant.",
+    "Listing segments via S3 ListObjectsV2, or showing segments not referenced by the current snapshot \u2014 the dashboard never lists the bucket (horizon-10 decision) and reader IAM does not grant it.",
+    "Deleting segments, or cleaning up orphaned segment version objects from a lost pointer race \u2014 that blocker needs its own lifecycle decision.",
+    "Structured inSegment condition editing (a segment picker) \u2014 the raw 'Edit rules' JSON textarea already covers it; deferred from horizon 17.",
+    "Per-SDK segment version telemetry \u2014 decided against in horizon 17; no telemetry exists to read.",
+    "Measuring or hardening the 100k-member (~25 MiB) upload path through FileReader and the 32 MiB urlencoded route \u2014 an open blocker requiring a load measurement, not a feature.",
+    "Deciding whether setRollout should auto-upgrade a schemaVersion 1 snapshot to 2 \u2014 an unresolved horizon-17 blocker needing a migration decision.",
+    "Fixing the horizon-16 concurrent-replay 200+422 race for rollout edits \u2014 a separate correctness investigation, not part of this proof.",
+    "Any multipart/form-data upload parser or transport change \u2014 horizon 17 decided on FileReader + urlencoded.",
+    "Add Playwright fixture backed by LocalStack: a browser-test fixture starting the dashboard against a real bucket \u2014 held for the next Planning Horizon to keep this one small and reviewable \u2014 the Planning Brief and project memory carry the context forward",
+    "Add browser spec for CSV upload and rollout: a real browser driving the FileReader upload and the rollout form \u2014 held for the next Planning Horizon to keep this one small and reviewable \u2014 the Planning Brief and project memory carry the context forward",
+    "Extract the schemaVersion 2 seed snapshot into a shared fixture module \u2014 only worth doing once the deferred browser spec becomes a second consumer; today it has one.",
+    "Add a CI job running the browser specs against LocalStack (browser install, AWS env, new workflow job) \u2014 fails the 'needed now?' gate: the proof must first be green locally and the specs may surface real bugs; wiring CI around an unproven spec is speculative and belongs to the next horizon once the spec is stable.",
+    "Show member count and createdAt on the Segment List Page \u2014 fails the 'in scope?' gate: the user explicitly rejected it because it would change what publish writes to S3.",
+    "Start a real flag-client/SDK process that reads the uploaded segment and rollout back from LocalStack \u2014 fails the 'in scope?' gate: the user capped the proof at asserting the S3 objects the dashboard wrote.",
+    "Deciding whether a rollout edit should auto-upgrade a schemaVersion 1 snapshot to schemaVersion 2 \u2014 fails the 'decided?' gate: an unresolved migration question from the previous horizon; this horizon simply seeds a schemaVersion 2 snapshot.",
+    "Cleaning up orphaned segment version objects left by a lost pointer compare-and-set race \u2014 fails the 'decided?' gate: needs its own segment lifecycle decision; this horizon only avoids asserting on object existence.",
+    "Measuring or hardening the very large (100k-member, ~25 MiB) CSV upload path through the in-browser file read and the 32 MiB request cap \u2014 fails the 'needed now?' gate: a load measurement, not part of proving the path works.",
+    "Extracting a shared LocalStack test-helper package \u2014 fails the 'needed now?' gate: the repo convention is per-file local helpers and only two suites would share them.",
+    "Replacing the rollout form's local segment-key extraction with the snapshot's referenced segment keys (a duplication cleanup) \u2014 fails the 'needed now?' gate: a DRY refactor with no behaviour change and no caller asking for it.",
+    "Structured inSegment condition editing (a segment picker) \u2014 fails the 'in scope?' gate: already declared out of scope; the raw rules JSON editor covers it."
+  ],
+  "revision": 0
+}

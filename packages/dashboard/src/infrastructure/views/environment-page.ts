@@ -3,6 +3,7 @@ import { environmentPath, escapeHtml } from './escape.js';
 import type { EditDraft } from './feature-edit-form.js';
 import { renderPage, renderRawJson, renderTimestamp, type Notice } from './layout.js';
 import { renderNewFlagForm, type CreateDraft } from './new-flag-form.js';
+import { segmentListPath } from './segment-list-page.js';
 import { renderSnapshotContents } from './snapshot-contents.js';
 
 export interface EnvironmentPageState {
@@ -167,6 +168,7 @@ export const renderEnvironmentPage = (view: EnvironmentView, state: EnvironmentP
   return renderPage(
     view.environment,
     `<div class="page-head page-head-actions"><div><p class="eyebrow">Environment</p><h1>Environment ${escapeHtml(view.environment)}</h1></div>
+<a href="${escapeHtml(segmentListPath(view.environment))}">Segments</a>
 <button type="button" data-open-dialog="publish-dialog" hidden>Publish new version</button></div>
 ${summary}
 ${renderPublishDialog(view, state)}`,

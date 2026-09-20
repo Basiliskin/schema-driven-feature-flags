@@ -37,3 +37,5 @@
 - 2026-09-20 | horizon 16 | completed | 2 phases (edit-conflict LocalStack tests match replay; dashboard Host allowlist), 0 amendments, 0 overrides
 - 2026-09-20 | horizon 17 | planned | 7 phases (rollout Flag Edit kinds + form, segment publisher CAS, pointer version reader, upload use case, adapter wiring, upload page); gate passed after 1 blocker + 2 major healed, 3 minor debt
 - 2026-09-20 | horizon 17 | completed | 7 phases (rollout Flag Edit kinds + form, segment publisher CAS, pointer version reader, upload use case, adapter wiring, upload page/route); 3 amendments, 0 overrides
+- 2026-09-20 | horizon 18 | planned | 4 phases (LocalStack segment+rollout proof, referenced segment keys on snapshot contents, segment list use case, Segment List Page); browser proof deferred to horizon 19 — see horizon-18 roadmap.md
+- 2026-09-20 | horizon 18 | completed | 4 phases (LocalStack segment+rollout proof, referenced segment keys on snapshot contents, segment list use case, Segment List Page); 1 amendment, 0 overrides

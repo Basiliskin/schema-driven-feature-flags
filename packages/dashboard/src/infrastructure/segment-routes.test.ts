@@ -262,3 +262,82 @@ describe('segment upload routes', () => {
     expect(reply.status).toBe(405);
   });
 });
+
+const LIST_PATH = '/env/production/segments';
+
+const snapshotText = (segmentKeys: readonly string[]): string =>
+  JSON.stringify({
+    schemaVersion: 2,
+    environment: 'production',
+    version: 1,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    createdBy: 'dashboard',
+    previousVersion: null,
+    reason: 'seed',
+    features: Object.fromEntries(
+      segmentKeys.map((key, index) => [
+        `flag-${String(index)}`,
+        { type: 'boolean', enabled: true, rules: [{ when: { userId: { inSegment: key } }, enabled: true }] },
+      ]),
+    ),
+  });
+
+const listFakes = (segmentKeys: readonly string[], readSegmentVersion: DashboardPorts['readSegmentVersion']): DashboardPorts => ({
+  ...fakes({ readSegmentVersion }).ports,
+  readCurrentVersion: () => Promise.resolve(1),
+  fetchSnapshotText: () => Promise.resolve(snapshotText(segmentKeys)),
+});
+
+describe('the segment list route', () => {
+  it('lists every referenced segment with its pointer version', async () => {
+    const dashboard = await start(listFakes(['beta', 'staff'], () => Promise.resolve(4)));
+
+    const page = await call(dashboard, 'GET', LIST_PATH);
+
+    expect(page.status).toBe(200);
+    expect(page.body).toContain('>beta</a>');
+    expect(page.body).toContain('>staff</a>');
+    expect(page.body).toContain('version 4');
+  });
+
+  it('distinguishes a segment with no pointer from one whose pointer cannot be read', async () => {
+    const dashboard = await start(
+      listFakes(['beta', 'staff'], (_environment, key) =>
+        key === 'beta' ? Promise.resolve(null) : Promise.reject(new Error('boom')),
+      ),
+    );
+
+    const page = await call(dashboard, 'GET', LIST_PATH);
+
+    expect(page.status).toBe(200);
+    expect(page.body).toContain('>not published<');
+    expect(page.body).toContain('>unavailable<');
+  });
+
+  it('still serves the segment page and upload route for a four-part path', async () => {
+    const { ports, publishSegment } = fakes();
+    const dashboard = await start(ports);
+
+    expect((await call(dashboard, 'GET', SEGMENT_PATH)).body).toContain('segment beta');
+    await call(dashboard, 'POST', SEGMENT_PATH, {
+      body: upload({ memberAttribute: 'userId', csv: 'u1', expectedCurrentVersion: '4' }),
+    });
+    expect(publishSegment).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not accept a POST to the list path', async () => {
+    const { ports, publishSegment } = fakes();
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', LIST_PATH, { body: upload({ csv: 'u1' }) });
+
+    expect(reply.status).toBe(405);
+    expect(publishSegment).not.toHaveBeenCalled();
+  });
+
+  it('has no page at a deeper segment path', async () => {
+    const dashboard = await start(fakes().ports);
+
+    expect((await call(dashboard, 'GET', `${SEGMENT_PATH}/members`)).status).toBe(404);
+  });
+});

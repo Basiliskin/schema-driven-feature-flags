@@ -1,0 +1,185 @@
+{
+  "roadmapFile": "horizon-18-localstack-proof-segment-list-roadmap.json",
+  "roadmapRevision": 0,
+  "createdAt": "2026-09-20T07:15:15.886Z",
+  "updatedAt": "2026-09-20T09:02:56Z",
+  "phases": [
+    {
+      "phaseId": "localstack-segment-and-rollout-test",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "baseDirty": true,
+      "startedAt": "2026-09-20T07:15:15.886Z",
+      "notes": "Changed: packages/dashboard/integration/dashboard-segments.localstack.test.ts (new), packages/aws/src/index.ts (export parseSegmentPointer). Adds a LocalStack suite that seeds its own schemaVersion 2 snapshot + pointer by direct S3 PUT, then drives the dashboard HTTP routes for a CSV segment upload, a re-upload, and setRollout/removeRollout, asserting on the S3 objects written: the Segment Pointer parsed with parseSegmentPointer, the segment version body fetched via the pointer objectKey and parsed with parseSegment, and the new snapshot versions parsed with parseSnapshot. Dirty-at-start paths were docs/roadmaps/featuresync/** only. | VERIFY: gates green after one fix — the new parseSegmentPointer export broke the aws package entry-point export-list assertion; packages/aws/test/infrastructure/s3-snapshot-source.load.test.ts updated to expect it (surface still fully asserted, nothing loosened). Graded 9/10/9/10/9, all >= minScore 8, overallPass true; no 10 demoted (both named above-the-bar evidence). Compensation if ever needed: delete packages/dashboard/integration/dashboard-segments.localstack.test.ts (throwaway bucket only); the two aws-package lines would also need reverting.",
+      "baseRef": "b7451ed92328d95b5317f94f641c145656cf1273",
+      "unplannedFiles": [
+        "packages/aws/src/index.ts",
+        "packages/aws/test/infrastructure/s3-snapshot-source.load.test.ts"
+      ],
+      "amendments": [
+        {
+          "at": "2026-09-20T07:17:38.472Z",
+          "by": "execute",
+          "reason": "filesAffected named only the new test file, but the test cannot reach parseSegmentPointer: @featuresync/aws exports only the SegmentPointer type from its index, and the dashboard tsconfig rootDir forbids importing another package source path. Exporting the existing parser from the aws index is the one-line change that lets the test satisfy its own rubric.",
+          "grounding": "packages/aws/src/index.ts line 29 exported `type SegmentPointer` only; packages/aws/integration/s3-segment-publisher.localstack.test.ts reaches the parser by a package-local relative path, which is unavailable across packages under rootDir \".\".",
+          "before": {
+            "filesAffected": [
+              "packages/dashboard/integration/dashboard-segments.localstack.test.ts"
+            ]
+          },
+          "after": {
+            "filesAffected": [
+              "packages/dashboard/integration/dashboard-segments.localstack.test.ts",
+              "packages/aws/src/index.ts"
+            ]
+          }
+        }
+      ],
+      "completedAt": "2026-09-20T07:23:06.815Z",
+      "gateRun": "pnpm verify (build + pnpm -r typecheck + eslint --max-warnings=0 + vitest --coverage: 1276 tests, 100% stmt/branch/func/line) = pass; pnpm test:integration (LocalStack: 22 aws + 16 dashboard tests) = pass",
+      "gradeResult": {
+        "phaseId": "localstack-segment-and-rollout-test",
+        "dimensionScores": [
+          {
+            "dimensionId": "asserts-on-real-s3-objects",
+            "score": 9,
+            "pass": true,
+            "evidence": "Every scenario re-reads the object from LocalStack after the POST and parses it with parseSegment/parseSnapshot/parseSegmentPointer; status codes are preconditions only. Short of 10: the rollout edits also move <env>/current.json, which the test never fetches."
+          },
+          {
+            "dimensionId": "pointer-keyed-assertions",
+            "score": 10,
+            "pass": true,
+            "evidence": "The version body is fetched with the parsed pointer objectKey and segment.version is tied to pointer.version. Above the bar: the re-upload scenario pins the pointer objectKey to /2.json, so a stale pointer resolving to a parseable orphan fails on the pointer field; ListObjectsV2 is cleanup-only."
+          },
+          {
+            "dimensionId": "seed-snapshot-schema-v2",
+            "score": 9,
+            "pass": true,
+            "evidence": "schemaVersion 2 seed with an inSegment rule; snapshot and pointer both PUT in beforeEach into a per-scenario featuresync-it-<uuid> bucket, dashboard started via main(). Held at 9: the repeat-run criterion rests on external runs, not on the deliverable."
+          },
+          {
+            "dimensionId": "rollout-add-and-remove",
+            "score": 10,
+            "pass": true,
+            "evidence": "setRollout verified against snapshots/2.json, removeRollout against the NEXT object snapshots/3.json with not.toHaveProperty (key absence, not falsiness) and a strictly increasing version. Above the bar: it also asserts the rule when is unchanged across versions, proving only the rollout block was stripped."
+          },
+          {
+            "dimensionId": "no-pii-in-fixtures",
+            "score": 9,
+            "pass": true,
+            "evidence": "CSV literals hold user-1..user-3 only, the seed references the segment by key, no console.log, assertions use toHaveLength. Not a 10: thrown diagnostics interpolate parser output, a path by which parsed member content could reach a CI dump."
+          }
+        ],
+        "overallPass": true
+      }
+    },
+    {
+      "phaseId": "snapshot-contents-segment-keys",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-20T08:41:06.000Z",
+      "baseRef": "b7451ed92328d95b5317f94f641c145656cf1273",
+      "baseDirty": true,
+      "notes": "Changed: packages/dashboard/src/application/browse-environment.ts (planned), packages/dashboard/test/application/browse-environment.test.ts, packages/dashboard/src/infrastructure/views/feature-edit-form.test.ts. SnapshotContents valid variant gains a non-optional readonly segmentKeys: readonly string[], filled in readContents by [...referencedSegmentKeys(parsed.value)].sort() on the snapshot parseSnapshot already produced there (no second parse, no hand-rolled rule walk). Tests: the existing browseEnvironment full-equality case now asserts segmentKeys: [] on a schemaVersion 1 snapshot that has rules but no inSegment (the empty case); a new viewSnapshotVersion case feeds a schemaVersion 2 snapshot mentioning zeta, alpha, mid, alpha across two features and asserts exactly [alpha, mid, zeta] (sorted + deduped from deliberately unsorted input). feature-edit-form.test.ts builds a SnapshotContents literal, so it needed segmentKeys: [] to typecheck — unplanned but mechanical. Dirty at start (not this phase): docs/roadmaps/featuresync/**, packages/aws/**, packages/dashboard/integration/dashboard-segments.localstack.test.ts. | VERIFY: pnpm verify green first try, no fixes needed (the editor diagnostics seen during EXECUTE were a stale index). Graded 10/10/9/10, all >= minScore 8, overallPass true; no 10 demoted (all three named above-the-bar evidence). No compensation defined for this phase; to revert: git diff b7451ed92328d95b5317f94f641c145656cf1273 -- the three dashboard files.",
+      "unplannedFiles": [
+        "packages/dashboard/test/application/browse-environment.test.ts",
+        "packages/dashboard/src/infrastructure/views/feature-edit-form.test.ts"
+      ],
+      "completedAt": "2026-09-20T08:51:12.000Z",
+      "gateRun": "pnpm verify (core/nestjs/aws/cli/dashboard build + typecheck + lint + test incl. 100% coverage gate): pass (exit 0)",
+      "gradeResult": {
+        "phaseId": "snapshot-contents-segment-keys",
+        "dimensionScores": [
+          {
+            "dimensionId": "single-parse-reuse",
+            "score": 10,
+            "pass": true,
+            "evidence": "referencedSegmentKeys(parsed.value) called exactly once, inline in the same return object-literal as the existing parse; no second parseSnapshot/JSON.parse of the snapshot text, no hand-rolled rule walk. Above a 9: zero added parsing surface or intermediate variable."
+          },
+          {
+            "dimensionId": "deterministic-ordering",
+            "score": 10,
+            "pass": true,
+            "evidence": "readonly segmentKeys: readonly string[]; the Set is spread and explicitly .sort()ed before return. The new test feeds zeta, alpha, mid, alpha across two features and asserts the literal ['alpha','mid','zeta']. Above a 9: the fixture is deliberately out of order AND carries a repeated key, catching a missing sort and a missing dedupe rather than passing by accident."
+          },
+          {
+            "dimensionId": "empty-not-error",
+            "score": 9,
+            "pass": true,
+            "evidence": "Field non-optional on the valid variant; a schemaVersion 1 snapshot with rules but no inSegment asserts segmentKeys: [] inside a full-equality expectation; no branch yields undefined. Short of 10 because the invalid variant omits the field entirely (consistent with flags/metadata there), so the same-type-in-every-branch bar is met only within the valid member."
+          },
+          {
+            "dimensionId": "application-layer-purity",
+            "score": 10,
+            "pass": true,
+            "evidence": "Only the existing @featuresync/core import was widened by one named import; no new import statement and no HTTP/S3/view import. The field holds raw key strings with no escaping, label or count. Above a 9: no import statement was added at all, and the value type embeds no formatting decision."
+          }
+        ],
+        "overallPass": true
+      }
+    },
+    {
+      "phaseId": "list-referenced-segments-use-case",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-20T08:53:17.000Z",
+      "baseRef": "b7451ed92328d95b5317f94f641c145656cf1273",
+      "baseDirty": true,
+      "notes": "Dirty at start (not this phase): docs/roadmaps/featuresync/**, packages/aws/**, packages/dashboard/integration/dashboard-segments.localstack.test.ts (horizon-18 phase 1), and phase 2 files packages/dashboard/src/application/browse-environment.ts, packages/dashboard/test/application/browse-environment.test.ts, packages/dashboard/src/infrastructure/views/feature-edit-form.test.ts. | Changed: packages/dashboard/src/application/list-referenced-segments.ts (new, planned), packages/dashboard/test/application/list-referenced-segments.test.ts (new). listReferencedSegments(ports, environment) composes browseEnvironment and reads keys off the phase-2 contents.segmentKeys field (no parseSnapshot, no referencedSegmentKeys import, no extra snapshot argument); ports typed BrowsePorts & Pick<SegmentUploadPorts,'readSegmentVersion'>. Row is a three-way discriminated union on state: published+version, not-published, unavailable. null from readSegmentVersion maps to not-published via an explicit === null check (so version 0 stays published); a throw maps to unavailable in a try/catch inside the per-key readRow, i.e. inside the map rather than around the Promise.all, so row count always equals key count. Nothing but key and version is read or logged; the catch binds no error variable. Empty rows for an env with no pointer, a missing current version, an unparseable snapshot, or a snapshot referencing no segments. 8 unit tests pass, covering all of those plus a 3-key isolation case where the middle key throws and the other two still carry versions. | VERIFY: pnpm verify green first try, no fixes needed. Graded 10/10/9/10, all >= minScore 8, overallPass true; no 10 demoted (all three named above-the-bar evidence). The 9 on keys-and-versions-only is the grader noting that dimension's 8-bar and 10-bar wording are effectively identical, not a defect in the code. No compensation defined; to revert: delete the two new files (both untracked).",
+      "unplannedFiles": [
+        "packages/dashboard/test/application/list-referenced-segments.test.ts"
+      ],
+      "completedAt": "2026-09-20T08:56:55.000Z",
+      "gradeResult": {
+        "phaseId": "list-referenced-segments-use-case",
+        "dimensionScores": [
+          {
+            "dimensionId": "per-key-failure-isolation",
+            "score": 10,
+            "pass": true,
+            "evidence": "try/catch lives inside readRow, invoked per key via Promise.all(keys.map(...)), never around the iteration, and never rethrows. Above a 9: the test uses three keys and makes the MIDDLE one reject, asserting alpha stays published v2 and gamma published v5 while beta becomes unavailable - the exact 8-to-10 bar the rule names, not a single-key test."
+          },
+          {
+            "dimensionId": "three-distinct-row-states",
+            "score": 10,
+            "pass": true,
+            "evidence": "SegmentListRow is a discriminated union on state where version: number exists only on the published variant. Above a 9: a caller cannot read a version off a not-published/unavailable row without narrowing first, so a wrong render is a type error rather than a runtime bug. Separate tests cover null->not-published, throw->unavailable, and version 0 staying published."
+          },
+          {
+            "dimensionId": "keys-and-versions-only",
+            "score": 9,
+            "pass": true,
+            "evidence": "Row carries only key, state and a numeric version; no member value, body or count field. The catch discards the error entirely (no console/logger in the file) and the only port call is readSegmentVersion. Fully satisfies passCriteria, but this dimension's 8-bar and 10-bar wording are effectively identical, so nothing distinguishes it above the stated bar."
+          },
+          {
+            "dimensionId": "consumes-phase-4-field",
+            "score": 10,
+            "pass": true,
+            "evidence": "No parseSnapshot and no raw snapshot read; keys come from view.current.contents.segmentKeys via browseEnvironment, with the empty / not-available / invalid branches short-circuited to []. Above a 9: parameters are only (ports, environment) with no snapshot or segmentKeys threaded through the caller, so zero new snapshot I/O is added - the literal 10-bar, not merely the absence of parseSnapshot."
+          }
+        ],
+        "overallPass": true
+      },
+      "gateRun": "pnpm verify (core/nestjs/aws/cli/dashboard build + typecheck + lint + test incl. 100% coverage gate): pass (exit 0)"
+    },
+    {
+      "phaseId": "segment-list-page",
+      "status": "awaiting-verification",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-20T08:59:07Z",
+      "baseRef": "b7451ed92328d95b5317f94f641c145656cf1273",
+      "baseDirty": true,
+      "notes": "Changed (this phase): packages/dashboard/src/infrastructure/segment-routes.ts, src/infrastructure/segment-routes.test.ts, src/infrastructure/views/segment-list-page.ts (new), src/infrastructure/views/segment-list-page.test.ts (new), src/infrastructure/views/styles/segment-list.css (new), src/infrastructure/views/stylesheet.ts, src/infrastructure/views/environment-page.ts. matchSegmentRoute now accepts 3-segment paths (GET /env/<env>/segments) alongside the existing 4-segment page/upload routes and its ports param widened to SegmentRoutePorts = SegmentUploadPorts & ListReferencedSegmentsPorts; the main router is unchanged. The new view renders a two-column table (key linked to its segment page via the reused segmentPath helper, state cell) with distinct \"version N\" / \"not published\" / \"unavailable\" cells and an explanatory paragraph instead of an empty table for zero rows; it holds no try/catch, no sorting and imports nothing from aws. New CSS is one scoped .segment-unavailable rule in styles/segment-list.css registered in STYLE_FILES. The environment page head gained a plain \"Segments\" anchor (no new CSS class). Tests: 7 view/link/stylesheet cases plus 5 route cases (listing, not-published vs unavailable, the 4-segment routes still working, POST to the list path -> 405, deeper path -> 404). pnpm verify green, 1298 tests, 100% coverage. Unplanned: stylesheet.ts (the STYLE_FILES registration the phase inputs named but filesAffected did not list) and the two test files. Dirty at start (not this phase): docs/roadmaps/featuresync/**, packages/aws/**, packages/dashboard/integration/dashboard-segments.localstack.test.ts, src/application/browse-environment.ts, src/application/list-referenced-segments.ts, test/application/*.test.ts, src/infrastructure/views/feature-edit-form.test.ts.",
+      "unplannedFiles": [
+        "packages/dashboard/src/infrastructure/views/stylesheet.ts",
+        "packages/dashboard/src/infrastructure/segment-routes.test.ts",
+        "packages/dashboard/src/infrastructure/views/segment-list-page.test.ts"
+      ]
+    }
+  ]
+}

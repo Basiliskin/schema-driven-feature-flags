@@ -28,7 +28,7 @@
 - 2026-09-19 | horizon 15 | Does LocalStack handle many concurrent IfNoneMatch pointer GETs like real S3, or must tests run them serially?
 - 2026-09-19 | horizon 15 | Should a push-triggered snapshot re-read also re-check segment pointers?
 - 2026-09-19 | horizon 15 | After a segment fails to load, is it retried every tick or only when its pointer ETag changes?
-- 2026-09-19 | horizon 14 | dashboard LocalStack edit-conflict tests (sequential + concurrent same-base edits) return 200 instead of 422; fails identically at commit c0c62ee, so pre-existing — needs its own fix.
+- 2026-09-19 | horizon 14 | dashboard LocalStack edit-conflict tests (sequential + concurrent same-base edits) return 200 instead of 422; fails identically at commit c0c62ee, so pre-existing — needs its own fix. — see horizon-18 roadmap.md
 - 2026-09-20 | horizon 17 | Do operators need a Segment list with member count/createdAt, or are referenced keys plus the pointer version enough?
 - 2026-09-20 | horizon 17 | Does a 100k-member (~25 MiB) upload via FileReader and the 32 MiB urlencoded route fit node:http memory/latency limits?
 - 2026-09-20 | horizon 17 | Does the horizon-16 concurrent-replay 200+422 race also hit setRollout/removeRollout edits?
@@ -36,3 +36,10 @@
 - 2026-09-20 | horizon 17 | Should setRollout on a schemaVersion 1 snapshot upgrade it to 2, or keep failing and force an explicit migration?
 - 2026-09-20 | horizon 17 | Should a rollout edit that only changes `enabled` on the same flag really auto-replay, or does per-rule editing need a finer conflict check?
 - 2026-09-20 | horizon 17 | A segment publish that loses the pointer IfMatch race leaves an orphaned version object from the IfNoneMatch body put. Readers never see it, but nothing cleans it up. Lifecycle rule, or delete on CONFLICT?
+- 2026-09-20 | horizon 18 | Where should the browser+LocalStack proof run in CI — inside the existing localstack job, or a third job standing up its own LocalStack?
+- 2026-09-20 | horizon 18 | How does the Playwright process get AWS endpoint/credentials? playwright.config.ts has no .env loading; is .env or CI-supplied env right?
+- 2026-09-20 | horizon 18 | Which browser does CI use — bundled Chromium with an install step, or the locally installed Chrome channel the config defaults to?
+- 2026-09-20 | horizon 18 | Does pnpm test:e2e fail or skip when LOCALSTACK_AUTH_TOKEN is absent? The horizon-3 no-skip rule has not been extended to the browser suite.
+- 2026-09-20 | horizon 18 | Did a real browser ever exercise the FileReader path in app.js? Horizon 18 deferred the browser spec, so it stays unexercised.
+- 2026-09-20 | horizon 18 | Can a Playwright rollout edit collide with the unresolved horizon-16/17 concurrent-replay 200+422 race, and is that CI flakiness?
+- 2026-09-20 | horizon 18 | Does the horizon-18 schemaVersion 2 seed snapshot live somewhere reusable, or must the browser spec duplicate the file-local literal?

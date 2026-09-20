@@ -26,7 +26,7 @@ const RAW = {
   reason: 'Launch',
   features: { 'new-dashboard': { type: 'boolean', enabled: true } },
 };
-const CONTENTS: SnapshotContents = { status: 'valid', flags: [BOOLEAN, CONFIG], metadata: METADATA, raw: RAW };
+const CONTENTS: SnapshotContents = { status: 'valid', flags: [BOOLEAN, CONFIG], metadata: METADATA, segmentKeys: [], raw: RAW };
 
 const rowOf = (html: string, key: string): string => {
   const start = html.indexOf(`<li class="card flag" data-flag="${key}"`);

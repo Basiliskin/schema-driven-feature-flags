@@ -56,3 +56,7 @@
 - 2026-09-20 | horizon 17 | S3 segment publish takes optional expectedCurrentVersion and throws CONFLICT before any PUT on mismatch; omitted keeps CLI behaviour — because stale browser uploads must write nothing.
 - 2026-09-20 | horizon 17 | Browser CSV upload uses FileReader into a urlencoded csv field, with a 32 MiB body cap on that route only; no multipart parser — because it is the simplest transport and other routes keep 1 MiB.
 - 2026-09-20 | horizon 17 | Rollout is edited per rule (setRollout/removeRollout FlagEdit kinds on a rule index) through the existing edit-feature CAS/replay path — because core rules own rollout.
+- 2026-09-20 | horizon 18 | The browser (Playwright) proof and the CI job that runs it land together or not at all — because CI has no Playwright job and playwright.config.ts loads no .env, so a spec landed — see horizon-18 roadmap.md
+- 2026-09-20 | horizon 18 | The Segment List Page shows Referenced Segment Keys and pointer version only, sourced from core's referencedSegmentKeys via browse-environment — no member count/createdAt, because — see horizon-18 roadmap.md
+- 2026-09-20 | horizon 18 | A failed readSegmentVersion for one key renders an 'unavailable' row rather than failing the page; missing pointer ('not published') and read failure stay distinct states — because — see horizon-18 roadmap.md
+- 2026-09-20 | horizon 18 | app.js browser JS is accepted as outside the 100% coverage gate (coverage includes packages/*/src/**/*.ts only); its proof is behavioural, not coverage-based.

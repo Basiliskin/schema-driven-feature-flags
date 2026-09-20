@@ -492,6 +492,7 @@ describe('package entry point', () => {
       'createS3SnapshotSource',
       'createSqsNotificationQueue',
       'parseSegmentCsv',
+      'parseSegmentPointer',
     ]);
   });
 });

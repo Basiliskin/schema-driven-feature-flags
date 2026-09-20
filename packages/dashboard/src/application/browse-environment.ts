@@ -1,4 +1,4 @@
-import { parseSnapshot, type ValidationIssue } from '@featuresync/core';
+import { parseSnapshot, referencedSegmentKeys, type ValidationIssue } from '@featuresync/core';
 
 export interface BrowsePorts {
   /** Resolves to `undefined` when the Environment has no published Snapshot Version yet. */
@@ -27,6 +27,8 @@ export type SnapshotContents =
       readonly status: 'valid';
       readonly flags: readonly FlagDefinitionView[];
       readonly metadata: SnapshotMetadata;
+      /** Every Segment Key the rules reference, sorted; empty when none do. */
+      readonly segmentKeys: readonly string[];
       /** The stored body as parsed JSON, key order kept. */
       readonly raw: Readonly<Record<string, unknown>>;
     }
@@ -74,6 +76,7 @@ const readContents = (text: string): SnapshotContents => {
   return {
     status: 'valid',
     metadata: { createdAt, createdBy, reason },
+    segmentKeys: [...referencedSegmentKeys(parsed.value)].sort(),
     raw: raw as Record<string, unknown>,
     flags: Object.entries(parsed.value.features).map(([key, feature]) => ({
       key,

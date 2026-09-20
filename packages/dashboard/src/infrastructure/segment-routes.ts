@@ -1,6 +1,10 @@
+import { listReferencedSegments, type ListReferencedSegmentsPorts } from '../application/list-referenced-segments.js';
 import { uploadSegment, type SegmentUploadFailureReason, type SegmentUploadPorts } from '../application/upload-segment.js';
 import { HttpError, decodeSegment, readForm, send, type Route } from './http-primitives.js';
+import { renderSegmentListPage } from './views/segment-list-page.js';
 import { renderSegmentPage } from './views/segment-page.js';
+
+export type SegmentRoutePorts = SegmentUploadPorts & ListReferencedSegmentsPorts;
 
 /** 100,000 members of up to 256 characters, URL-encoded. Only the upload POST reads a body this large. */
 export const MAX_SEGMENT_CSV_BYTES = 32 * 1024 * 1024;
@@ -26,12 +30,23 @@ const parseExpectedVersion = (value: string | null): number | null => {
 };
 
 export function matchSegmentRoute(
-  ports: SegmentUploadPorts,
+  ports: SegmentRoutePorts,
   environment: string,
   segments: readonly string[],
   method: string | undefined,
 ): Route | undefined {
-  if (segments.length !== 4 || segments[2] !== 'segments') return undefined;
+  if (segments[2] !== 'segments' || segments.length < 3 || segments.length > 4) return undefined;
+
+  if (segments.length === 3) {
+    return {
+      method: 'GET',
+      handle: async (_request, response) => {
+        const rows = await listReferencedSegments(ports, environment);
+        send(response, 200, renderSegmentListPage({ environment, rows }));
+      },
+    };
+  }
+
   const key = decodeSegment(segments[3] as string);
 
   if (method === 'POST') {

@@ -24,6 +24,23 @@ const snapshotText = (version: number) =>
     },
   });
 
+const inSegment = (key: string) => ({ when: { plan: { inSegment: key } }, enabled: true });
+
+const segmentSnapshotText = () =>
+  JSON.stringify({
+    schemaVersion: 2,
+    environment: 'production',
+    version: 1,
+    createdAt: '2026-09-19T06:00:00.000Z',
+    createdBy: 'test',
+    previousVersion: null,
+    reason: 'segments',
+    features: {
+      'new-dashboard': { type: 'boolean', enabled: true, rules: [inSegment('zeta'), inSegment('alpha')] },
+      'checkout-limits': { type: 'boolean', enabled: false, rules: [inSegment('mid'), inSegment('alpha')] },
+    },
+  });
+
 const fetchError = (reason: string) => Object.assign(new Error(reason), { reason });
 
 const portsWith = (current: number | undefined, fetchSnapshotText: BrowsePorts['fetchSnapshotText']) => ({
@@ -63,6 +80,7 @@ describe('browseEnvironment', () => {
         contents: {
           status: 'valid',
           metadata: metadata(3),
+          segmentKeys: [],
           raw: JSON.parse(snapshotText(3)) as unknown,
           flags: [
             { key: 'new-dashboard', type: 'boolean', enabled: true, defaultValue: true, ruleCount: 1, rules: [{ when: { plan: 'pro' }, enabled: false }] },
@@ -121,6 +139,18 @@ describe('viewSnapshotVersion', () => {
 
     expect(view).toMatchObject({ environment: 'production', version: 2, status: 'available' });
     expect(ports.fetchSnapshotText).toHaveBeenCalledExactlyOnceWith('production', 2);
+  });
+
+  it('lists every referenced Segment Key once, sorted, whatever order the rules mention them in', async () => {
+    const ports = portsWith(1, () => Promise.resolve(segmentSnapshotText()));
+
+    const view = await viewSnapshotVersion(ports, 'production', 1);
+
+    expect(view.status === 'available' && view.contents.status === 'valid' && view.contents.segmentKeys).toEqual([
+      'alpha',
+      'mid',
+      'zeta',
+    ]);
   });
 
   it('marks a SNAPSHOT_NOT_FOUND version as not available', async () => {

@@ -26,7 +26,7 @@ export {
   type S3SegmentVersionReader,
   type S3SegmentVersionReaderOptions,
 } from './infrastructure/s3-segment-version-reader.js';
-export type { SegmentPointer } from './domain/segment-pointer.js';
+export { parseSegmentPointer, type SegmentPointer, type SegmentPointerResult } from './domain/segment-pointer.js';
 export {
   parseSegmentCsv,
   type SegmentCsvError,
