@@ -36,7 +36,7 @@ export default defineConfig(
     languageOptions: {
       sourceType: 'script',
       globals: Object.fromEntries(
-        ['window', 'document', 'navigator', 'fetch', 'sessionStorage', 'URLSearchParams', 'CSS', 'setTimeout', 'setInterval'].map((name) => [name, 'readonly']),
+        ['window', 'document', 'navigator', 'fetch', 'sessionStorage', 'URLSearchParams', 'CSS', 'FileReader', 'setTimeout', 'setInterval'].map((name) => [name, 'readonly']),
       ),
     },
   },

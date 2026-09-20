@@ -266,6 +266,189 @@ describe('applyFlagEdit', () => {
       });
     });
   });
+
+  describe('setRollout and removeRollout', () => {
+    const proRule = { when: { plan: 'pro' }, enabled: false };
+    const freeRule = { when: { plan: 'free' }, rollout: { percentage: 10, bucketBy: 'userId', salt: 'old' }, enabled: true };
+    const rolloutSnapshot = {
+      ...baseSnapshot,
+      schemaVersion: 2,
+      features: {
+        ...baseSnapshot.features,
+        'new-dashboard': { type: 'boolean', enabled: true, rules: [proRule, freeRule] },
+      },
+    };
+    const rolloutText = JSON.stringify(rolloutSnapshot);
+    const setFirst = {
+      kind: 'setRollout',
+      key: 'new-dashboard',
+      ruleIndex: 0,
+      percentage: 12.34,
+      bucketBy: 'userId',
+      salt: 'launch',
+    } as const;
+    const rulesOf = (value: Record<string, unknown>, key: string) =>
+      (features(value)[key]?.rules ?? []) as Record<string, unknown>[];
+
+    it('sets the rollout on the named rule and leaves its conditions, value and siblings unchanged', () => {
+      const result = applyFlagEdit(rolloutText, setFirst, meta);
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const rules = rulesOf(result.value, 'new-dashboard');
+      expect(rules[0]).toEqual({
+        when: { plan: 'pro' },
+        enabled: false,
+        rollout: { percentage: 12.34, bucketBy: 'userId', salt: 'launch' },
+      });
+      expect(rules[1]).toEqual(freeRule);
+      expect(features(result.value)['dark-mode']).toEqual(baseSnapshot.features['dark-mode']);
+      expect(features(result.value)['checkout-limits']).toEqual(baseSnapshot.features['checkout-limits']);
+    });
+
+    it('replaces an existing rollout on the target rule', () => {
+      const result = applyFlagEdit(
+        rolloutText,
+        { ...setFirst, ruleIndex: 1, percentage: 100, salt: 'new' },
+        meta,
+      );
+
+      expect(result.ok && rulesOf(result.value, 'new-dashboard')[1]).toEqual({
+        when: { plan: 'free' },
+        enabled: true,
+        rollout: { percentage: 100, bucketBy: 'userId', salt: 'new' },
+      });
+    });
+
+    it('removes the rollout key entirely rather than setting it to null or an empty object', () => {
+      const result = applyFlagEdit(rolloutText, { kind: 'removeRollout', key: 'new-dashboard', ruleIndex: 1 }, meta);
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const rule = rulesOf(result.value, 'new-dashboard')[1] ?? {};
+      expect(Object.hasOwn(rule, 'rollout')).toBe(false);
+      expect(rule).toEqual({ when: { plan: 'free' }, enabled: true });
+      expect(rulesOf(result.value, 'new-dashboard')[0]).toEqual(proRule);
+    });
+
+    it('leaves a rule without a rollout unchanged when removeRollout targets it', () => {
+      const result = applyFlagEdit(rolloutText, { kind: 'removeRollout', key: 'new-dashboard', ruleIndex: 0 }, meta);
+
+      expect(result.ok && rulesOf(result.value, 'new-dashboard')[0]).toEqual(proRule);
+    });
+
+    it('never mutates the caller’s snapshot text or its parsed rules', () => {
+      const before = rolloutText;
+      applyFlagEdit(rolloutText, setFirst, meta);
+      expect(rolloutText).toBe(before);
+      expect(features(JSON.parse(rolloutText) as Record<string, unknown>)['new-dashboard']?.rules).toEqual([
+        proRule,
+        freeRule,
+      ]);
+    });
+
+    it.each([-1, 2, 0.5, Number.NaN])('rejects the out-of-range rule index %s', (ruleIndex) => {
+      expect(applyFlagEdit(rolloutText, { ...setFirst, ruleIndex }, meta)).toEqual({
+        ok: false,
+        error: { kind: 'INVALID_RULE_INDEX', key: 'new-dashboard', ruleIndex },
+      });
+    });
+
+    it.each([
+      ['a flag with no rules at all', 'dark-mode'],
+      ['a rules entry that is not an object', 'broken-rules'],
+    ])('rejects a rule index against %s', (_label, key) => {
+      const text = JSON.stringify({
+        ...rolloutSnapshot,
+        features: { ...rolloutSnapshot.features, 'broken-rules': { type: 'boolean', enabled: true, rules: [7] } },
+      });
+
+      expect(applyFlagEdit(text, { ...setFirst, key, ruleIndex: 0 }, meta)).toEqual({
+        ok: false,
+        error: { kind: 'INVALID_RULE_INDEX', key, ruleIndex: 0 },
+      });
+    });
+
+    it.each([-0.01, 100.01, 12.345, Number.POSITIVE_INFINITY])('rejects the percentage %s', (percentage) => {
+      expect(applyFlagEdit(rolloutText, { ...setFirst, percentage }, meta)).toEqual({
+        ok: false,
+        error: { kind: 'INVALID_PERCENTAGE', percentage },
+      });
+    });
+
+    it.each([0, 100, 12.34, 0.29])('accepts the percentage %s', (percentage) => {
+      const result = applyFlagEdit(rolloutText, { ...setFirst, percentage }, meta);
+
+      expect(result.ok && (rulesOf(result.value, 'new-dashboard')[0]?.rollout as { percentage: number })).toEqual({
+        percentage,
+        bucketBy: 'userId',
+        salt: 'launch',
+      });
+    });
+
+    it('refuses a rollout on a schemaVersion 1 snapshot, which has no rollout semantics', () => {
+      const result = applyFlagEdit(JSON.stringify({ ...rolloutSnapshot, schemaVersion: 1 }), setFirst, meta);
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error).toMatchObject({
+        kind: 'INVALID_SNAPSHOT',
+        issues: expect.arrayContaining([expect.stringMatching(/schemaVersion 2/)]) as unknown,
+      });
+    });
+
+    it('rejects an empty bucketBy through the same parseSnapshot check setRules uses', () => {
+      const result = applyFlagEdit(rolloutText, { ...setFirst, bucketBy: '' }, meta);
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error).toMatchObject({
+        kind: 'INVALID_SNAPSHOT',
+        issues: expect.arrayContaining([
+          expect.stringMatching(/^features\.new-dashboard\.rules\[0\]\.rollout\.bucketBy/),
+        ]) as unknown,
+      });
+    });
+
+    it.each(['setRollout', 'removeRollout'] as const)('reports an unknown Feature for %s', (kind) => {
+      expect(applyFlagEdit(rolloutText, { ...setFirst, kind, key: 'missing' }, meta)).toEqual({
+        ok: false,
+        error: { kind: 'UNKNOWN_FEATURE', key: 'missing' },
+      });
+    });
+
+    it('keeps a change to another Feature when the rollout edit is replayed on the newer snapshot', () => {
+      const latest = JSON.stringify({
+        ...rolloutSnapshot,
+        version: 8,
+        features: { ...rolloutSnapshot.features, 'dark-mode': { type: 'boolean', enabled: true } },
+      });
+
+      expect(canReplayEdit(rolloutText, latest, setFirst)).toBe(true);
+      const result = applyFlagEdit(latest, setFirst, meta);
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(features(result.value)['dark-mode']).toEqual({ type: 'boolean', enabled: true });
+      expect(rulesOf(result.value, 'new-dashboard')[0]?.rollout).toEqual({
+        percentage: 12.34,
+        bucketBy: 'userId',
+        salt: 'launch',
+      });
+    });
+
+    it('refuses to replay a rollout edit onto rules that changed meanwhile', () => {
+      const latest = JSON.stringify({
+        ...rolloutSnapshot,
+        features: { ...rolloutSnapshot.features, 'new-dashboard': { type: 'boolean', enabled: true, rules: [proRule] } },
+      });
+
+      expect(canReplayEdit(rolloutText, latest, setFirst)).toBe(false);
+      expect(canReplayEdit(rolloutText, latest, { kind: 'removeRollout', key: 'new-dashboard', ruleIndex: 1 })).toBe(
+        false,
+      );
+    });
+  });
 });
 
 describe('canReplayEdit', () => {

@@ -42,6 +42,8 @@ const fakes = (overrides: Partial<DashboardPorts> = {}, writer: Partial<Snapshot
     ports: {
       readCurrentVersion: () => Promise.resolve(3),
       fetchSnapshotText: () => Promise.resolve(VALID),
+      publishSegment: () => Promise.reject(new Error('not used here')),
+      readSegmentVersion: () => Promise.resolve(null),
       openWriter,
       ...overrides,
     },
@@ -1182,5 +1184,168 @@ describe('startDashboardServer', () => {
 
     expect(consoleError).toHaveBeenCalledWith(secret);
     consoleError.mockRestore();
+  });
+});
+
+describe('rollout edits on POST /env/:env/features/:key', () => {
+  const rolloutSnapshot = (options: { checkoutSalt?: string; otherEnabled?: boolean } = {}) =>
+    JSON.stringify({
+      schemaVersion: 2,
+      environment: 'production',
+      version: 3,
+      createdAt: '2026-09-19T06:00:00.000Z',
+      createdBy: 'test',
+      previousVersion: null,
+      reason: 'test',
+      features: {
+        checkout: {
+          type: 'boolean',
+          enabled: true,
+          rules: [
+            { when: { plan: 'free' }, enabled: false },
+            { when: { plan: { inSegment: 'beta-testers' } }, rollout: { percentage: 10, bucketBy: 'userId', salt: options.checkoutSalt ?? 'old' }, enabled: true },
+          ],
+        },
+        other: { type: 'boolean', enabled: options.otherEnabled ?? false },
+      },
+    });
+
+  const ROLLOUT_SNAPSHOT = rolloutSnapshot();
+
+  const rolloutFakes = (overrides: Partial<DashboardPorts> = {}, writer: Partial<SnapshotWriter> = {}) =>
+    fakes({ fetchSnapshotText: () => Promise.resolve(ROLLOUT_SNAPSHOT), ...overrides }, writer);
+
+  const publishedRules = (writer: Fakes['writer']): Record<string, unknown>[] => {
+    const [, snapshot] = writer.publish.mock.calls[0] as [string, { features: { checkout: { rules: Record<string, unknown>[] } } }];
+    return snapshot.features.checkout.rules;
+  };
+
+  it('saves the posted rollout onto the rule the form names', async () => {
+    const { ports, writer } = rolloutFakes();
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', '/env/production/features/checkout', {
+      body: form({ baseVersion: '3', field: 'setRollout', ruleIndex: '1', percentage: '30', bucketBy: 'accountId', salt: 's' }),
+    });
+
+    expect(reply.status).toBe(200);
+    expect(publishedRules(writer)[1]?.rollout).toEqual({ percentage: 30, bucketBy: 'accountId', salt: 's' });
+    expect(publishedRules(writer)[0]).not.toHaveProperty('rollout');
+  });
+
+  it('removes the rollout from the named rule and leaves the rest of it alone', async () => {
+    const { ports, writer } = rolloutFakes();
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', '/env/production/features/checkout', {
+      body: form({ baseVersion: '3', field: 'removeRollout', ruleIndex: '1' }),
+    });
+
+    expect(reply.status).toBe(200);
+    expect(publishedRules(writer)[1]).not.toHaveProperty('rollout');
+    expect(publishedRules(writer)[1]?.when).toEqual({ plan: { inSegment: 'beta-testers' } });
+  });
+
+  it.each([
+    ['a percentage above 100', { percentage: '130' }],
+    ['a percentage that is not a number', { percentage: 'half' }],
+    ['more than two decimal places', { percentage: '30.123' }],
+  ])('answers 400 for %s and publishes nothing', async (_, fields) => {
+    const { ports, writer } = rolloutFakes();
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', '/env/production/features/checkout', {
+      body: form({ baseVersion: '3', field: 'setRollout', ruleIndex: '1', bucketBy: 'userId', salt: 's', ...fields }),
+    });
+
+    expect(reply.status).toBe(400);
+    expect(reply.body).toContain('percentage');
+    expect(writer.publish).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a rule index past the end', '9'],
+    ['a missing rule index', ''],
+  ])('answers 400 for %s and publishes nothing', async (_, ruleIndex) => {
+    const { ports, writer } = rolloutFakes();
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', '/env/production/features/checkout', {
+      body: form({ baseVersion: '3', field: 'removeRollout', ruleIndex }),
+    });
+
+    expect(reply.status).toBe(400);
+    expect(writer.publish).not.toHaveBeenCalled();
+  });
+
+  it('treats a rollout posted without a bucket attribute or salt as invalid input, not as empty strings', async () => {
+    const { ports, writer } = rolloutFakes();
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', '/env/production/features/checkout', {
+      body: form({ baseVersion: '3', field: 'setRollout', ruleIndex: '1', percentage: '30' }),
+    });
+
+    // parseSnapshot rejects the empty bucketBy/salt, so this is an invalid snapshot (422), not a malformed field (400).
+    expect(reply.status).toBe(422);
+    expect(reply.body).toContain('not valid');
+    expect(writer.publish).not.toHaveBeenCalled();
+  });
+
+  it('rejects a rollout POST without an Origin before opening a writer', async () => {
+    const { ports, openWriter } = rolloutFakes();
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', '/env/production/features/checkout', {
+      body: form({ baseVersion: '3', field: 'setRollout', ruleIndex: '1', percentage: '30', bucketBy: 'userId', salt: 's' }),
+      sameOrigin: false,
+    });
+
+    expect(reply.status).toBe(403);
+    expect(openWriter).not.toHaveBeenCalled();
+  });
+
+  const ROLLOUT_FORM = { baseVersion: '3', field: 'setRollout', ruleIndex: '1', percentage: '30', bucketBy: 'userId', salt: 's' };
+
+  // The base and the latest snapshot are told apart by version, so replay sees what really changed meanwhile.
+  const racingPorts = (latest: string) => {
+    let publishes = 0;
+    return rolloutFakes(
+      {
+        readCurrentVersion: () => Promise.resolve(5),
+        fetchSnapshotText: (_environment: string, version: number) =>
+          Promise.resolve(version === 5 ? latest : ROLLOUT_SNAPSHOT),
+      },
+      {
+        publish: () => {
+          publishes += 1;
+          return publishes === 1 ? Promise.reject(publishError('CONFLICT')) : Promise.resolve(6);
+        },
+      },
+    );
+  };
+
+  it('answers 422 when the same flag changed under a stale rollout edit', async () => {
+    const { ports, writer } = racingPorts(rolloutSnapshot({ checkoutSalt: 'someone-else' }));
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', '/env/production/features/checkout', { body: form(ROLLOUT_FORM) });
+
+    expect(reply.status).toBe(422);
+    expect(reply.body).toContain('Someone else published version 5 meanwhile');
+    expect(writer.publish).toHaveBeenCalledTimes(1);
+  });
+
+  it('replays the rollout onto the latest version when a different flag changed meanwhile', async () => {
+    const { ports, writer } = racingPorts(rolloutSnapshot({ otherEnabled: true }));
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', '/env/production/features/checkout', { body: form(ROLLOUT_FORM) });
+
+    expect(reply.status).toBe(200);
+    expect(writer.publish).toHaveBeenCalledTimes(2);
+    const [, replayed] = writer.publish.mock.calls[1] as [string, { features: { checkout: { rules: Record<string, unknown>[] }; other: { enabled: boolean } } }];
+    expect(replayed.features.checkout.rules[1]?.rollout).toEqual({ percentage: 30, bucketBy: 'userId', salt: 's' });
+    expect(replayed.features.other.enabled).toBe(true);
   });
 });

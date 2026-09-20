@@ -1,5 +1,6 @@
 import type { FlagDefinitionView } from '../../application/browse-environment.js';
 import { environmentPath, escapeHtml } from './escape.js';
+import { renderRolloutForms } from './rollout-form.js';
 
 export interface EditDraft {
   readonly key: string;
@@ -63,5 +64,6 @@ ${baseVersionInput(context)}
 ${flag.type === 'config' ? renderDefaultControl(flag, draft) : ''}
 ${renderRulesControl(flag, draft)}
 </form>
+${renderRolloutForms(flag, action, baseVersionInput(context))}
 ${renderDeleteControl(flag, action, context)}`;
 };

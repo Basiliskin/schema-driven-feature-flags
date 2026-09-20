@@ -5,6 +5,8 @@ import { DEFAULT_PORT, EXIT_FAILURE, EXIT_OK, main, nodeIo, type DashboardIo } f
 const ports: DashboardPorts = {
   readCurrentVersion: () => Promise.resolve(undefined),
   fetchSnapshotText: () => Promise.resolve(''),
+  publishSegment: () => Promise.reject(new Error('unused')),
+  readSegmentVersion: () => Promise.resolve(null),
   openWriter: () => ({ publish: () => Promise.resolve(1), rollback: () => Promise.resolve(1) }),
 };
 

@@ -1,0 +1,453 @@
+{
+  "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-17-dashboard-segment-upload-rollout-roadmap.json",
+  "roadmapRevision": 1,
+  "task": "Horizon 17 of FeatureSync: fully working segment management and percentage rollout in the local dashboard (packages/dashboard).",
+  "updatedAt": "2026-09-20T07:10:00.000Z",
+  "phases": [
+    {
+      "id": "rollout-flag-edit-kinds",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-20T00:00:00.000Z",
+      "baseRef": "0b94dcfea3d2db3d1fc6bf852ff3a859fc4013cc",
+      "baseDirty": true,
+      "notes": [
+        "already dirty at start (project memory + horizon-17 plan, unrelated to this phase): docs/roadmaps/featuresync/{blockers,decisions,discoveries,next-horizon-brief,state}.md, docs/roadmaps/featuresync/archive/next-horizon-brief-horizon-15.md, docs/roadmaps/featuresync/horizons/horizon-17-*.{json,md}",
+        "changed: packages/dashboard/src/domain/flag-edit.ts, test/domain/flag-edit.test.ts, src/application/edit-feature.ts, src/application/error-messages.ts, test/application/edit-feature.test.ts",
+        "applyFlagEdit now accepts setRollout/removeRollout on one rule index of a flag, validating percentage (0-100, <=2 decimals, float-safe) and the rule index with typed INVALID_PERCENTAGE / INVALID_RULE_INDEX failures, cloning rules rather than mutating, and passing the result through the same parseSnapshot call setRules uses; canReplayEdit treats both as touching 'rules'.",
+        "1 amendment (field named key, not featureKey; 3 application-layer files added to the blast radius because edit-feature.ts switches exhaustively over FlagEdit and FlagEditFailure)",
+        "spot checks (VERIFY runs the real gate): dashboard tsc --noEmit clean; eslint clean on all 5 files; vitest 359 unit tests pass with flag-edit.ts at 100% and no file below the coverage threshold. The 3 failing suites (playwright e2e, 2 localstack) fail on missing env before this change too.",
+        "VERIFY: pnpm verify exit 0. Graded 9/10/9 against minScore 8 on all three dimensions, overallPass true, no healerHint retry needed, no 10->9 demotions.",
+        "Grader gaps carried forward (not blocking): the non-mutation test cannot actually fail, and per-file coverage for flag-edit.ts is evidenced only by the repo-wide 100% threshold gate.",
+        "Phase has no compensation field; nothing to invoke."
+      ],
+      "unplannedFiles": [
+        "packages/dashboard/src/application/edit-feature.ts",
+        "packages/dashboard/src/application/error-messages.ts",
+        "packages/dashboard/test/application/edit-feature.test.ts"
+      ],
+      "amendments": [
+        {
+          "phaseId": "rollout-flag-edit-kinds",
+          "at": "2026-09-20T00:00:00.000Z",
+          "reason": "The roadmap's changes named the rollout edit field `featureKey`, but every existing FlagEdit kind identifies its flag as `key` and both editFeatures and canReplayEdit read edit.key. Using featureKey would have forked the union. Also, edit-feature.ts has two exhaustive switches over FlagEdit and FlagEditFailure, so adding kinds forces an application-layer change the phase did not list.",
+          "changes": {
+            "before": "Add FlagEdit kinds 'setRollout' {featureKey, ruleIndex, percentage, bucketBy, salt} and 'removeRollout' {featureKey, ruleIndex}",
+            "after": "Add FlagEdit kinds 'setRollout' {key, ruleIndex, percentage, bucketBy, salt} and 'removeRollout' {key, ruleIndex}"
+          },
+          "filesAffected": {
+            "before": [
+              "packages/dashboard/src/domain/flag-edit.ts",
+              "packages/dashboard/test/domain/flag-edit.test.ts"
+            ],
+            "after": [
+              "packages/dashboard/src/domain/flag-edit.ts",
+              "packages/dashboard/test/domain/flag-edit.test.ts",
+              "packages/dashboard/src/application/edit-feature.ts",
+              "packages/dashboard/src/application/error-messages.ts",
+              "packages/dashboard/test/application/edit-feature.test.ts"
+            ]
+          }
+        }
+      ],
+      "completedAt": "2026-09-20T00:00:00.000Z",
+      "gateRun": [
+        "pnpm verify (build + pnpm -r typecheck + eslint --max-warnings=0 + vitest run --coverage, 100% thresholds): pass"
+      ],
+      "gradeResult": {
+        "phaseId": "rollout-flag-edit-kinds",
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "rollout-edit-semantics",
+            "score": 9,
+            "evidence": "Clones the rules array and rebuilds only the target rule; tests assert siblings deep-equal, rollout key removed rather than nulled, and a named no-op test for removeRollout on a rule without a rollout.",
+            "gaps": "The non-mutation test re-parses the input string, which cannot fail since applyFlagEdit parses a fresh object; it does not prove a caller-held parsed snapshot is safe."
+          },
+          {
+            "dimensionId": "rollout-input-validation",
+            "score": 10,
+            "evidence": "Every criterion met, plus above the bar: the rubric's named float failureExample is pre-empted by an epsilon-based hasAtMostTwoDecimals with a comment citing the `p * 100 % 1` trap, and 0.29 is pinned as accepted in the test table, locking the regression down rather than merely avoiding it.",
+            "gaps": ""
+          },
+          {
+            "dimensionId": "rollout-domain-purity-and-replay",
+            "score": 9,
+            "evidence": "Single import from @featuresync/core; replay test asserts a different feature's change survives alongside the new rollout, and canReplayEdit returns false for both kinds when rules changed meanwhile.",
+            "gaps": "Coverage evidenced by the repo-wide 100% threshold gate rather than a per-file figure."
+          }
+        ],
+        "summary": "Pure-domain implementation: rollout edits clone rather than mutate, use typed failures, and flow through the same parseSnapshot as setRules."
+      }
+    },
+    {
+      "id": "rollout-form-and-display",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-20T01:00:00.000Z",
+      "baseRef": "0b94dcfea3d2db3d1fc6bf852ff3a859fc4013cc",
+      "baseDirty": true,
+      "notes": [
+        "already dirty at start (project memory, horizon-17 plan/ledger, and phase-1 dashboard files), unrelated to this phase: docs/roadmaps/featuresync/**, packages/dashboard/src/{domain/flag-edit.ts,application/edit-feature.ts,application/error-messages.ts}, packages/dashboard/test/{domain/flag-edit.test.ts,application/edit-feature.test.ts}",
+        "added: src/infrastructure/views/rollout-form.ts, rollout-form.test.ts, styles/rollout.css; changed: views/feature-edit-form.ts, views/stylesheet.ts, infrastructure/http-server.ts, http-server.test.ts, application/publish-snapshot.ts, application/edit-feature.ts, test/application/edit-feature.test.ts, views/feature-edit-form.test.ts",
+        "Each rule of a flag now renders a rollout badge (percentage + bucketBy), the Segment keys its conditions reference via inSegment, and its own form posting setRollout/removeRollout with that rule's index to the existing guarded features/:key POST, so rollout writes reuse the edit-feature CAS and replay path unchanged.",
+        "1 amendment (WriteOutcome.invalidInput added so a malformed rollout request answers 400 as the rubric requires, instead of the 422 every edit failure previously got; adds 2 application files plus 2 existing test files to the blast radius)",
+        "spot checks (VERIFY runs the real gate): dashboard tsc --noEmit clean; eslint --max-warnings=0 clean on all changed files; vitest 382 unit tests pass with coverage thresholds not tripped. The 3 failing suites (2 playwright e2e, 1 localstack) fail on a missing browser runner / AWS_ENDPOINT_URL_S3 before this change too.",
+        "Two tests caught real defects while being written: an empty ruleIndex coerced to rule 0 via Number(''), now NaN; and a same-feature conflict needs a rules change, since canReplayEdit only compares the fields the edit touches.",
+        "Phase has no compensation field; nothing to invoke.",
+        "VERIFY: pnpm verify exit 0 after two real gate reds this pass — a ragged it.each tuple broke the dashboard typecheck (table type widened to accept the optional invalidInput column), and branch coverage fell to 99.83% on the untested bucketBy/salt fallbacks (test added; an empty bucket attribute is rejected by parseSnapshot as an invalid snapshot, 422, not by the rollout validators, 400).",
+        "VERIFY: graded 8/9/9 against minScores 8/8/9, overallPass true, no healerHint retry needed, no 10->9 demotions (no dimension scored 10).",
+        "Grader gaps carried forward (not blocking): the stylesheet is asserted via the STYLESHEET constant rather than a GET of the stylesheet route or a link on the page; segmentKeysOf reads one condition level only; the 403 case covers a missing Origin, not a wrong one.",
+        "Phase has no compensation field; nothing to invoke."
+      ],
+      "unplannedFiles": [
+        "packages/dashboard/src/application/publish-snapshot.ts",
+        "packages/dashboard/src/application/edit-feature.ts",
+        "packages/dashboard/test/application/edit-feature.test.ts",
+        "packages/dashboard/src/infrastructure/views/feature-edit-form.test.ts",
+        "packages/dashboard/src/infrastructure/http-server.test.ts",
+        "packages/dashboard/src/infrastructure/views/rollout-form.test.ts"
+      ],
+      "amendments": [
+        {
+          "phaseId": "rollout-form-and-display",
+          "at": "2026-09-20T01:00:00.000Z",
+          "reason": "The rubric's rollout-post-mapping requires a bad percentage to answer 400, but writeStatus mapped every WriteOutcome failure to 422 and the failure shape carried no discriminator. Validating the percentage in the route instead would duplicate domain validation, so the failure outcome gained an optional invalidInput marker that edit-feature sets for INVALID_PERCENTAGE and INVALID_RULE_INDEX. Other failures keep their 422.",
+          "filesAffected": {
+            "before": [
+              "packages/dashboard/src/infrastructure/views/rollout-form.ts",
+              "packages/dashboard/src/infrastructure/views/feature-edit-form.ts",
+              "packages/dashboard/src/infrastructure/http-server.ts",
+              "packages/dashboard/src/infrastructure/views/styles/rollout.css"
+            ],
+            "after": [
+              "packages/dashboard/src/infrastructure/views/rollout-form.ts",
+              "packages/dashboard/src/infrastructure/views/feature-edit-form.ts",
+              "packages/dashboard/src/infrastructure/http-server.ts",
+              "packages/dashboard/src/infrastructure/views/styles/rollout.css",
+              "packages/dashboard/src/infrastructure/views/stylesheet.ts",
+              "packages/dashboard/src/application/publish-snapshot.ts",
+              "packages/dashboard/src/application/edit-feature.ts"
+            ]
+          },
+          "changes": {
+            "before": "Map the form fields to setRollout or removeRollout in the existing features/:key POST handler",
+            "after": "Map the form fields to setRollout or removeRollout in the existing features/:key POST handler, and carry an invalidInput marker on the failure outcome so a malformed rollout request answers 400 while a stale one stays 422"
+          }
+        }
+      ],
+      "completedAt": "2026-09-20T03:00:00.000Z",
+      "gateRun": [
+        "pnpm verify (build + pnpm -r typecheck + eslint --max-warnings=0 + vitest run --coverage, 100% global thresholds): pass, exit 0, 1229 tests in 52 files, coverage 100% statements/branches/functions/lines"
+      ],
+      "gradeResult": {
+        "phaseId": "rollout-form-and-display",
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "rollout-display-per-rule",
+            "score": 8,
+            "evidence": "Test renders one rolled-out and one plain rule, asserting '25% by userId' with exactly one badge-rollout match and 'No rollout' for the other, so the badge is per rule not per flag; inSegment keys appear as <code> and are de-duplicated; a salt, bucketBy and segment key containing <script> are asserted escaped with no raw '<script>'; stylesheet.ts adds rollout.css to STYLE_FILES and the test asserts STYLESHEET contains .badge-rollout and .rule-segments. The view renders only segment keys, never members.",
+            "gaps": "The stylesheet criterion is only half met: the test asserts on the STYLESHEET constant, not a GET of the stylesheet route, and nothing asserts the flag page links it. segmentKeysOf reads exactly one level, so an inSegment nested inside an all/any group would be missed (the current schema has flat conditions)."
+          },
+          {
+            "dimensionId": "rollout-post-mapping",
+            "score": 9,
+            "evidence": "A POST of setRollout with ruleIndex=1 publishes rules[1].rollout {30,'accountId','s'} while rules[0] keeps none, proving no off-by-one; removeRollout drops the rollout and leaves `when` intact; three bad percentages (130, 'half', 30.123) each return 400 with 'percentage' in the body and publish is never called; parseNumber coerces to a real number (NaN when missing), pre-empting the '30'-string 500 failure example; the path runs through parseFeatureEdit to editFeature and the CAS/replay, never the publisher directly.",
+            "gaps": "The 400 depends on this phase's invalidInput amendment rather than pre-existing mapping; a rollout posted without bucketBy/salt still yields 422, which a test documents as intentional but is coarser than 'a bad rollout field is 400'."
+          },
+          {
+            "dimensionId": "rollout-security-and-conflict",
+            "score": 9,
+            "evidence": "A setRollout POST without Origin returns 403 with openWriter never called, so it is rejected before any use-case work; a same-flag rules change under version 5 returns 422 with the 'Someone else published version 5 meanwhile' conflict page and exactly one publish attempt; a different flag changing meanwhile replays onto version 5 with 200, two publishes, the rollout applied and the other flag's change preserved. The form posts to the existing features/:key route and so inherits the guarded route table.",
+            "gaps": "The 403 test covers only a missing Origin; no rollout-specific wrong-Origin/Host case, which the shared route's earlier tests cover."
+          }
+        ],
+        "summary": "A solid, well-tested rollout form and per-rule display that meets every dimension's minScore, with the only real gap being that the stylesheet criterion is verified against the STYLESHEET constant instead of a GET of the stylesheet route or a link on the page."
+      }
+    },
+    {
+      "id": "segment-publisher-expected-version",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-20T04:00:00.000Z",
+      "baseRef": "0b94dcfea3d2db3d1fc6bf852ff3a859fc4013cc",
+      "baseDirty": true,
+      "notes": [
+        "already dirty at start, unrelated to this phase: docs/roadmaps/featuresync/** and the packages/dashboard files from horizon-17 phases 1-2. Nothing under packages/aws was dirty.",
+        "changed: packages/aws/src/infrastructure/s3-segment-publisher.ts, packages/aws/test/infrastructure/s3-segment-publisher.test.ts, packages/aws/src/index.ts",
+        "publish() takes an optional third argument { expectedCurrentVersion?: number | null }. checkExpectedVersion runs straight after the pointer read and before any PutObject, returning early only on `expected === undefined` and otherwise comparing against `current?.pointer.version ?? null`, so null matches only a missing pointer and 0 is a real expectation rather than a skipped check. A mismatch throws S3SegmentPublishError('CONFLICT', <pointer key>) with an 'Expected current version X, found Y' cause. Mirrors the snapshot publisher's existing PublishOptions/checkExpectedVersion shape.",
+        "0 amendments. The new option type is exported from the package index as SegmentPublishOptions, which the roadmap did not list but the next phases need to type their callers.",
+        "spot checks (VERIFY runs the real gate): aws tsc --noEmit clean; eslint --max-warnings=0 clean on all 3 files; aws build exit 0; cli tsc --noEmit clean unchanged (backward compatibility); 30 tests in the publisher's own file pass, including all 23 pre-existing ones with no edits; 418 aws unit tests pass. The 8 failing aws suites are the LocalStack integration ones, failing on a missing AWS_ENDPOINT_URL_S3 before this change too and excluded from the root gate by their own config.",
+        "Compensation is recorded and understood: the field is optional, so reverting the commit restores the previous publisher behaviour and no stored S3 data changes. It was not needed this phase.",
+        "VERIFY: first pnpm verify run exit 2 on one real red — aws typecheck TS2379, the explicit-undefined test call violated exactOptionalPropertyTypes. Fixed at the contract: expectedCurrentVersion is now `number | null | undefined`, which is what the runtime guard (`expected === undefined` early return) already implemented. Second run exit 0.",
+        "VERIFY: graded 9/10/8 against minScores 9/8/8, overallPass true, no healerHint retry needed, no 10->9 demotions (the 10 named what it has above a 9: the expectedCurrentVersion:0 falsy-trap regression test plus exact cause-message assertions).",
+        "Grader gaps carried forward (not blocking): puts are asserted on the fake recorder rather than PutObjectCommand instances; the new block has no genuinely two-argument publish call (legacy untouched tests cover that arity); src/index.ts remains outside the planned filesAffected as a benign additive type export.",
+        "Compensation confirmed: the field is optional, so reverting this commit restores the previous publisher behaviour and no stored S3 data changes. Not needed this phase."
+      ],
+      "unplannedFiles": [
+        "packages/aws/src/index.ts"
+      ],
+      "completedAt": "2026-09-20T08:40:00.000Z",
+      "gateRun": [
+        "pnpm verify (build + pnpm -r typecheck + eslint --max-warnings=0 + vitest run --coverage, 100% global thresholds): pass, exit 0 on the second run, 1236 tests in 52 files, coverage 100% statements/branches/functions/lines"
+      ],
+      "gradeResult": {
+        "phaseId": "segment-publisher-expected-version",
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "cas-before-write",
+            "score": 9,
+            "evidence": "checkExpectedVersion is called on the line immediately after `await readPointer(env, segmentKey)` and before buildSegmentPointer/any PutObject; it throws S3SegmentPublishError('CONFLICT', segmentPointerKeyFor(env, segmentKey)). The mismatch test asserts instanceof S3SegmentPublishError with code CONFLICT (via expectReason), `expect(s3.puts).toEqual([])` and `expect(s3.gets).toEqual([POINTER_KEY])`, so exactly one GetObject and zero PutObjects.",
+            "gaps": "Assertions are on the fake's recorded puts rather than on command instances (no explicit PutObjectCommand-type assertion); no test proving ordering if the pointer read itself fails."
+          },
+          {
+            "dimensionId": "null-and-match-semantics",
+            "score": 10,
+            "evidence": "All four semantic cases are covered (null+no pointer publishes v1; null+existing pointer CONFLICT 'none, found 4'; number+no pointer CONFLICT '1, found none'; equal number publishes version+1 with key order ['.../5.json', pointer]). Beyond the criteria, what a 10 has that a 9 does not: a dedicated regression test pinning expectedCurrentVersion: 0 as a real expectation (with an inline comment naming the falsy-check trap), plus exact cause-message assertions, so the `expected === undefined` guard is locked in by test rather than only by reading the source.",
+            "gaps": "None material."
+          },
+          {
+            "dimensionId": "backward-compat",
+            "score": 8,
+            "evidence": "The test diff is purely additive — the pre-existing describe block and its assertions are untouched, so the old publisher tests pass unedited; key layout code (segmentPointerKeyFor, buildSegmentPointer) is unchanged. The new option is optional on both the interface method and the implementation, and `pnpm verify` (build + typecheck across packages incl. CLI + eslint + 100%-threshold coverage) exits 0.",
+            "gaps": "The 'without the field' test passes an empty object `{}` and an explicit `undefined` field rather than a genuinely two-argument publish call with an existing pointer; that arity path is only covered incidentally by the untouched legacy tests. Also, src/index.ts was edited outside the phase's planned filesAffected (benign additive type export)."
+          }
+        ],
+        "summary": "Solid, well-scoped CAS addition: the comparison sits between the pointer read and the first write, a stale expectation throws S3SegmentPublishError CONFLICT with zero PutObjects, and undefined/null/number semantics are each pinned by tests including the 0-falsy trap. Only nits: no explicit two-arg publish test in the new block and an unplanned (harmless) index.ts type export. Passes all dimensions."
+      }
+    },
+    {
+      "id": "segment-pointer-version-reader",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-20T09:00:00.000Z",
+      "baseRef": "0b94dcfea3d2db3d1fc6bf852ff3a859fc4013cc",
+      "baseDirty": true,
+      "notes": [
+        "already dirty at start, unrelated to this phase: docs/roadmaps/featuresync/**, the packages/dashboard files from horizon-17 phases 1-2, and packages/aws/{src/index.ts,src/infrastructure/s3-segment-publisher.ts,test/infrastructure/s3-segment-publisher.test.ts} from phase 3.",
+        "added: packages/aws/src/infrastructure/s3-segment-version-reader.ts, packages/aws/test/infrastructure/s3-segment-version-reader.test.ts; changed: packages/aws/src/index.ts. No files outside the phase filesAffected.",
+        "createS3SegmentVersionReader({bucket, client?}).readVersion(env, key) GETs only segmentPointerKeyFor(env, key), parses it with parseSegmentPointer and returns pointer.version. Only a NoSuchKey/404 is null; AccessDenied and every other S3 failure throw S3SegmentPublishError REQUEST_FAILED, an unparsable or foreign pointer throws INVALID_POINTER, and a bad environment or segment key throws before any send. Exported from the package index with its reader and options types.",
+        "0 amendments. The reader mirrors createS3CurrentPointerReader but returns number | null (not undefined) as the contract asks, and reuses segmentPointerKeyFor/parseSegmentPointer rather than rebuilding the key.",
+        "spot checks (VERIFY runs the real gate): 10 new tests pass; aws tsc --noEmit clean; eslint --max-warnings=0 clean on all 3 files.",
+        "One test was wrong when first written and the code was right: environmentSchema only rejects a \"/\", so the bad-environment case needed prod/uction rather than Production!.",
+        "Compensation is understood: the change is a purely additive export, so reverting the commit removes it and no stored S3 data changes.",
+        "VERIFY: first pnpm verify run exit 1 on one real red — s3-snapshot-source.load.test.ts pins the package export surface with an exact Object.keys(entry).sort() list, which the new export broke. Added createS3SegmentVersionReader to that pinned list (one line, sorted position); no assertion relaxed. That file is outside the phase filesAffected and is recorded in unplannedFiles. Second run exit 0.",
+        "VERIFY: graded 9/10/9/8 against minScores 8/9/8/8, overallPass true, no healerHint retry needed, no 10->9 demotions (the 10 on missing-is-null named what it has above a 9: identity-mismatch, empty-body and not-a-pointer cases all closed to specific thrown reasons, so no path can silently become null).",
+        "Grader gaps carried forward (not blocking): the one-GetObject test pins the key as a literal rather than calling segmentPointerKeyFor, so domain-layout drift would not fail it; the reader doc comment restates the pointer key shape in prose; and the rubric criterion \"existing aws tests pass unedited\" is only satisfied in spirit, since the export-surface pin had to gain its one line."
+      ],
+      "unplannedFiles": [
+        "packages/aws/test/infrastructure/s3-snapshot-source.load.test.ts"
+      ],
+      "completedAt": "2026-09-20T09:40:00.000Z",
+      "gateRun": [
+        "pnpm verify (build + pnpm -r typecheck + eslint --max-warnings=0 + vitest run --coverage, 100% global thresholds): pass, exit 0 on the second run, 1246 tests in 53 files, coverage 100% statements/branches/functions/lines"
+      ],
+      "gradeResult": {
+        "phaseId": "segment-pointer-version-reader",
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "version-only-read",
+            "score": 9,
+            "evidence": "readVersion builds one key via segmentPointerKeyFor and issues a single readObjectText; the happy-path test seeds a decoy version object 'production/segments/beta/4.json' with members and asserts keys === ['production/segments/beta/current.json'], send called once, and send.mock.calls[0][0].input.Key equals the pointer key. Return type is Promise<number | null> with no member count or createdAt.",
+            "gaps": "The test compares Key against a hard-coded literal rather than calling segmentPointerKeyFor(env,key), so a future layout change in the domain helper would not be caught by this assertion alone."
+          },
+          {
+            "dimensionId": "missing-is-null",
+            "score": 10,
+            "evidence": "NoSuchKey (absent key in fakeS3) returns null and is asserted with toBeNull() (not falsy); AccessDenied 403 throws S3SegmentPublishError with reason REQUEST_FAILED; '{not json' throws INVALID_POINTER. What a 10 has that a 9 does not: the failure mode is closed on both sides — beyond the three required cases it also covers an empty body, a well-formed-but-not-a-pointer body, and pointers naming another segment or another environment, each asserted to throw a specific reason, so no S3 or identity-mismatch path can silently become null. The catch is narrowly scoped around the fetch with isNotFound as the only null branch; parse failures are re-thrown, never swallowed.",
+            "gaps": "None."
+          },
+          {
+            "dimensionId": "shared-pointer-parsing",
+            "score": 9,
+            "evidence": "Imports parseSegmentPointer, segmentPointerKeyFor and validateSegmentKey from ../domain/segment-pointer.js and validateEnvironmentName from ../domain/publishing.js; no string template builds any key inside the reader, and the error type S3SegmentPublishError is reused from the publisher rather than redefined.",
+            "gaps": "Only the doc comment restates the '<env>/segments/<key>/current.json' shape in prose; harmless but a second place that can drift."
+          },
+          {
+            "dimensionId": "public-export",
+            "score": 8,
+            "evidence": "packages/aws/src/index.ts exports createS3SegmentVersionReader plus its two types from the infrastructure module, so the dashboard can import from '@featuresync/aws' with no deep path. The only pre-existing test touched is s3-snapshot-source.load.test.ts, whose export-surface pin gained exactly one line, 'createS3SegmentVersionReader', in sorted position; that file is an intentional allowlist of the entry surface, so adding the new name is the pin working as designed rather than a test weakened to pass. pnpm verify is green at 1246 tests, 100% coverage.",
+            "gaps": "Strictly read, the passCriterion 'Existing aws tests pass unedited' is not literally satisfied — one pre-existing test file was edited. No behavioral assertion was relaxed, so this is a 8, not a failure. The diff also carries an unrelated 'type SegmentPublishOptions' export line in the same index.ts block (previous phase), slightly muddying the 'existing exports unchanged' claim."
+          }
+        ],
+        "summary": "The reader is a clean, narrowly-scoped pointer read: one GetObject, domain helpers for key building and parsing, null only for a missing key, and coded S3SegmentPublishError for every other failure including identity mismatches. Tests are thorough, including a decoy version object proving members are never fetched. Only deduction of note is the export-surface pin test needing its one-line update, which is that test's designed behavior. All dimensions clear their minimums."
+      }
+    },
+    {
+      "id": "upload-segment-use-case",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-20T10:00:00.000Z",
+      "baseRef": "0b94dcfea3d2db3d1fc6bf852ff3a859fc4013cc",
+      "baseDirty": true,
+      "notes": [
+        "already dirty at start, unrelated to this phase: docs/roadmaps/featuresync/**, the packages/dashboard files from horizon-17 phases 1-2, and the packages/aws files from phases 3-4.",
+        "added: packages/dashboard/src/application/upload-segment.ts, packages/dashboard/test/application/upload-segment.test.ts. Nothing else changed; no files outside the amended filesAffected.",
+        "uploadSegment(ports, env, {key, memberAttribute, csv, expectedCurrentVersion}) parses the CSV with parseSegmentCsv (version 1 only satisfies the contract while parsing, as the CLI does) and returns a typed failure carrying the parser reason before the port is touched; on success it calls publishSegment with the parsed memberAttribute and members plus expectedCurrentVersion unchanged, and returns the SegmentPointer. A thrown publisher error is matched structurally on its `reason` field - CONFLICT and VERSION_EXISTS map to their own reasons, everything else to REQUEST_FAILED - so the application layer never imports or instanceofs the infrastructure error class.",
+        "1 amendment (the contract named application/ports.ts, which does not exist; ports are declared per use case in this dashboard, so SegmentUploadPorts lives in upload-segment.ts with the two signatures the contract specified). This is the horizon third amendment, which is the per-horizon budget - a fourth would be a REPLAN_REQUIRED stop.",
+        "PII checked by reading, not assumed: parseSegmentCsv messages carry line numbers and counts only, and the INVALID_SEGMENT path comes from SegmentValidationError, whose issues name member positions (members.3) rather than values. Publisher failures get fixed dashboard messages rather than the thrown error text.",
+        "readSegmentVersion is declared on SegmentUploadPorts but not called by uploadSegment - per the contract it exists for the page (phase 7) to fill the expected version.",
+        "spot checks (VERIFY runs the real gate): 12 new tests pass; dashboard tsc --noEmit clean; eslint --max-warnings=0 clean on both files after fixing two lint errors in the test helper (a redundant cast and a non-Error promise rejection).",
+        "Phase has no compensation field; nothing to invoke.",
+        "VERIFY: pnpm verify exit 0 first run, no gate reds this pass.",
+        "VERIFY: graded 9/9/9/9 against minScores 9/8/9/8, overallPass true, no healerHint retry needed, no 10->9 demotions (no dimension scored 10).",
+        "VERIFY: the grader was told about the ports.ts amendment and verified the premise itself (no application/ports.ts exists; BrowsePorts/WritePorts are per-use-case). It graded application-layer-boundary on the dimension intent rather than its literal ports.ts wording and said so.",
+        "Grader gaps carried forward (not blocking): the CONFLICT/VERSION_EXISTS message strings are asserted only by reason, never as user-facing copy; the dashboard fixed publisher wording diverges from the CLI error.message pass-through with no test pinning the relationship; no PII case covers the INVALID_SEGMENT path; and SegmentUploadPorts is not yet composed into DashboardPorts, so the boundary is unexercised until phase 6."
+      ],
+      "amendments": [
+        {
+          "phaseId": "upload-segment-use-case",
+          "at": "2026-09-20T10:00:00.000Z",
+          "reason": "The contract put both new ports in packages/dashboard/src/application/ports.ts, which does not exist and never has. This dashboard declares each use case its own Ports interface next to the use case (BrowsePorts in browse-environment.ts, WritePorts in publish-snapshot.ts) and composes them in http-server.ts as DashboardPorts = EditFeaturePorts. Creating a ports.ts would fork the convention mid-horizon. The ports are therefore declared in upload-segment.ts as SegmentUploadPorts, with the same two signatures the contract specifies; phases 6 and 7 compose them into DashboardPorts when they wire the adapters and the route. The goal, the layer and the port signatures are unchanged.",
+          "filesAffected": {
+            "before": [
+              "packages/dashboard/src/application/upload-segment.ts",
+              "packages/dashboard/src/application/ports.ts",
+              "packages/dashboard/test/application/upload-segment.test.ts"
+            ],
+            "after": [
+              "packages/dashboard/src/application/upload-segment.ts",
+              "packages/dashboard/test/application/upload-segment.test.ts"
+            ]
+          },
+          "changes": {
+            "before": "Add a publishSegment port to DashboardPorts and a readSegmentVersion port to DashboardPorts (in ports.ts)",
+            "after": "Declare SegmentUploadPorts in upload-segment.ts with publishSegment(env, {key, memberAttribute, members, expectedCurrentVersion}) => Promise<SegmentPointer> and readSegmentVersion(env, key) => Promise<number | null>, following the per-use-case Ports convention; DashboardPorts picks them up in phases 6-7"
+          }
+        }
+      ],
+      "unplannedFiles": [],
+      "completedAt": "2026-09-20T10:40:00.000Z",
+      "gateRun": [
+        "pnpm verify (build + pnpm -r typecheck + eslint --max-warnings=0 + vitest run --coverage, 100% global thresholds): pass, exit 0 on the first run, coverage 100% statements/branches/functions/lines"
+      ],
+      "gradeResult": {
+        "phaseId": "upload-segment-use-case",
+        "overallPass": true,
+        "dimensions": [
+          {
+            "dimensionId": "no-publish-on-invalid",
+            "score": 9,
+            "evidence": "upload-segment.test.ts lines 68-89 run an it.each table with exactly one case per reason (EMPTY_FILE, HEADER, MALFORMED_ROW, TOO_MANY_MEMBERS, INVALID_SEGMENT via key 'not a valid key'), each asserting result.reason toBe the specific reason and publish toHaveBeenCalledTimes(0). The fake used is publishingPorts() - a port that WOULD succeed - so the zero-call assertion is meaningful rather than trivially satisfied. uploadSegment returns at line 53 before the try block, so INVALID_SEGMENT (contract-level key rejection) is caught by parseSegmentCsv->parseSegment, never by the publisher, defeating the named failure example.",
+            "gaps": "No negative-control test proving the table's csv fixtures could not collapse onto the same reason (they are distinguished only by the asserted reason value); the TOO_MANY_MEMBERS fixture is generated, not pinned."
+          },
+          {
+            "dimensionId": "typed-publish-failures",
+            "score": 9,
+            "evidence": "Lines 45-58 assert the fake received the full upload object including expectedCurrentVersion: 4; lines 60-66 assert a null passes through as null. Lines 102-112 throw errors carrying reason CONFLICT / VERSION_EXISTS / INVALID_POINTER and assert the mapped CONFLICT / VERSION_EXISTS / REQUEST_FAILED, and lines 114-121 add a reason-less Error mapping to REQUEST_FAILED plus an assertion that the raw 'socket hang up' text is not surfaced. Success returns { ok: true, pointer } compared with toEqual against the full SegmentPointer. publishFailure (src lines 34-39) reads error.reason structurally, so 422-worthy codes stay distinguishable.",
+            "gaps": "No test asserts the mapped message text for CONFLICT/VERSION_EXISTS (only the reason), so the two fixed strings are untested as user-facing copy."
+          },
+          {
+            "dimensionId": "pii-free-messages",
+            "score": 9,
+            "evidence": "Lines 91-100 feed csv with alice@example.com on a malformed row and assert JSON.stringify(result) does NOT contain it while result.message contains 'Line 3'. Verified independently that parseSegmentCsv's messages (segment-csv.ts lines 40-53) interpolate only line numbers and counts, and SegmentValidationError (segment-contract.ts line 45) joins static zod issue messages with paths that are field names or numeric indices - no member value - so passing the parser message through is sound, not luck. Publisher failures use three fixed dashboard strings and the reason-less test asserts the thrown text is dropped.",
+            "gaps": "Wording alignment with the CLI is only structural: the CLI prints error.message for publish failures, while the dashboard substitutes its own CONFLICT/VERSION_EXISTS copy; no test pins that correspondence. No PII case covers the INVALID_SEGMENT path (a bad member value reaching parseSegment)."
+          },
+          {
+            "dimensionId": "application-layer-boundary",
+            "score": 9,
+            "evidence": "upload-segment.ts has exactly one import: { parseSegmentCsv, SegmentCsvErrorReason, SegmentPointer } from '@featuresync/aws' - the domain parse module and the pointer type the criterion explicitly allows; no @aws-sdk, no infrastructure path, and publisher errors are discriminated by a structural reason cast rather than instanceof on an infrastructure error class. Confirmed the amendment's premise independently: packages/dashboard/src/application/ports.ts does not exist; BrowsePorts lives in browse-environment.ts:3, WritePorts in publish-snapshot.ts:10, composed as DashboardPorts = EditFeaturePorts in infrastructure/http-server.ts:28. Graded the dimension's INTENT over its literal 'ports.ts' wording: SegmentUploadPorts (lines 13-17) declares both signatures, with readSegmentVersion typed Promise<number | null>, avoiding the named failure of leaking SegmentPointer into the page contract.",
+            "gaps": "Literal criterion text ('declared in ports.ts') is not met, by design. SegmentUploadPorts is not yet composed into DashboardPorts, so the boundary is unexercised by any wiring."
+          }
+        ],
+        "summary": "Both new files are tight and the phase passes every dimension above its minScore. Verified independently: 12/12 tests pass with 100% coverage on upload-segment.ts; parser and contract messages genuinely carry only line numbers, counts and field paths, so the pass-through of parser messages is PII-safe on the merits; and the repo really has no application/ports.ts, the per-use-case Ports interface being the established convention, so application-layer-boundary was graded on intent and satisfies both required signatures. Main residual gaps: the CONFLICT/VERSION_EXISTS message strings are asserted only by reason, and the dashboard's fixed publisher copy diverges from the CLI's error.message pass-through without a test pinning the relationship."
+      }
+    },
+    {
+      "id": "connect-segment-publisher-port",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-20T06:14:30.000Z",
+      "baseRef": "0b94dcfea3d2db3d1fc6bf852ff3a859fc4013cc",
+      "baseDirty": true,
+      "notes": "Changed packages/dashboard/src/infrastructure/aws-adapters.ts and aws-adapters.test.ts. createAwsDashboardPorts now also builds createS3SegmentPublisher and createS3SegmentVersionReader from the same {bucket, client} and returns DashboardPorts & SegmentUploadPorts with publishSegment (forwards key/memberAttribute/members plus expectedCurrentVersion) and readSegmentVersion. Tests cover next-version publish with bucket assertions, a stale expected version rejecting CONFLICT with no PutObject, and version/null reads. Repo was already dirty at start (32 paths); both files this phase touched were clean. Verified: pnpm verify exit 0; graded 9/9/9/9 against minScores 8/9/8/7, all pass; no compensation defined for this phase.",
+      "unplannedFiles": [],
+      "completedAt": "2026-09-20T06:19:41.000Z",
+      "gradeResult": {
+        "phaseId": "connect-segment-publisher-port",
+        "dimensionScores": [
+          {
+            "dimensionId": "shared-bucket-client",
+            "score": 9,
+            "pass": true,
+            "evidence": "One s3 = {bucket, client?} object is passed to createS3SegmentPublisher, createS3SegmentVersionReader, createS3CurrentPointerReader and createS3SnapshotPublisher; no new S3Client in the adapter. A test asserts every PutObject Bucket is 'flags'."
+          },
+          {
+            "dimensionId": "port-pass-through",
+            "score": 9,
+            "pass": true,
+            "evidence": "publishSegment forwards key/memberAttribute/members as the draft and { expectedCurrentVersion } as the options arg, returning the publisher's pointer. Tests: expected 3 against a stored pointer 3 resolves version 4 writing 4.json then current.json; stale 2 rejects S3SegmentPublishError CONFLICT with zero PutObjects."
+          },
+          {
+            "dimensionId": "version-port-wiring",
+            "score": 9,
+            "pass": true,
+            "evidence": "createS3SegmentVersionReader imported from the package root '@featuresync/aws', not a deep path; readSegmentVersion delegates to readVersion. Tests assert version 3 for 'beta' and null for unpublished 'gamma'."
+          },
+          {
+            "dimensionId": "composition-only",
+            "score": 9,
+            "pass": true,
+            "evidence": "Only two factory calls and two delegating methods added; no parseSegmentCsv import, no pointer JSON parsing, no HTTP mapping. Diff touches aws-adapters.ts and its test only, +74/-2."
+          }
+        ],
+        "overallPass": true
+      },
+      "gateRun": "pnpm verify (build + typecheck + eslint --max-warnings=0 + vitest --coverage, 100% enforced): pass"
+    },
+    {
+      "id": "segment-upload-route-and-form",
+      "status": "done",
+      "attempts": 1,
+      "startedAt": "2026-09-20T06:20:47.000Z",
+      "baseRef": "0b94dcfea3d2db3d1fc6bf852ff3a859fc4013cc",
+      "baseDirty": true,
+      "notes": "Planned files: segment-routes.ts (new), http-server.ts, views/segment-page.ts (new), views/styles/segments.css (new). GET/POST /env/:env/segments/:key go through the existing route table so the Host/Origin guard runs first; the 32 MiB cap is a readForm argument inside the upload handler only, every other route keeps 1 MiB. Failure reasons map to 400 (CSV), 422 (CONFLICT, VERSION_EXISTS), 502 (REQUEST_FAILED); no member is ever rendered. Unplanned but required: Route/HttpError/send/readForm extracted to http-primitives.ts to avoid an import cycle; segment-routes.test.ts (15 cases); the FileReader handler in app.js placed before its early return; segments.css registered in stylesheet.ts; FileReader added to the browser globals in eslint.config.js; publishSegment/readSegmentVersion added to three existing DashboardPorts construction sites (http-server.test.ts, test/main.test.ts, e2e/support/fixtures.ts) because DashboardPorts widened. | VERIFY: gates green on first run, no healer retry; graded 9/9/9/9 against minScores 9/8/9/8, overallPass true; no dimension scored 10 so no 10->9 demotions.",
+      "unplannedFiles": [
+        "packages/dashboard/src/infrastructure/http-primitives.ts",
+        "packages/dashboard/src/infrastructure/segment-routes.test.ts",
+        "packages/dashboard/src/infrastructure/views/scripts/app.js",
+        "packages/dashboard/src/infrastructure/views/stylesheet.ts",
+        "packages/dashboard/src/infrastructure/http-server.test.ts",
+        "packages/dashboard/test/main.test.ts",
+        "packages/dashboard/e2e/support/fixtures.ts",
+        "eslint.config.js"
+      ],
+      "completedAt": "2026-09-20T07:10:00.000Z",
+      "gradeResult": {
+        "phaseId": "segment-upload-route-and-form",
+        "dimensionScores": [
+          {
+            "dimensionId": "guarded-route",
+            "score": 9,
+            "pass": true,
+            "evidence": "matchSegmentRoute is called from the existing match() table in http-server.ts dispatch, which applies 405 then the isSameOrigin POST guard before route.handle, so the body is never read on a bad Origin. segment-routes.test.ts 'refuses an upload without the dashboard origin' asserts 403 and publishSegment not called; the body limit is a readForm argument inside the handler, so it cannot short-circuit routing."
+          },
+          {
+            "dimensionId": "per-route-body-cap",
+            "score": 9,
+            "pass": true,
+            "evidence": "readForm in http-primitives.ts takes limit = MAX_BODY_BYTES (1 MiB) by default; only the upload POST passes MAX_SEGMENT_CSV_BYTES (32 MiB). Tests cover a body just under 32 MiB accepted, a body above it 413 with no publishSegment call, and ~1 MiB+ to /env/production/features/dark returning 413. Global default unchanged."
+          },
+          {
+            "dimensionId": "status-mapping-no-pii",
+            "score": 9,
+            "pass": true,
+            "evidence": "UPLOAD_STATUS maps EMPTY_FILE/MALFORMED_ROW/HEADER/TOO_MANY_MEMBERS/INVALID_SEGMENT to 400, CONFLICT and VERSION_EXISTS to 422, REQUEST_FAILED to 502. Tests assert 400/422/422/502 and that neither the malformed-row error body nor the success body contains 'bob@x.io'; the success page renders only 'Uploaded as version N.' and rejected uploads assert publishSegment not called."
+          },
+          {
+            "dimensionId": "page-and-transport",
+            "score": 9,
+            "pass": true,
+            "evidence": "segment-page.ts emits the hidden expectedCurrentVersion from readSegmentVersion, empty when null; tests assert value=7 and value=empty. parseExpectedVersion returns null for '' explicitly and the test asserts expectedCurrentVersion: null reaches the port; a non-numeric value is 400. app.js has a FileReader submit handler filling the csv field before the watch-version early return, segments.css is in STYLE_FILES in stylesheet.ts, and the key is HTML-escaped. Gap: segments.css being served is inferred from registration, not asserted in this phase's test."
+          }
+        ],
+        "overallPass": true
+      },
+      "gateRun": "pnpm verify (build all packages, pnpm typecheck, eslint --max-warnings=0, vitest run --coverage): pass, exit 0 — 55 test files / 1276 tests, 100% statements/branches/functions/lines"
+    }
+  ]
+}

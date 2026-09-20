@@ -262,3 +262,93 @@ describe('createS3SegmentPublisher', () => {
     expect(constructedWith).toEqual([{}]);
   });
 });
+
+describe('createS3SegmentPublisher with an expected current version', () => {
+  const publisherFor = (objects: Record<string, StoredObject>) => {
+    const s3 = fakeWritableS3(objects);
+    return { s3, publisher: createS3SegmentPublisher({ bucket: 'flags', client: s3.client }) };
+  };
+
+  it('publishes the next version when the expected version matches the pointer', async () => {
+    const { s3, publisher } = publisherFor({ [POINTER_KEY]: storedPointer(4) });
+
+    await expect(publisher.publish('production', draft(), { expectedCurrentVersion: 4 })).resolves.toEqual(
+      segmentPointer(5),
+    );
+
+    expect(s3.puts.map((put) => put.key)).toEqual(['production/segments/beta/5.json', POINTER_KEY]);
+  });
+
+  it('publishes version 1 when null is expected and no segment exists yet', async () => {
+    const { s3, publisher } = publisherFor({});
+
+    await expect(publisher.publish('production', draft(), { expectedCurrentVersion: null })).resolves.toEqual(
+      segmentPointer(1),
+    );
+
+    expect(s3.puts).toHaveLength(2);
+  });
+
+  it('refuses a stale expected version without writing anything', async () => {
+    const { s3, publisher } = publisherFor({ [POINTER_KEY]: storedPointer(4) });
+
+    const error = await expectReason(
+      publisher.publish('production', draft(), { expectedCurrentVersion: 3 }),
+      'CONFLICT',
+      POINTER_KEY,
+    );
+
+    expect(error).toBeInstanceOf(S3SegmentPublishError);
+    expect(s3.puts).toEqual([]);
+    expect(s3.gets).toEqual([POINTER_KEY]);
+    expect((error.cause as Error).message).toBe('Expected current version 3, found 4');
+  });
+
+  it('refuses null when the segment already exists, writing nothing', async () => {
+    const { s3, publisher } = publisherFor({ [POINTER_KEY]: storedPointer(4) });
+
+    const error = await expectReason(
+      publisher.publish('production', draft(), { expectedCurrentVersion: null }),
+      'CONFLICT',
+      POINTER_KEY,
+    );
+
+    expect(s3.puts).toEqual([]);
+    expect((error.cause as Error).message).toBe('Expected current version none, found 4');
+  });
+
+  it('refuses a numbered expectation when no segment exists yet, writing nothing', async () => {
+    const { s3, publisher } = publisherFor({});
+
+    const error = await expectReason(
+      publisher.publish('production', draft(), { expectedCurrentVersion: 1 }),
+      'CONFLICT',
+      POINTER_KEY,
+    );
+
+    expect(s3.puts).toEqual([]);
+    expect((error.cause as Error).message).toBe('Expected current version 1, found none');
+  });
+
+  // 0 is never a real Segment Version, but a falsy check would skip the comparison instead of refusing it.
+  it('treats an expected version of 0 as a real expectation, not as "not passed"', async () => {
+    const { s3, publisher } = publisherFor({ [POINTER_KEY]: storedPointer(4) });
+
+    await expectReason(publisher.publish('production', draft(), { expectedCurrentVersion: 0 }), 'CONFLICT', POINTER_KEY);
+
+    expect(s3.puts).toEqual([]);
+  });
+
+  it('publishes onto whatever is current when the option is omitted or the field is undefined', async () => {
+    const omitted = publisherFor({ [POINTER_KEY]: storedPointer(4) });
+    const undefinedField = publisherFor({ [POINTER_KEY]: storedPointer(4) });
+
+    await expect(omitted.publisher.publish('production', draft(), {})).resolves.toEqual(segmentPointer(5));
+    await expect(
+      undefinedField.publisher.publish('production', draft(), { expectedCurrentVersion: undefined }),
+    ).resolves.toEqual(segmentPointer(5));
+
+    expect(omitted.s3.puts).toHaveLength(2);
+    expect(undefinedField.s3.puts).toHaveLength(2);
+  });
+});

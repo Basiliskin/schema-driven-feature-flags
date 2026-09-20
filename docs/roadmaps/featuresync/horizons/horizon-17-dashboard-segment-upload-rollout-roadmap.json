@@ -1,0 +1,772 @@
+{
+  "task": "Horizon 17 of FeatureSync: fully working segment management and percentage rollout in the local dashboard (packages/dashboard).",
+  "analysis": {
+    "objective": "Give local dashboard (packages/dashboard) operators a browser flow to upload or replace a Segment's members from CSV and to set, edit or remove a rule's Rollout, with every write going through the existing S3 publishers under expected-version CAS.",
+    "successDefinition": "1) An operator can open /env/:env/segments/:key, pick a CSV in the browser and publish it as a new Segment Version via the horizon-14 CSV parser and the S3 segment publisher; a bad CSV returns 400 and a stale expected Segment Version returns 422, and in both cases nothing is written to S3. 2) An operator can set, edit or remove the Rollout (percentage 0-100, bucketBy, salt) on a flag rule from the flag page; it publishes through the existing edit-feature path with expectedCurrentVersion, parseSnapshot validates it, a same-feature stale edit returns 422 CONFLICT and a different-feature edit auto-replays. 3) The flag page shows each rule's Rollout and referenced Segment keys. 4) Every new POST route passes the existing Host/Origin guard, and no page or error message renders a Segment member identifier. 5) pnpm verify stays green with 100% coverage. (Segment list page with member count/createdAt, structured segment-condition editing and the LocalStack/Playwright end-to-end proof are deferred to the next horizon.)",
+    "assumptions": [
+      "The segment and rollout domain model, the murmur3 bucketing, the CSV parser, the S3 segment publisher and the segment pointer already exist from horizons 13-15. This horizon adds dashboard use cases, routes and forms, not new core semantics.",
+      "The dashboard finds Segments from the keys referenced by the current Snapshot, plus any key the operator types in to create a new Segment, because ListObjects is forbidden (decision, horizon 10). A Segment that no flag references can therefore only be reached by typing its key.",
+      "The dashboard shows the Segment Version on the pointer, which is what SDKs converge to. The open blocker ('which segment version an SDK uses') is answered as 'current pointer version, no per-SDK telemetry'. That answer is recorded as a decision, not assumed silently.",
+      "Segments hold PII (decision, horizon 15). The UI shows counts and metadata only. Uploads are accepted as CSV text or a multipart file on the 127.0.0.1 server, capped at the documented maximum member count.",
+      "The existing server-rendered node:http UI with hand-written HTML stays in place (decision, horizon 10). No framework is added.",
+      "A segment upload sends no Change Notification. SDKs pick it up by polling (decision, horizon 13)."
+    ],
+    "risks": [
+      "The binding no-ListObjects rule means Segments that no flag references cannot be listed. The UX may feel incomplete, and the fix is not to add IAM for ListObjects.",
+      "The open blocker about which Segment Version an SDK is actually using may be expected to show real per-SDK usage. That is not possible without telemetry, so a planner who silently assumes it away would mislead operators.",
+      "Showing members, or echoing a CSV error that contains an identifier, could leak PII into HTML pages or logs.",
+      "Large CSV uploads (up to 100k members) through node:http may hit body-size or memory limits, and the upload needs a request size cap.",
+      "Hand-written HTML at 100% branch coverage gets harder as forms grow (open blocker, horizon 10).",
+      "The race found in horizon 16 (concurrent replay can still produce 200+422) also affects rollout edits. Segment uploads have their own CAS on the segment pointer, which must not be confused with the snapshot CAS.",
+      "Operators may not realise that removing a segment reference from a Rollout or condition does not delete the Segment."
+    ],
+    "outOfScope": [
+      "Measuring segment memory and latency at scale (100k members) — the user deliberately chose this horizon over that work.",
+      "A dashboard view of environments or history beyond the existing 1..current browsing — the user deliberately chose this horizon over it.",
+      "Open-source release readiness (docs, packaging, publishing) — the user deliberately chose this horizon over it.",
+      "Listing every Segment in the bucket or deleting Segments — this needs ListObjects or delete IAM, which decisions forbid.",
+      "Showing which Segment Version each running SDK actually uses — this needs SDK telemetry that does not exist. The dashboard shows the pointer version only.",
+      "Viewing, searching or editing individual members in the browser — Segments hold PII. Only a whole-CSV replace is in scope.",
+      "Rolling back a Segment to an earlier version — not requested. Uploading the old CSV again gives the same result.",
+      "Changes to core evaluation, the hash algorithm or the snapshot/segment S3 contract — these are settled in horizons 13-15.",
+      "Sending a Change Notification on segment upload — the notification contract is snapshot-only by decision.",
+      "Multi-user auth, CSRF tokens or remote hosting of the dashboard — it stays a local 127.0.0.1 tool with the Host/Origin guard.",
+      "Fixing the concurrent-replay 200+422 race from horizon 16 — that is separate conflict-handling work, unless a rollout test exposes it."
+    ],
+    "domainShape": "business",
+    "domainShapeReason": "The objective is about operators managing domain concepts through their rules: Segments and their versions, flag targeting and Rollout, and publishes guarded by optimistic concurrency. It is not a UI-styling task.",
+    "ubiquitousLanguage": [
+      {
+        "term": "Segment",
+        "meaning": "A named, environment-scoped set of member identifiers that flags reference by key only."
+      },
+      {
+        "term": "Segment Version",
+        "meaning": "An immutable uploaded membership of a Segment, made current by that Segment's own current.json pointer."
+      },
+      {
+        "term": "Segment Upload",
+        "meaning": "Replacing a Segment's members with a parsed CSV, published as a new Segment Version under expected-version CAS."
+      },
+      {
+        "term": "Rollout",
+        "meaning": "A flag's sticky percentage exposure, computed as murmur3 hash bucketing of flagKey:salt:bucketBy value mod 10000."
+      },
+      {
+        "term": "Flag Edit",
+        "meaning": "A dashboard change to one flag, applied to the raw stored Snapshot and published as a new version with expectedCurrentVersion."
+      },
+      {
+        "term": "Snapshot",
+        "meaning": "The immutable versioned set of flag definitions for an environment, which references Segments by key."
+      },
+      {
+        "term": "Current Pointer",
+        "meaning": "The current.json object that names the live Snapshot version or Segment Version, and is read without ListObjects."
+      },
+      {
+        "term": "Conflict",
+        "meaning": "A write that is rejected because its base version is stale for the same feature or Segment (HTTP 422)."
+      }
+    ]
+  },
+  "discoveryFindings": [
+    {
+      "area": "dashboard routing",
+      "finding": "http-server.ts (456 lines) hand-routes split paths: /env/:env/{current-version,changes,merge,merge/apply,publish,rollback,features,features/:key,versions/:v} plus stylesheet and client-script routes; paths are capped at 4 segments; each route declares GET or POST; method mismatch returns 405 with Allow.",
+      "filePath": "packages/dashboard/src/infrastructure/http-server.ts",
+      "implication": "New /env/:env/segments and /env/:env/segments/:key (+ upload POST) fit the 3-4 segment scheme; a 5-segment path would need the length guard widened. The file is large, so segment routes may deserve a separate route module."
+    },
+    {
+      "area": "dashboard security guard",
+      "finding": "Every POST is checked with isSameOrigin (Origin required and matching); every request passes isAllowedHost(host, port), 403 otherwise. Both run centrally before handlers.",
+      "filePath": "packages/dashboard/src/infrastructure/http-server.ts",
+      "implication": "New POST routes get the guard for free via the same route table; tests should still assert 403 for them."
+    },
+    {
+      "area": "POST body handling",
+      "finding": "readForm reads the body with MAX_BODY_BYTES = 1 MiB (413 above) and parses only as URLSearchParams (form-urlencoded). No multipart parsing exists.",
+      "filePath": "packages/dashboard/src/infrastructure/http-server.ts",
+      "implication": "Browser CSV upload needs a decision: minimal multipart parser, client-side FileReader into a urlencoded field, or raw text/csv body. 100k members x 256 chars does not fit 1 MiB, so the upload route needs its own larger limit."
+    },
+    {
+      "area": "dashboard ports / composition root",
+      "finding": "aws-adapters.ts injects only createS3CurrentPointerReader, createS3SnapshotFetcher and createS3SnapshotPublisher into DashboardPorts {readCurrentVersion, fetchSnapshotText, openWriter}. Nothing segment-related is injected.",
+      "filePath": "packages/dashboard/src/infrastructure/aws-adapters.ts",
+      "implication": "DashboardPorts must gain segment ports (read segment pointer/metadata, publish segment); aws-adapters.test.ts and http-server test fakes must be extended."
+    },
+    {
+      "area": "aws segment publisher API",
+      "finding": "createS3SegmentPublisher({bucket, client?}).publish(env, {key, memberAttribute, members}) returns Promise<SegmentPointer>. It reads the current pointer+ETag internally, writes the version with IfNoneMatch:* (VERSION_EXISTS) and the pointer with IfMatch etag or IfNoneMatch:* (CONFLICT). There is NO caller-supplied expectedVersion. Reasons: INVALID_ENVIRONMENT, INVALID_SEGMENT_KEY, INVALID_SEGMENT, INVALID_POINTER, VERSION_EXISTS, CONFLICT, REQUEST_FAILED.",
+      "filePath": "packages/aws/src/infrastructure/s3-segment-publisher.ts",
+      "implication": "'Stale expected version returns 4xx and writes nothing' is unsupported today; plan an aws phase adding optional expectedCurrentVersion to segment publish that fails with CONFLICT before any PUT. Map each reason to an HTTP status/message."
+    },
+    {
+      "area": "segment pointer read / metadata",
+      "finding": "SegmentPointer is {schemaVersion, environment, segmentKey, version, objectKey} with no memberCount or createdAt. The publisher's readPointer is private; index.ts exports only the SegmentPointer type, not parseSegmentPointer or segmentPointerKeyFor.",
+      "filePath": "packages/aws/src/domain/segment-pointer.ts",
+      "implication": "Showing count/createdAt without ListObjects needs a public segment pointer reader plus a fetch of the version object (count members; LastModified or createdAt), or a contract change. Plan an aws phase; fetching 100k-member objects to count is costly."
+    },
+    {
+      "area": "CSV parser",
+      "finding": "parseSegmentCsv(text, {key, version, memberAttribute}) returns Result<Segment, SegmentCsvError> with reasons EMPTY_FILE, MALFORMED_ROW, HEADER, TOO_MANY_MEMBERS, INVALID_SEGMENT; pure and exported from @featuresync/aws.",
+      "filePath": "packages/aws/src/domain/segment-csv.ts",
+      "implication": "Reuse directly in the dashboard upload use case and map reasons to 400/422; no new parser."
+    },
+    {
+      "area": "CLI segment upload (reuse template)",
+      "finding": "CLI segment upload: readFile -> parseSegmentCsv (placeholder version, memberAttribute default DEFAULT_MEMBER_ATTRIBUTE) -> createSegmentPublisher({bucket}).publish(env, {key, memberAttribute, members}), prints the pointer, maps S3SegmentPublishError reasons to messages.",
+      "filePath": "packages/cli/src/main.ts",
+      "implication": "Dashboard upload use case can follow this sequence; keep error wording consistent with the CLI."
+    },
+    {
+      "area": "core rollout/segment schema",
+      "finding": "rule.ts: booleanRule/configRule = {when: Condition, rollout?: {percentage 0-100 max 2 decimals, bucketBy, salt}, enabled|value}; a condition can use the inSegment operator. snapshot.ts exports parseSnapshot and referencedSegmentKeys. segment-contract.ts exports MAX_SEGMENT_MEMBERS=100_000, MAX_SEGMENT_MEMBER_LENGTH=256, SEGMENT_KEY_PATTERN, parseSegment.",
+      "filePath": "packages/core/src/domain/rule.ts",
+      "implication": "Rollout is per rule, not per flag: the 'set a flag's Rollout' UX must target a rule (e.g. a catch-all when:{} rule). referencedSegmentKeys can drive the segment list with no new core code."
+    },
+    {
+      "area": "existing flag edits",
+      "finding": "FlagEdit union kinds: enabled, default, create, delete, setRules (rulesJson). feature-edit-form.ts already renders a collapsible 'Edit rules' raw-JSON textarea validated via parseSnapshot, so rollout and inSegment can already be edited as raw JSON.",
+      "filePath": "packages/dashboard/src/domain/flag-edit.ts",
+      "implication": "Add structured edit kinds (set/remove rollout on a rule index, segment condition) on top of applyFlagEdit, reusing the same replay/CAS path, not a new publisher path."
+    },
+    {
+      "area": "edit-feature CAS/replay",
+      "finding": "edit-feature publishes with expected base version; on conflict replayOnLatest re-reads latest, re-applies the FlagEdit via applyFlagEdit and publishes expecting latest.version; a same-feature change fails with CONFLICT (422).",
+      "filePath": "packages/dashboard/src/application/edit-feature.ts",
+      "implication": "New rollout/segment-condition edit kinds get stale-edit handling for free once added to FlagEdit and applyFlagEdit; no new use case needed."
+    },
+    {
+      "area": "segments/rollout display",
+      "finding": "Dashboard source has no segment or rollout display; e2e and integration tests have no segment/rollout coverage.",
+      "filePath": "packages/dashboard/src/infrastructure/views/environment-page.ts",
+      "implication": "Segments page, rollout badges and referenced-segment lists are greenfield view modules."
+    },
+    {
+      "area": "HTML/CSS organisation & coverage blocker",
+      "finding": "Views are small TS template modules (environment-page 175 lines, feature-edit-form 67, merge-dialog 91, layout 50, new-flag-form 41). CSS lives in views/styles/*.css (~830 lines total) served as one stylesheet route; client JS in views/scripts/app.js (298 lines). Root vitest.config.ts enforces 100% coverage on packages/*/src/**/*.ts; .css/.js are not included.",
+      "filePath": "vitest.config.ts",
+      "implication": "The 100%-branch blocker is manageable if each new view is a small module with its own test; logic in app.js (e.g. FileReader upload) is not unit-covered and needs Playwright e2e."
+    },
+    {
+      "area": "test layout",
+      "finding": "Unit tests in dashboard/test/{domain,application} and colocated in src/infrastructure (http-server.test.ts 1186 lines, feature-edit-form.test.ts, dialogs.test.ts). LocalStack integration in dashboard/integration/dashboard.localstack.test.ts (vitest.integration.config.ts, coverage off). Playwright e2e in dashboard/e2e (flag-list.spec.ts, concurrent-edits.spec.ts, support/fixtures.ts).",
+      "filePath": "packages/dashboard/integration/dashboard.localstack.test.ts",
+      "implication": "Phases can name concrete test files: unit tests in test/, a LocalStack case for segment upload + pointer CAS, a Playwright spec for browser upload and rollout edit."
+    }
+  ],
+  "requiredMaterials": [],
+  "phases": [
+    {
+      "id": "rollout-flag-edit-kinds",
+      "order": 0,
+      "name": "Add rollout Flag Edit kinds",
+      "goal": "Let a Flag Edit set, change or remove the Rollout (percentage, bucketBy, salt) on one rule of a flag, chosen by its rule index, without editing raw rules JSON.",
+      "rationale": "A Rollout belongs to a rule, not to the whole flag. The dashboard can already change rules as raw JSON, but operators need a structured edit. Adding new kinds to the existing FlagEdit union means edit-feature's expected-version check and replay-on-latest cover rollout edits with no new publish path.",
+      "filesAffected": [
+        "packages/dashboard/src/domain/flag-edit.ts",
+        "packages/dashboard/test/domain/flag-edit.test.ts"
+      ],
+      "changes": [
+        "Add FlagEdit kinds 'setRollout' {featureKey, ruleIndex, percentage, bucketBy, salt} and 'removeRollout' {featureKey, ruleIndex}",
+        "Handle them in applyFlagEdit on the raw stored Snapshot, and reject a rule index that is out of range or a percentage outside 0-100 (at most 2 decimals) with the existing edit error type",
+        "Run the edited Snapshot through parseSnapshot (schemaVersion 2) exactly as setRules does",
+        "Unit-test every branch, including replay onto a Snapshot where a different feature changed"
+      ],
+      "boundedContext": "Flag Editing (dashboard)",
+      "layer": "domain",
+      "blastRadius": "small",
+      "inputs": [
+        "packages/dashboard/src/domain/flag-edit.ts",
+        "packages/core/src/domain/rule.ts"
+      ],
+      "expectedResult": "flag-edit.ts accepts setRollout and removeRollout edits, with 100% covered unit tests in test/domain/flag-edit.test.ts",
+      "dependsOn": [],
+      "rubric": [
+        {
+          "id": "rollout-edit-semantics",
+          "label": "setRollout/removeRollout touch exactly one rule",
+          "ruleStatement": "applyFlagEdit applies setRollout and removeRollout only to the rule at ruleIndex of the named feature and leaves all other rules and features byte-for-byte unchanged.",
+          "passCriteria": [
+            "In test/domain/flag-edit.test.ts, a setRollout test asserts that the target rule's rollout equals {percentage, bucketBy, salt} and that the rule's conditions and value are unchanged",
+            "A test on a flag with two or more rules asserts that the sibling rules are deep-equal to the originals",
+            "A removeRollout test asserts that the rollout key is gone from the target rule, not set to null or {}",
+            "A test asserts that removeRollout on a rule without a rollout is either a no-op or a typed error, and the behaviour is documented by the test name"
+          ],
+          "failureExamples": [
+            "setRollout replaces the whole rules array with one rule",
+            "removeRollout leaves `rollout: undefined`, so the rule serializes differently and parseSnapshot rejects it",
+            "Plausible: the edit mutates the input snapshot object in place, so replay tests pass but the caller's cached snapshot is corrupted"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "rollout-input-validation",
+          "label": "Out-of-range index and percentage rejected with existing error type",
+          "ruleStatement": "An out-of-range ruleIndex, and a percentage below 0, above 100 or with more than 2 decimals, are rejected with the existing FlagEdit error type, and the snapshot passes through parseSnapshot as setRules does.",
+          "passCriteria": [
+            "Tests cover ruleIndex -1, ruleIndex equal to rules.length, and a non-integer index, and each returns the existing edit error type (not a thrown generic Error)",
+            "Tests cover percentage -0.01, 100.01 and 12.345 as rejected, and 0, 100 and 12.34 as accepted",
+            "The edited snapshot goes through the same parseSnapshot call as the setRules branch (grep flag-edit.ts)",
+            "A test checks that an unknown featureKey returns the same error as the other kinds"
+          ],
+          "failureExamples": [
+            "Plausible: the 2-decimal check uses `percentage * 100 % 1 === 0`, which rejects valid values such as 0.29 because of floating-point error",
+            "A bad index throws TypeError from `rules[i].rollout`",
+            "The branch skips parseSnapshot, so an empty bucketBy is accepted"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "rollout-domain-purity-and-replay",
+          "label": "Stays pure domain and replays on a newer snapshot",
+          "ruleStatement": "flag-edit.ts keeps no infrastructure imports, and a rollout edit replayed onto a snapshot where a different feature changed keeps that other change.",
+          "passCriteria": [
+            "flag-edit.ts imports only domain modules or @featuresync/core, with no aws, http, or views imports",
+            "A replay test applies setRollout to snapshot B (a different feature was edited after A) and asserts that both changes are present",
+            "Coverage for flag-edit.ts is 100% lines and branches"
+          ],
+          "failureExamples": [
+            "Plausible: the edit is computed on the old snapshot and the whole feature map is written back, so the other feature's change is lost",
+            "Imports a percentage helper from the infrastructure views"
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "Most likely failure is float-unsafe 2-decimal validation or in-place mutation; validate with Math.round(p*100)===p*100 within an epsilon (or a string regex) and structuredClone the snapshot before editing."
+    },
+    {
+      "id": "rollout-form-and-display",
+      "order": 1,
+      "name": "Add rollout form to flag page",
+      "goal": "Show each rule's Rollout and the Segments its conditions reference on the flag page, and let an operator set, edit or remove a rule's Rollout through a form POST.",
+      "rationale": "Operators need to see and change a Rollout in the browser. The POST uses the existing edit-feature use case, so a stale edit to the same feature returns 422 CONFLICT and an edit to a different feature replays automatically.",
+      "filesAffected": [
+        "packages/dashboard/src/infrastructure/views/rollout-form.ts",
+        "packages/dashboard/src/infrastructure/views/feature-edit-form.ts",
+        "packages/dashboard/src/infrastructure/http-server.ts",
+        "packages/dashboard/src/infrastructure/views/styles/rollout.css"
+      ],
+      "changes": [
+        "Add a small rollout-form.ts view: for each rule, show a badge with the percentage, bucketBy and referenced Segment keys, plus a form with the fields percentage, bucketBy, salt and a remove button",
+        "Map the form fields to setRollout or removeRollout in the existing features/:key POST handler, which already goes through the Host/Origin guard",
+        "Put the new styles in a new styles/rollout.css file and add it to the stylesheet route",
+        "Test rendering and the POST mapping, including a 403 test for a POST without Origin and a 422 test for a stale edit"
+      ],
+      "boundedContext": "Flag Editing (dashboard)",
+      "layer": "interface",
+      "blastRadius": "medium",
+      "inputs": [
+        "packages/dashboard/src/application/edit-feature.ts",
+        "packages/dashboard/src/infrastructure/views/feature-edit-form.ts"
+      ],
+      "expectedResult": "The flag page shows each rule's Rollout and referenced Segments and saves rollout changes, covered by a rollout-form test file at 100% coverage",
+      "dependsOn": [
+        "rollout-flag-edit-kinds"
+      ],
+      "rubric": [
+        {
+          "id": "rollout-display-per-rule",
+          "label": "Per-rule rollout badge and segment keys",
+          "ruleStatement": "The flag page renders, for each rule, its rollout percentage, bucketBy and the Segment keys its conditions reference, and shows only Segment keys, never members.",
+          "passCriteria": [
+            "The rollout-form test renders a flag with one rule that has a rollout and one rule without, and asserts that the badge text (for example '25% by userId') appears only for the first",
+            "The test asserts that Segment keys taken from inSegment conditions appear in the output",
+            "All interpolated values are HTML-escaped: a test with a salt or key containing <script> finds the escaped text in the output",
+            "The page is served with rollout.css linked, and GET of the stylesheet route returns the new rules"
+          ],
+          "failureExamples": [
+            "Plausible: the badge is rendered once per flag instead of once per rule",
+            "Segment keys are collected only from top-level conditions and miss nested ones",
+            "The salt is interpolated without escaping"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "rollout-post-mapping",
+          "label": "Form maps to setRollout/removeRollout via edit-feature",
+          "ruleStatement": "The features/:key POST turns the rollout fields into setRollout, or into removeRollout when remove is pressed, with the correct ruleIndex, and goes only through the edit-feature use case.",
+          "passCriteria": [
+            "A test POSTs percentage=30&bucketBy=userId&salt=s&ruleIndex=1 and asserts that the published snapshot's rule 1 has that rollout",
+            "A test POSTs the remove button and asserts that the rollout is gone",
+            "A bad percentage returns a 400 page that shows the edit error, and nothing is published",
+            "http-server.ts does not import the S3 publisher for this path; it calls editFeature"
+          ],
+          "failureExamples": [
+            "Plausible: percentage is passed as the string '30', so parseSnapshot fails with a 500 instead of a 400",
+            "ruleIndex is taken from button order and is off by one",
+            "The handler publishes directly and skips the CAS"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "rollout-security-and-conflict",
+          "label": "Guard 403 and stale 422",
+          "ruleStatement": "A rollout POST without a valid Origin/Host is rejected with 403 before any use-case call, and a stale expected version for the same feature returns 422.",
+          "passCriteria": [
+            "A test with no Origin header gets 403 and the fake publisher records zero calls",
+            "A test with a stale expected version for the same feature gets 422 and a conflict page",
+            "A test where a different feature changed succeeds (replay)"
+          ],
+          "failureExamples": [
+            "Plausible: rollout is added as a new route that is not in the guarded route table",
+            "A conflict is mapped to 500"
+          ],
+          "minScore": 9
+        }
+      ],
+      "healerHint": "Likely a string percentage or an unguarded new route; coerce with Number() and validate, and keep the rollout submit on the existing guarded features/:key POST."
+    },
+    {
+      "id": "segment-publisher-expected-version",
+      "order": 2,
+      "name": "Add expected version check to segment publisher",
+      "goal": "Let a caller pass an optional expectedCurrentVersion to createS3SegmentPublisher().publish, so that a stale Segment Upload fails with CONFLICT before any object is written.",
+      "rationale": "Today the segment publisher reads the Current Pointer itself and only protects against a race while it is running. A dashboard operator who uploads from an old page must get an error and nothing must be written. This adds an optional input and does not change the S3 layout.",
+      "filesAffected": [
+        "packages/aws/src/infrastructure/s3-segment-publisher.ts",
+        "packages/aws/test/infrastructure/s3-segment-publisher.test.ts"
+      ],
+      "changes": [
+        "Add an optional expectedCurrentVersion (number or null for 'no Segment yet') to the publish input",
+        "After reading the pointer and before the version PUT, compare it with the pointer's version and throw S3SegmentPublishError CONFLICT when they differ",
+        "Leave the behaviour unchanged when the field is not passed, so the CLI keeps working",
+        "Test the match, mismatch and 'no pointer' cases and assert that no PutObject is sent on mismatch"
+      ],
+      "boundedContext": "Segment Publishing (@featuresync/aws)",
+      "layer": "infrastructure",
+      "blastRadius": "small",
+      "inputs": [
+        "packages/aws/src/infrastructure/s3-segment-publisher.ts",
+        "packages/aws/src/domain/segment-pointer.ts"
+      ],
+      "expectedResult": "s3-segment-publisher.ts rejects a stale expectedCurrentVersion with CONFLICT and no writes, proven by its unit tests",
+      "dependsOn": [],
+      "compensation": "The field is optional, so reverting the commit restores the previous publisher behaviour; no stored S3 data changes.",
+      "rubric": [
+        {
+          "id": "cas-before-write",
+          "label": "Mismatch throws CONFLICT before any PutObject",
+          "ruleStatement": "When expectedCurrentVersion differs from the pointer's version, publish throws S3SegmentPublishError with code CONFLICT and sends no PutObject.",
+          "passCriteria": [
+            "In s3-segment-publisher.test.ts, the mismatch test asserts that the error is an instance of S3SegmentPublishError with code 'CONFLICT'",
+            "The same test asserts that the mocked client received zero PutObjectCommand calls (only a GetObject)",
+            "The comparison in the source sits between the pointer read and the first PutObject"
+          ],
+          "failureExamples": [
+            "Plausible: the check runs after the version object PUT and before the pointer PUT, so an orphan version object is left in S3",
+            "Throws a generic Error('conflict')"
+          ],
+          "minScore": 9
+        },
+        {
+          "id": "null-and-match-semantics",
+          "label": "null means no Segment; match proceeds",
+          "ruleStatement": "expectedCurrentVersion null matches only a missing pointer, a number matches only an equal pointer version, and a match publishes normally.",
+          "passCriteria": [
+            "Tests: null with no pointer publishes; null with an existing pointer gives CONFLICT; a number with no pointer gives CONFLICT; an equal number publishes version+1",
+            "Absent (undefined) and null are handled differently in the code (for example `!== undefined`, not a falsy check)"
+          ],
+          "failureExamples": [
+            "Plausible: `if (input.expectedCurrentVersion && ...)` treats both 0 and null as not passed, so the check is skipped"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "backward-compat",
+          "label": "Omitted field keeps old behaviour",
+          "ruleStatement": "Callers that omit the field (the CLI) behave exactly as before, and the S3 key layout is unchanged.",
+          "passCriteria": [
+            "The existing publisher tests pass without being edited",
+            "A test without the field publishes even when the pointer exists",
+            "The CLI package typechecks unchanged"
+          ],
+          "failureExamples": [
+            "The field is made required, so the CLI build breaks"
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "Most likely a falsy check that conflates null, 0 and undefined; compare with `!== undefined` and `(pointer?.version ?? null) !== expected`."
+    },
+    {
+      "id": "segment-pointer-version-reader",
+      "order": 3,
+      "name": "Export segment pointer version reader",
+      "goal": "Export a createS3SegmentVersionReader from @featuresync/aws whose readVersion(env, key) returns the current Segment pointer version, or null when no Segment exists yet.",
+      "rationale": "The upload page must carry the current Segment Version as expectedCurrentVersion, but the segment publisher's readPointer is private and index.ts exports neither parseSegmentPointer nor segmentPointerKeyFor. A version-only reader reads just the small Current Pointer object, so no member counts or version objects are fetched and the S3 layout does not change.",
+      "filesAffected": [
+        "packages/aws/src/infrastructure/s3-segment-version-reader.ts",
+        "packages/aws/src/index.ts",
+        "packages/aws/test/infrastructure/s3-segment-version-reader.test.ts"
+      ],
+      "changes": [
+        "Add s3-segment-version-reader.ts that GETs the key from segmentPointerKeyFor(env, key), parses it with parseSegmentPointer and returns pointer.version",
+        "Return null on NoSuchKey; throw S3SegmentPublishError REQUEST_FAILED (or the existing snapshot error type) on other failures and on an unparsable pointer",
+        "Export createS3SegmentVersionReader and its options type from packages/aws/src/index.ts",
+        "Unit-test present pointer, missing pointer, malformed pointer and S3 failure with a mocked client"
+      ],
+      "boundedContext": "Segment Publishing (@featuresync/aws)",
+      "layer": "infrastructure",
+      "blastRadius": "small",
+      "inputs": [
+        "packages/aws/src/infrastructure/s3-segment-publisher.ts",
+        "packages/aws/src/domain/segment-pointer.ts",
+        "packages/aws/src/index.ts"
+      ],
+      "expectedResult": "An exported createS3SegmentVersionReader returning the pointer version or null, proven by its unit tests",
+      "dependsOn": [],
+      "compensation": "Purely additive export; reverting the commit removes it and no stored S3 data changes.",
+      "rubric": [
+        {
+          "id": "version-only-read",
+          "label": "Reads only the Current Pointer",
+          "ruleStatement": "readVersion sends exactly one GetObject for the pointer key and never reads a version object or members.",
+          "passCriteria": [
+            "A test asserts the mocked client received one GetObjectCommand whose Key equals segmentPointerKeyFor(env, key)",
+            "The return type is number | null, with no member count or createdAt"
+          ],
+          "failureExamples": [
+            "Plausible: it follows the pointer and fetches the version object to also return a member count"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "missing-is-null",
+          "label": "Missing pointer returns null",
+          "ruleStatement": "A NoSuchKey response returns null; any other S3 error or a malformed pointer throws a coded error.",
+          "passCriteria": [
+            "Tests cover NoSuchKey -> null, AccessDenied -> throws with a code field, malformed JSON -> throws",
+            "null is returned, not 0 or undefined"
+          ],
+          "failureExamples": [
+            "Plausible: every error is caught and returns null, so an S3 outage makes the page claim a new Segment and the first upload conflicts"
+          ],
+          "minScore": 9
+        },
+        {
+          "id": "shared-pointer-parsing",
+          "label": "Reuses domain pointer parsing",
+          "ruleStatement": "The reader uses parseSegmentPointer and segmentPointerKeyFor from the domain module rather than duplicating key building or parsing.",
+          "passCriteria": [
+            "The reader imports both from ../domain/segment-pointer.js",
+            "No string template builds the pointer key inside the reader"
+          ],
+          "failureExamples": [
+            "Plausible: the key is rebuilt as `${env}/segments/${key}/current.json`, drifting from the publisher's layout"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "public-export",
+          "label": "Exported from the package entry",
+          "ruleStatement": "createS3SegmentVersionReader is exported from packages/aws/src/index.ts and the existing exports are unchanged.",
+          "passCriteria": [
+            "index.ts has the new export line",
+            "Existing aws tests pass unedited and the dashboard can import it from '@featuresync/aws'"
+          ],
+          "failureExamples": [
+            "Plausible: the dashboard imports it by a deep path into packages/aws/src/infrastructure because index.ts was not updated"
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "Most likely a catch-all that turns every error into null, or a hand-built pointer key; narrow null to NoSuchKey and reuse segmentPointerKeyFor/parseSegmentPointer."
+    },
+    {
+      "id": "upload-segment-use-case",
+      "order": 4,
+      "name": "Add Segment Upload use case",
+      "goal": "Add an upload-segment use case that parses CSV text with parseSegmentCsv and publishes it through a new publishSegment port with the expected Segment Version, returning a typed result for each failure reason; declare a readSegmentVersion port the page uses to fill the expected version.",
+      "rationale": "The dashboard needs one place that turns a CSV and an expected version into a new Segment Version, following the CLI's existing steps. A bad CSV must return an error without calling the publisher, so nothing is written. Error messages report the reason and row number only, never a member identifier, because Segments hold personal data.",
+      "filesAffected": [
+        "packages/dashboard/src/application/upload-segment.ts",
+        "packages/dashboard/src/application/ports.ts",
+        "packages/dashboard/test/application/upload-segment.test.ts"
+      ],
+      "changes": [
+        "Add a publishSegment port to DashboardPorts: (env, {key, memberAttribute, members, expectedCurrentVersion}) => Promise<SegmentPointer>",
+        "Add a readSegmentVersion port to DashboardPorts: (env, key) => Promise<number | null> (version only, no member count)",
+        "Implement uploadSegment: parseSegmentCsv, then publishSegment; return a Result with reasons EMPTY_FILE, MALFORMED_ROW, HEADER, TOO_MANY_MEMBERS, INVALID_SEGMENT, CONFLICT, VERSION_EXISTS or REQUEST_FAILED",
+        "Use the same error wording as the CLI in packages/cli/src/main.ts, without echoing member values",
+        "Unit-test with a fake port, including that the port is never called for an invalid CSV"
+      ],
+      "boundedContext": "Segment Management (dashboard)",
+      "layer": "application",
+      "blastRadius": "small",
+      "inputs": [
+        "packages/aws/src/domain/segment-csv.ts",
+        "packages/cli/src/main.ts",
+        "packages/dashboard/src/application/ports.ts"
+      ],
+      "expectedResult": "upload-segment.ts with publishSegment and readSegmentVersion ports and 100% covered unit tests",
+      "dependsOn": [],
+      "rubric": [
+        {
+          "id": "no-publish-on-invalid",
+          "label": "Invalid CSV never calls the port",
+          "ruleStatement": "Every CSV parse failure returns a typed failure and the publishSegment port is never called.",
+          "passCriteria": [
+            "upload-segment.test.ts has one case each for EMPTY_FILE, HEADER, MALFORMED_ROW, TOO_MANY_MEMBERS and INVALID_SEGMENT, each asserting that the fake port call count is 0",
+            "Each case asserts the specific reason value, not only ok:false"
+          ],
+          "failureExamples": [
+            "Plausible: INVALID_SEGMENT (for example a bad key) is detected only by the publisher, so the port is called first"
+          ],
+          "minScore": 9
+        },
+        {
+          "id": "typed-publish-failures",
+          "label": "Publisher errors mapped to reasons",
+          "ruleStatement": "CONFLICT, VERSION_EXISTS and other publisher failures map to the CONFLICT, VERSION_EXISTS and REQUEST_FAILED results, and expectedCurrentVersion is passed through unchanged.",
+          "passCriteria": [
+            "A test asserts that the fake port received expectedCurrentVersion (including null) exactly as given",
+            "Tests where the port throws each error code check the mapped reason; an unknown error maps to REQUEST_FAILED",
+            "A success returns the SegmentPointer"
+          ],
+          "failureExamples": [
+            "Plausible: every thrown error is mapped to REQUEST_FAILED, so the route cannot return 422"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "pii-free-messages",
+          "label": "No member identifiers in results",
+          "ruleStatement": "Failure messages contain the reason and row number only, never a member value.",
+          "passCriteria": [
+            "A test with a malformed row containing 'alice@example.com' asserts that the serialized result does not contain that string but does contain the row number",
+            "Wording matches the CLI messages in packages/cli/src/main.ts"
+          ],
+          "failureExamples": [
+            "Plausible: the parser's error message, which quotes the row, is passed through as is"
+          ],
+          "minScore": 9
+        },
+        {
+          "id": "application-layer-boundary",
+          "label": "Port-only dependency",
+          "ruleStatement": "upload-segment.ts depends on the ports and domain parsing only, never on the S3 client or the infrastructure.",
+          "passCriteria": [
+            "Its imports are limited to ./ports and domain/parse modules (segment-csv, the pointer type); there is no @aws-sdk and no infrastructure path",
+            "publishSegment and readSegmentVersion are declared in ports.ts; readSegmentVersion returns Promise<number | null>"
+          ],
+          "failureExamples": [
+            "It imports createS3SegmentPublisher or the error class from the infrastructure to use instanceof",
+            "Plausible: readSegmentVersion is typed to return the whole SegmentPointer, pulling the aws domain type into the page contract"
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "The likely failure is leaking the parser message (with member values) or using instanceof on an infrastructure error class; build messages from reason and row only, and match on an error `code` field."
+    },
+    {
+      "id": "connect-segment-publisher-port",
+      "order": 5,
+      "name": "Connect segment publisher to dashboard ports",
+      "goal": "Wire createS3SegmentPublisher and createS3SegmentVersionReader into the dashboard's AWS adapters so the publishSegment port writes real Segment Versions and the readSegmentVersion port reads the current pointer version.",
+      "rationale": "The dashboard's composition file only creates snapshot adapters today. The Segment Upload use case needs a real S3 implementation of its port before a route can use it.",
+      "filesAffected": [
+        "packages/dashboard/src/infrastructure/aws-adapters.ts",
+        "packages/dashboard/src/infrastructure/aws-adapters.test.ts"
+      ],
+      "changes": [
+        "Create the segment publisher with the same bucket and client as the snapshot publisher",
+        "Map the publishSegment port to publisher.publish, passing expectedCurrentVersion through",
+        "Map the readSegmentVersion port to createS3SegmentVersionReader(...).readVersion with the same client and bucket",
+        "Extend aws-adapters.test.ts to cover both new ports"
+      ],
+      "boundedContext": "Segment Management (dashboard)",
+      "layer": "infrastructure",
+      "blastRadius": "small",
+      "inputs": [
+        "packages/dashboard/src/infrastructure/aws-adapters.ts",
+        "packages/aws/src/infrastructure/s3-segment-publisher.ts",
+        "packages/aws/src/index.ts"
+      ],
+      "expectedResult": "aws-adapters.ts provides working publishSegment and readSegmentVersion ports, covered by aws-adapters.test.ts",
+      "dependsOn": [
+        "segment-publisher-expected-version",
+        "segment-pointer-version-reader",
+        "upload-segment-use-case"
+      ],
+      "rubric": [
+        {
+          "id": "shared-bucket-client",
+          "label": "Same bucket and client",
+          "ruleStatement": "The segment publisher is built with the same S3 client and bucket as the snapshot publisher, and no second client is created.",
+          "passCriteria": [
+            "In aws-adapters.ts, createS3SegmentPublisher receives the same client and bucket variables that createS3SnapshotPublisher gets",
+            "A test asserts the bucket in the captured PutObject Input"
+          ],
+          "failureExamples": [
+            "Plausible: a new S3Client() is created without the configured endpoint or region, so a LocalStack setup writes to real AWS"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "port-pass-through",
+          "label": "Port forwards all fields including expected version",
+          "ruleStatement": "publishSegment passes env, key, memberAttribute, members and expectedCurrentVersion to publish and returns its pointer.",
+          "passCriteria": [
+            "An aws-adapters.test.ts case with a mocked client and an existing pointer, and a stale expectedCurrentVersion, rejects with a CONFLICT-coded error and records no PutObject",
+            "A matching case resolves to a pointer with version+1"
+          ],
+          "failureExamples": [
+            "Plausible: expectedCurrentVersion is dropped in the mapping, so stale uploads succeed"
+          ],
+          "minScore": 9
+        },
+        {
+          "id": "version-port-wiring",
+          "label": "readSegmentVersion uses the exported reader",
+          "ruleStatement": "readSegmentVersion is implemented via createS3SegmentVersionReader imported from '@featuresync/aws' and returns null for a missing pointer.",
+          "passCriteria": [
+            "An aws-adapters.test.ts case with a mocked pointer returns its version; a NoSuchKey case returns null",
+            "The import is from '@featuresync/aws', not a deep path"
+          ],
+          "failureExamples": [
+            "Plausible: the adapter reads the pointer itself with a hand-built key and GetObject instead of using the exported reader"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "composition-only",
+          "label": "Wiring stays in the composition file",
+          "ruleStatement": "The only change is wiring; no upload logic or CSV parsing is added to aws-adapters.ts.",
+          "passCriteria": [
+            "aws-adapters.ts does not import parseSegmentCsv or parse pointer JSON itself",
+            "The diff touches only aws-adapters.ts and its test"
+          ],
+          "failureExamples": [
+            "It re-validates members or maps errors to HTTP codes inside the adapter"
+          ],
+          "minScore": 7
+        }
+      ],
+      "healerHint": "Most likely expectedCurrentVersion is dropped or a fresh S3 client is created; spread the port input straight into publish and reuse the existing client."
+    },
+    {
+      "id": "segment-upload-route-and-form",
+      "order": 6,
+      "name": "Add Segment Upload page and route",
+      "goal": "Add GET and POST /env/:env/segments/:key, with a page that shows the Segment key and a CSV upload form carrying a hidden expected version, and map each upload error to a clear 4xx page.",
+      "rationale": "This is the browser entry point for Segment Upload. The transport is the simplest choice: a few lines in app.js read the chosen file with FileReader into a urlencoded 'csv' field, and only this route raises its body cap to 32 MiB (100k members x 256 characters, URL-encoded). The 1 MiB default stays for every other route, and no multipart parser is added.",
+      "filesAffected": [
+        "packages/dashboard/src/infrastructure/segment-routes.ts",
+        "packages/dashboard/src/infrastructure/http-server.ts",
+        "packages/dashboard/src/infrastructure/views/segment-page.ts",
+        "packages/dashboard/src/infrastructure/views/styles/segments.css"
+      ],
+      "changes": [
+        "Put the segment routes in a new segment-routes.ts module and register them in the existing route table, so the Host/Origin guard applies",
+        "GET calls the readSegmentVersion port and renders its value (empty for null) in the hidden expectedCurrentVersion field",
+        "Give readForm a per-route byte limit and use 32 MiB for the upload POST only, still returning 413 above the limit",
+        "Map invalid-CSV reasons to 400, CONFLICT to 422 and REQUEST_FAILED to 502; never render member identifiers",
+        "Add the FileReader handler to views/scripts/app.js and the styles to a new styles/segments.css",
+        "Test 403 (guard), 413, 400, 422 and success"
+      ],
+      "boundedContext": "Segment Management (dashboard)",
+      "layer": "interface",
+      "blastRadius": "medium",
+      "inputs": [
+        "packages/dashboard/src/infrastructure/http-server.ts",
+        "packages/dashboard/src/application/upload-segment.ts"
+      ],
+      "expectedResult": "A working /env/:env/segments/:key upload page and POST route, covered at 100% by a segment-routes test file",
+      "dependsOn": [
+        "upload-segment-use-case",
+        "connect-segment-publisher-port"
+      ],
+      "rubric": [
+        {
+          "id": "guarded-route",
+          "label": "Host/Origin guard on upload POST",
+          "ruleStatement": "POST /env/:env/segments/:key is registered in the guarded route table, and a request with a bad or missing Origin gets 403 with no use-case call.",
+          "passCriteria": [
+            "A segment-routes test POSTs without Origin, gets 403, and the fake publishSegment records 0 calls",
+            "The routes are registered through the existing route table in http-server.ts"
+          ],
+          "failureExamples": [
+            "Plausible: the route is matched before the guard runs, because the body-limit special case short-circuits routing"
+          ],
+          "minScore": 9
+        },
+        {
+          "id": "per-route-body-cap",
+          "label": "32 MiB only on the upload route",
+          "ruleStatement": "readForm takes a per-route limit, the upload POST allows 32 MiB and returns 413 above it, and every other route keeps 1 MiB.",
+          "passCriteria": [
+            "A test sends more than 32 MiB to the upload route and gets 413 with 0 port calls",
+            "A test sends about 2 MiB to features/:key and gets 413",
+            "A body just under 32 MiB is accepted"
+          ],
+          "failureExamples": [
+            "Plausible: the global default is raised to 32 MiB"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "status-mapping-no-pii",
+          "label": "Error codes mapped and no members rendered",
+          "ruleStatement": "Invalid-CSV reasons return 400, CONFLICT returns 422, REQUEST_FAILED returns 502, success shows the new version, and no response contains a member identifier.",
+          "passCriteria": [
+            "Tests assert 400 for MALFORMED_ROW, 422 for CONFLICT and 502 for REQUEST_FAILED",
+            "A test uploads a CSV with 'bob@x.io' on a bad row and asserts that no response body (error or success) contains that string",
+            "A rejected upload has zero PutObject calls or port calls"
+          ],
+          "failureExamples": [
+            "Plausible: the success page echoes the first few members as a preview",
+            "VERSION_EXISTS falls through to 500"
+          ],
+          "minScore": 9
+        },
+        {
+          "id": "page-and-transport",
+          "label": "Page carries expected version; FileReader posts csv",
+          "ruleStatement": "GET renders the Segment key and a hidden expectedCurrentVersion taken from the readSegmentVersion port (empty for null), and app.js sends the file as a urlencoded csv field.",
+          "passCriteria": [
+            "The GET test, with a fake readSegmentVersion returning 7, finds <input type=hidden name=expectedCurrentVersion value=7>; with null it finds an empty value",
+            "The POST parses an empty value as null, not 0",
+            "app.js has a FileReader handler that fills the csv field; segments.css is served by the stylesheet route",
+            "The segment key is HTML-escaped"
+          ],
+          "failureExamples": [
+            "Plausible: an empty hidden field is parsed with Number('') to 0, so the first upload always conflicts"
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "The most likely miss is the empty-string expected version turning into 0 or a global body-limit raise; parse '' as null explicitly and pass the limit as a readForm argument only from the upload handler."
+    }
+  ],
+  "successCriteria": [
+    "1) An operator can open /env/:env/segments/:key, pick a CSV in the browser and publish it as a new Segment Version via the horizon-14 CSV parser and the S3 segment publisher; a bad CSV returns 400 and a stale expected Segment Version returns 422, and in both cases nothing is written to S3. 2) An operator can set, edit or remove the Rollout (percentage 0-100, bucketBy, salt) on a flag rule from the flag page; it publishes through the existing edit-feature path with expectedCurrentVersion, parseSnapshot validates it, a same-feature stale edit returns 422 CONFLICT and a different-feature edit auto-replays. 3) The flag page shows each rule's Rollout and referenced Segment keys. 4) Every new POST route passes the existing Host/Origin guard, and no page or error message renders a Segment member identifier. 5) pnpm verify stays green with 100% coverage. (Segment list page with member count/createdAt, structured segment-condition editing and the LocalStack/Playwright end-to-end proof are deferred to the next horizon.)",
+    "Add rollout Flag Edit kinds: flag-edit.ts accepts setRollout and removeRollout edits, with 100% covered unit tests in test/domain/flag-edit.test.ts",
+    "Add rollout form to flag page: The flag page shows each rule's Rollout and referenced Segments and saves rollout changes, covered by a rollout-form test file at 100% coverage",
+    "Add expected version check to segment publisher: s3-segment-publisher.ts rejects a stale expectedCurrentVersion with CONFLICT and no writes, proven by its unit tests",
+    "Export segment pointer version reader: An exported createS3SegmentVersionReader returning the pointer version or null, proven by its unit tests",
+    "Add Segment Upload use case: upload-segment.ts with publishSegment and readSegmentVersion ports and 100% covered unit tests",
+    "Connect segment publisher to dashboard ports: aws-adapters.ts provides working publishSegment and readSegmentVersion ports, covered by aws-adapters.test.ts",
+    "Add Segment Upload page and route: A working /env/:env/segments/:key upload page and POST route, covered at 100% by a segment-routes test file"
+  ],
+  "deferred": [
+    "Measuring segment memory and latency at scale (100k members) — the user deliberately chose this horizon over that work.",
+    "A dashboard view of environments or history beyond the existing 1..current browsing — the user deliberately chose this horizon over it.",
+    "Open-source release readiness (docs, packaging, publishing) — the user deliberately chose this horizon over it.",
+    "Listing every Segment in the bucket or deleting Segments — this needs ListObjects or delete IAM, which decisions forbid.",
+    "Showing which Segment Version each running SDK actually uses — this needs SDK telemetry that does not exist. The dashboard shows the pointer version only.",
+    "Viewing, searching or editing individual members in the browser — Segments hold PII. Only a whole-CSV replace is in scope.",
+    "Rolling back a Segment to an earlier version — not requested. Uploading the old CSV again gives the same result.",
+    "Changes to core evaluation, the hash algorithm or the snapshot/segment S3 contract — these are settled in horizons 13-15.",
+    "Sending a Change Notification on segment upload — the notification contract is snapshot-only by decision.",
+    "Multi-user auth, CSRF tokens or remote hosting of the dashboard — it stays a local 127.0.0.1 tool with the Host/Origin guard.",
+    "Fixing the concurrent-replay 200+422 race from horizon 16 — that is separate conflict-handling work, unless a rollout test exposes it.",
+    "Segment list page and Segment metadata beyond the version (member count, createdAt, referencing flags via referencedSegmentKeys): deferred — the pointer holds no count/createdAt; needs fetching large version objects or an S3 contract change, which needs its own decision. (The version-only pointer reader is in this horizon.)",
+    "Structured segment-condition (inSegment) Flag Edit kinds: deferred — the raw 'Edit rules' JSON textarea already supports them.",
+    "LocalStack integration test and Playwright e2e (upload a segment, edit a rollout, SDK S3 source picks up both): deferred until the Segment list page exists.",
+    "Multipart form parsing: rejected — FileReader-to-urlencoded with a per-route cap is simpler.",
+    "Per-SDK Segment Version telemetry, listing or deleting Segments, member viewing: out of scope — decisions forbid ListObjects/delete and Segments hold personal data."
+  ],
+  "revision": 0
+}

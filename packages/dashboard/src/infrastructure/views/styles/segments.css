@@ -1,0 +1,12 @@
+.segment-upload h2 {
+  margin-top: 0;
+}
+
+.segment-upload input[type='file'] {
+  display: block;
+  margin-top: 0.25rem;
+}
+
+.segment-upload .actions {
+  margin-top: 0.75rem;
+}

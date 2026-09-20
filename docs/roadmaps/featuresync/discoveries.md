@@ -1,21 +1,46 @@
 # Discoveries
 
 
-- horizon 1 discoveries landed — see archive/discoveries-landed.md and horizon-01-local-first-core-runtime-roadmap.md
-- horizon 2 discoveries landed — see archive/discoveries-landed.md and horizon-02-aws-snapshot-distribution-roadmap.md
-- horizon 3 discoveries landed — see archive/discoveries-landed.md and horizon-03-s3-change-polling-localstack-ci-roadmap.md
-- horizon 4 discoveries landed — see archive/discoveries-landed.md and horizon-04-snapshot-publisher-cli-roadmap.md
-- horizon 5 discoveries landed — see archive/discoveries-landed.md and horizon-05-nestjs-module-flag-decorators-roadmap.md
-- horizon 6 discoveries landed — see archive/discoveries-landed.md and horizon-06-cli-pull-pinned-snapshots-roadmap.md
-- horizon 7 discoveries landed — see archive/discoveries-landed.md and horizon-07-sns-sqs-push-notifications-roadmap.md
-- horizon 8 discoveries landed — see archive/discoveries-landed.md and horizon-08-sns-sqs-push-detection-wiring-roadmap.md
-- horizon 9 discoveries landed — see archive/discoveries-landed.md and horizon-09-aws-deployment-stack-roadmap.md
-- horizon 10 discoveries landed — see archive/discoveries-landed.md and horizon-10-local-dashboard-first-slice-roadmap.md
-- horizon 11 discoveries landed — see archive/discoveries-landed.md and horizon-11-in-browser-flag-editing-roadmap.md
-- horizon 13 discoveries landed — see archive/discoveries-landed.md and horizon-13-segments-rollout-roadmap.md
-- horizon 14 discoveries landed — see archive/discoveries-landed.md and horizon-14-segment-upload-s3-publisher-roadmap.md
-- horizon 15 discoveries landed — see archive/discoveries-landed.md and horizon-15-s3-source-segment-loading-roadmap.md
-- 2026-09-19 | horizon 16 | edit conflict | LocalStack 200-vs-422 failure is replayOnLatest (c0c62ee) replaying different-feature edits, not horizon 12 [packages/dashboard/src/application/edit-feature.ts] → fix tests, not publisher
-- 2026-09-19 | horizon 16 | same-origin guard | Host header never validated; GET routes answer any Host, so a DNS-rebound page can read HTML [packages/dashboard/src/infrastructure/http-server.ts] → add Host allowlist on all methods
-- 2026-09-19 | horizon 16 | concurrent replay | Racing different-feature edits can still yield 200+422: the loser may read current.json before the winner writes it, replay on v1 and lose CAS again [packages/dashboard/src/application/edit-feature.ts] → concurrent tests assert invariants, not "both applied"
-- 2026-09-20 | horizon 16 | flaky test | core file-snapshot-source "pushes a bundle when watching" failed once on timing (1009ms) and passed on rerun [packages/core/test/infrastructure/file-snapshot-source.test.ts]
+- [landed] horizon 1 discoveries landed — see archive/discoveries-landed.md and horizon-01-local-first-core-runtime-roadmap.md
+- [landed] horizon 2 discoveries landed — see archive/discoveries-landed.md and horizon-02-aws-snapshot-distribution-roadmap.md
+- [landed] horizon 3 discoveries landed — see archive/discoveries-landed.md and horizon-03-s3-change-polling-localstack-ci-roadmap.md
+- [landed] horizon 4 discoveries landed — see archive/discoveries-landed.md and horizon-04-snapshot-publisher-cli-roadmap.md
+- [landed] horizon 5 discoveries landed — see archive/discoveries-landed.md and horizon-05-nestjs-module-flag-decorators-roadmap.md
+- [landed] horizon 6 discoveries landed — see archive/discoveries-landed.md and horizon-06-cli-pull-pinned-snapshots-roadmap.md
+- [landed] horizon 7 discoveries landed — see archive/discoveries-landed.md and horizon-07-sns-sqs-push-notifications-roadmap.md
+- [landed] horizon 8 discoveries landed — see archive/discoveries-landed.md and horizon-08-sns-sqs-push-detection-wiring-roadmap.md
+- [landed] horizon 9 discoveries landed — see archive/discoveries-landed.md and horizon-09-aws-deployment-stack-roadmap.md
+- [landed] horizon 10 discoveries landed — see archive/discoveries-landed.md and horizon-10-local-dashboard-first-slice-roadmap.md
+- [landed] horizon 11 discoveries landed — see archive/discoveries-landed.md and horizon-11-in-browser-flag-editing-roadmap.md
+- [landed] horizon 13 discoveries landed — see archive/discoveries-landed.md and horizon-13-segments-rollout-roadmap.md
+- [landed] horizon 14 discoveries landed — see archive/discoveries-landed.md and horizon-14-segment-upload-s3-publisher-roadmap.md
+- [landed] horizon 15 discoveries landed — see archive/discoveries-landed.md and horizon-15-s3-source-segment-loading-roadmap.md
+- [landed] 2026-09-19 | horizon 16 | edit conflict | LocalStack 200-vs-422 failure is replayOnLatest (c0c62ee) replaying different-feature edits, not horizon 12 [packages/dashboard/src/application/edit-feature.ts] → fix tests, not publisher
+- [landed] 2026-09-19 | horizon 16 | same-origin guard | Host header never validated; GET routes answer any Host, so a DNS-rebound page can read HTML [packages/dashboard/src/infrastructure/http-server.ts] → add Host allowlist on all methods
+- [landed] 2026-09-19 | horizon 16 | concurrent replay | Racing different-feature edits can still yield 200+422: the loser may read current.json before the winner writes it, replay on v1 and lose CAS again — see horizon-16 roadmap.md
+- [landed] 2026-09-20 | horizon 16 | flaky test | core file-snapshot-source "pushes a bundle when watching" failed once on timing (1009ms) and passed on rerun [packages/core/test/infrastructure/file-snapshot-source.test.ts]
+
+- 2026-09-20 | horizon 17 | dashboard routing | http-server.ts (456 lines) hand-routes split paths: /env/:env/{current-version,changes,merge,merge/apply,publish,rollback,features,features/:key,versions/:v} plus — see horizon-17 roadmap.md
+- 2026-09-20 | horizon 17 | dashboard security guard | Every POST is checked with isSameOrigin (Origin required and matching); every request passes isAllowedHost(host, port), 403 otherwise. Both run centrally before handlers.
+- 2026-09-20 | horizon 17 | POST body handling | readForm reads the body with MAX_BODY_BYTES = 1 MiB (413 above) and parses only as URLSearchParams (form-urlencoded). No multipart parsing exists.
+- 2026-09-20 | horizon 17 | dashboard ports / composition root | aws-adapters.ts injects only createS3CurrentPointerReader, createS3SnapshotFetcher and createS3SnapshotPublisher into DashboardPorts — see horizon-17 roadmap.md
+- 2026-09-20 | horizon 17 | aws segment publisher API | createS3SegmentPublisher({bucket, client?}).publish(env, {key, memberAttribute, members}) returns Promise<SegmentPointer>. It reads the current — see horizon-17 roadmap.md
+- 2026-09-20 | horizon 17 | segment pointer read / metadata | SegmentPointer is {schemaVersion, environment, segmentKey, version, objectKey} with no memberCount or createdAt. The publisher's readPointer is — see horizon-17 roadmap.md
+- 2026-09-20 | horizon 17 | CSV parser | parseSegmentCsv(text, {key, version, memberAttribute}) returns Result<Segment, SegmentCsvError> with reasons EMPTY_FILE, MALFORMED_ROW, HEADER, TOO_MANY_MEMBERS, — see horizon-17 roadmap.md
+- 2026-09-20 | horizon 17 | CLI segment upload (reuse template) | CLI segment upload: readFile -> parseSegmentCsv (placeholder version, memberAttribute default DEFAULT_MEMBER_ATTRIBUTE) -> — see horizon-17 roadmap.md
+- 2026-09-20 | horizon 17 | core rollout/segment schema | rule.ts: booleanRule/configRule = {when: Condition, rollout?: {percentage 0-100 max 2 decimals, bucketBy, salt}, enabled|value}; a condition can use the — see horizon-17 roadmap.md
+- 2026-09-20 | horizon 17 | existing flag edits | FlagEdit union kinds: enabled, default, create, delete, setRules (rulesJson). feature-edit-form.ts already renders a collapsible 'Edit rules' raw-JSON textarea — see horizon-17 roadmap.md
+- 2026-09-20 | horizon 17 | edit-feature CAS/replay | edit-feature publishes with expected base version; on conflict replayOnLatest re-reads latest, re-applies the FlagEdit via applyFlagEdit and publishes — see horizon-17 roadmap.md
+- 2026-09-20 | horizon 17 | segments/rollout display | Dashboard source has no segment or rollout display; e2e and integration tests have no segment/rollout coverage.
+- 2026-09-20 | horizon 17 | HTML/CSS organisation & coverage blocker | Views are small TS template modules (environment-page 175 lines, feature-edit-form 67, merge-dialog 91, layout 50, new-flag-form 41). CSS — see horizon-17 roadmap.md
+- 2026-09-20 | horizon 17 | test layout | Unit tests in dashboard/test/{domain,application} and colocated in src/infrastructure (http-server.test.ts 1186 lines, feature-edit-form.test.ts, dialogs.test.ts). — see horizon-17 roadmap.md
+- 2026-09-20 | horizon 17 | rollout needs schemaVersion 2 | parseSnapshot rejects any rule rollout on a schemaVersion 1 snapshot ("Segment conditions and rollouts need schemaVersion 2"); setRollout on a v1 — see horizon-17 roadmap.md
+- 2026-09-20 | horizon 17 | FlagEdit field naming | Every FlagEdit kind identifies its flag as `key`, not `featureKey` (editFeatures and canReplayEdit read edit.key); the rollout kinds follow that — see horizon-17 roadmap.md
+- 2026-09-20 | horizon 17 | exhaustive edit switches | edit-feature.ts has two exhaustive switches over FlagEdit/FlagEditFailure (describeEdit, editFailure), so every new edit kind or failure kind forces an — see horizon-17 roadmap.md
+- 2026-09-20 | horizon 17 | 400 vs 422 on writes | Every dashboard write failure was 422; WriteOutcome.failure now carries optional invalidInput, set for INVALID_PERCENTAGE/INVALID_RULE_INDEX, which writeStatus — see horizon-17 roadmap.md
+- 2026-09-20 | horizon 17 | replay vs same-feature conflict | canReplayEdit compares only the fields an edit touches, so a rollout edit replays over a changed `enabled`; only a rules change on the same flag yields 422.
+- 2026-09-20 | horizon 17 | segment publish CAS | createS3SegmentPublisher().publish takes optional 3rd arg {expectedCurrentVersion?: number|null|undefined}; `|undefined` required by exactOptionalPropertyTypes — see horizon-17 roadmap.md
+- 2026-09-20 | horizon 17 | segment version read | createS3SegmentVersionReader(bucket).readVersion(env,key) is exported from @featuresync/aws: number | null, null only on a missing pointer; other failures throw S3SegmentPublishError.
+- 2026-09-20 | horizon 17 | dashboard ports convention | No application/ports.ts; each use case declares its own Ports interface (BrowsePorts, WritePorts, SegmentUploadPorts) and http-server.ts composes DashboardPorts = EditFeaturePorts.
+- 2026-09-20 | horizon 17 | dashboard ports | DashboardPorts is still EditFeaturePorts, so createAwsDashboardPorts returns DashboardPorts & SegmentUploadPorts [dashboard/src/infrastructure/aws-adapters.ts] → route phase must widen it
+- 2026-09-20 | horizon 17 | dashboard http layer | Route/HttpError/send/readForm moved to infrastructure/http-primitives.ts so segment-routes.ts reuses them without a cycle; readForm takes a per-route byte limit → reuse for new routes

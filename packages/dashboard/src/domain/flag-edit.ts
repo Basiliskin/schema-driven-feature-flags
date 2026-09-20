@@ -13,7 +13,16 @@ export type FlagEdit =
       readonly defaultJson?: string;
     }
   | { readonly kind: 'delete'; readonly key: string }
-  | { readonly kind: 'setRules'; readonly key: string; readonly rulesJson: string };
+  | { readonly kind: 'setRules'; readonly key: string; readonly rulesJson: string }
+  | {
+      readonly kind: 'setRollout';
+      readonly key: string;
+      readonly ruleIndex: number;
+      readonly percentage: number;
+      readonly bucketBy: string;
+      readonly salt: string;
+    }
+  | { readonly kind: 'removeRollout'; readonly key: string; readonly ruleIndex: number };
 
 /** Authorship for the edited snapshot. The publisher stamps `version`, `previousVersion` and `createdAt`. */
 export interface FlagEditMeta {
@@ -28,6 +37,8 @@ export type FlagEditFailure =
   | { readonly kind: 'INVALID_RULES_JSON'; readonly message: string }
   | { readonly kind: 'FEATURE_EXISTS'; readonly key: string }
   | { readonly kind: 'INVALID_KEY'; readonly key: string }
+  | { readonly kind: 'INVALID_RULE_INDEX'; readonly key: string; readonly ruleIndex: number }
+  | { readonly kind: 'INVALID_PERCENTAGE'; readonly percentage: number }
   | { readonly kind: 'INVALID_SNAPSHOT'; readonly issues: readonly string[] };
 
 type JsonObject = Record<string, unknown>;
@@ -93,9 +104,52 @@ function editFeature(
     const rules = parseJson(edit.rulesJson, 'INVALID_RULES_JSON');
     return rules.ok ? { ok: true, value: { ...feature, rules: rules.value } } : rules;
   }
+  if (edit.kind === 'setRollout' || edit.kind === 'removeRollout') return editRollout(feature, edit);
   if (feature.type === 'boolean') return { ok: false, error: { kind: 'DEFAULT_NOT_EDITABLE', key: edit.key } };
   const defaultValue = parseJson(edit.defaultJson, 'INVALID_DEFAULT_JSON');
   return defaultValue.ok ? { ok: true, value: { ...feature, default: defaultValue.value } } : defaultValue;
+}
+
+/** Mirrors the core rollout schema's two-decimal rule without the float error of `p * 100 % 1`. */
+const hasAtMostTwoDecimals = (percentage: number): boolean =>
+  Math.abs(percentage * 100 - Math.round(percentage * 100)) < 1e-9;
+
+function editRollout(
+  feature: JsonObject,
+  edit: Extract<FlagEdit, { kind: 'setRollout' | 'removeRollout' }>,
+): Result<JsonObject, FlagEditFailure> {
+  if (edit.kind === 'setRollout') {
+    const { percentage } = edit;
+    if (!Number.isFinite(percentage) || percentage < 0 || percentage > 100 || !hasAtMostTwoDecimals(percentage)) {
+      return { ok: false, error: { kind: 'INVALID_PERCENTAGE', percentage } };
+    }
+  }
+
+  const rules = feature.rules;
+  if (
+    !Array.isArray(rules) ||
+    !Number.isInteger(edit.ruleIndex) ||
+    edit.ruleIndex < 0 ||
+    edit.ruleIndex >= rules.length
+  ) {
+    return { ok: false, error: { kind: 'INVALID_RULE_INDEX', key: edit.key, ruleIndex: edit.ruleIndex } };
+  }
+  const rule: unknown = rules[edit.ruleIndex];
+  if (!isObject(rule)) {
+    return { ok: false, error: { kind: 'INVALID_RULE_INDEX', key: edit.key, ruleIndex: edit.ruleIndex } };
+  }
+
+  let nextRule: JsonObject;
+  if (edit.kind === 'removeRollout') {
+    nextRule = Object.fromEntries(Object.entries(rule).filter(([field]) => field !== 'rollout'));
+  } else {
+    const { percentage, bucketBy, salt } = edit;
+    nextRule = { ...rule, rollout: { percentage, bucketBy, salt } };
+  }
+
+  const nextRules = [...(rules as unknown[])];
+  nextRules[edit.ruleIndex] = nextRule;
+  return { ok: true, value: { ...feature, rules: nextRules } };
 }
 
 function parseJson(
@@ -120,6 +174,8 @@ const touchedFields = (edit: Exclude<FlagEdit, { kind: 'create' }>): readonly st
     case 'default':
       return ['type', 'default'];
     case 'setRules':
+    case 'setRollout':
+    case 'removeRollout':
       return ['rules'];
     case 'delete':
       return 'all';

@@ -1,0 +1,34 @@
+.rollouts > summary {
+  cursor: pointer;
+}
+
+.rollout-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.rule-rollout {
+  border-top: 1px solid var(--border);
+  padding: 0.5rem 0;
+}
+
+.rule-head {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.rule-label {
+  font-weight: 600;
+}
+
+.badge-rollout {
+  background: var(--surface-muted);
+}
+
+.rule-segments {
+  color: var(--text-muted);
+  margin: 0.25rem 0 0;
+}

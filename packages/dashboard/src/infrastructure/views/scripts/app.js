@@ -46,6 +46,23 @@
     });
   });
 
+  // The CSV never becomes a multipart upload: it is read here and submitted as an ordinary form field.
+  document.querySelectorAll('[data-segment-upload]').forEach(function (form) {
+    var file = form.querySelector('[data-segment-file]');
+    var csv = form.querySelector('[name="csv"]');
+    if (!file || !csv || typeof FileReader !== 'function') return;
+    form.addEventListener('submit', function (event) {
+      if (csv.value !== '' || !file.files || file.files.length === 0) return;
+      event.preventDefault();
+      var reader = new FileReader();
+      reader.addEventListener('load', function () {
+        csv.value = String(reader.result);
+        form.submit();
+      });
+      reader.readAsText(file.files[0]);
+    });
+  });
+
   // ---- Update checks and merge ----
   var watch = document.querySelector('[data-watch-version]');
   if (!watch || !window.fetch) return;

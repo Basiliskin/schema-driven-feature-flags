@@ -45,9 +45,19 @@ export interface S3SegmentPublisherOptions {
   readonly client?: Pick<S3Client, 'send'>;
 }
 
+/** Options for {@link S3SegmentPublisher.publish}. */
+export interface SegmentPublishOptions {
+  /**
+   * The Segment Version the caller built this upload on, or `null` for "this segment does not exist yet".
+   * When the Segment Pointer is at anything else, publish throws `CONFLICT` before writing anything.
+   * Omit it, or pass `undefined`, to publish onto whatever is current.
+   */
+  readonly expectedCurrentVersion?: number | null | undefined;
+}
+
 export interface S3SegmentPublisher {
   /** Writes the segment as its next version and makes it current. Resolves to the new Segment Pointer. */
-  publish(environment: string, segment: SegmentDraft): Promise<SegmentPointer>;
+  publish(environment: string, segment: SegmentDraft, options?: SegmentPublishOptions): Promise<SegmentPointer>;
 }
 
 interface ReadPointer {
@@ -120,10 +130,31 @@ export function createS3SegmentPublisher(options: S3SegmentPublisherOptions): S3
     }
   };
 
-  const publish = async (environment: string, segment: SegmentDraft): Promise<SegmentPointer> => {
+  // `undefined` means the caller did not ask for a check; `null` asserts the segment does not exist yet.
+  const checkExpectedVersion = (
+    env: string,
+    segmentKey: string,
+    current: ReadPointer | undefined,
+    expected: number | null | undefined,
+  ): void => {
+    if (expected === undefined || expected === (current?.pointer.version ?? null)) return;
+    const found = current === undefined ? 'none' : String(current.pointer.version);
+    throw new S3SegmentPublishError(
+      'CONFLICT',
+      segmentPointerKeyFor(env, segmentKey),
+      new Error(`Expected current version ${expected === null ? 'none' : String(expected)}, found ${found}`),
+    );
+  };
+
+  const publish = async (
+    environment: string,
+    segment: SegmentDraft,
+    publishOptions?: SegmentPublishOptions,
+  ): Promise<SegmentPointer> => {
     const env = valid(validateEnvironmentName(environment), environment);
     const segmentKey = valid(validateSegmentKey(segment.key), `${env}/segments`);
     const current = await readPointer(env, segmentKey);
+    checkExpectedVersion(env, segmentKey, current, publishOptions?.expectedCurrentVersion);
     const pointer = valid(buildSegmentPointer(env, segmentKey, nextSegmentVersion(current?.pointer)), env);
     const stored = parseSegment({
       schemaVersion: SEGMENT_SCHEMA_VERSION,

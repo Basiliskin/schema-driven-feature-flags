@@ -18,6 +18,8 @@ export type WriteOutcome =
       readonly kind: 'failure';
       readonly message: string;
       readonly issues: readonly string[];
+      /** Set when the request itself was malformed, so the page answers 400 rather than the 422 a stale edit gets. */
+      readonly invalidInput?: boolean;
       /** Set when another writer published first; `since` is the version the rejected edit was made against. */
       readonly conflict?: { readonly since: number };
     };

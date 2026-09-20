@@ -21,7 +21,7 @@
 - 2026-09-19 | horizon 10 | Do operators need in-browser flag editing, or is pasted/uploaded JSON enough?
 - 2026-09-19 | horizon 13 | Is a segment pointer change detected only by polling each referenced segment current.json, or does a segment upload also send a Change Notification? — resolved by decision 2026-09-19
 - 2026-09-19 | horizon 13 | When a snapshot starts referencing a new segment key, does the S3 source hold the swap until that segment loads, or emit and rely on the missing-segment fail-safe? — resolved by decision 2026-09-19
-- 2026-09-19 | horizon 13 | How does the dashboard show which segment version an SDK uses without ListObjects?
+- 2026-09-19 | horizon 13 | How does the dashboard show which segment version an SDK uses without ListObjects? — resolved by decision 2026-09-20
 - 2026-09-19 | horizon 13 | Real memory/load cost of a segment at the documented maximum member count in a Node SDK.
 - 2026-09-19 | horizon 15 | Does a 100,000-member Segment Version fit the Node SDK's memory and poll-latency budget when N segments reload in one tick?
 - 2026-09-19 | horizon 15 | How should a poll tick be ordered when the snapshot pointer and several segment pointers move together, so one bundle is emitted rather than several stale ones?
@@ -29,3 +29,9 @@
 - 2026-09-19 | horizon 15 | Should a push-triggered snapshot re-read also re-check segment pointers?
 - 2026-09-19 | horizon 15 | After a segment fails to load, is it retried every tick or only when its pointer ETag changes?
 - 2026-09-19 | horizon 14 | dashboard LocalStack edit-conflict tests (sequential + concurrent same-base edits) return 200 instead of 422; fails identically at commit c0c62ee, so pre-existing — needs its own fix.
+- 2026-09-20 | horizon 17 | Do operators need a Segment list with member count/createdAt, or are referenced keys plus the pointer version enough?
+- 2026-09-20 | horizon 17 | Does a 100k-member (~25 MiB) upload via FileReader and the 32 MiB urlencoded route fit node:http memory/latency limits?
+- 2026-09-20 | horizon 17 | Does the horizon-16 concurrent-replay 200+422 race also hit setRollout/removeRollout edits?
+- 2026-09-20 | horizon 17 | Does the app.js FileReader upload work in real browsers? Nothing tests it end to end yet.
+- 2026-09-20 | horizon 17 | Should setRollout on a schemaVersion 1 snapshot upgrade it to 2, or keep failing and force an explicit migration?
+- 2026-09-20 | horizon 17 | Should a rollout edit that only changes `enabled` on the same flag really auto-replay, or does per-rule editing need a finer conflict check?

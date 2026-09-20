@@ -19,7 +19,13 @@ export {
   type S3SegmentPublisher,
   type S3SegmentPublisherOptions,
   type SegmentDraft,
+  type SegmentPublishOptions,
 } from './infrastructure/s3-segment-publisher.js';
+export {
+  createS3SegmentVersionReader,
+  type S3SegmentVersionReader,
+  type S3SegmentVersionReaderOptions,
+} from './infrastructure/s3-segment-version-reader.js';
 export type { SegmentPointer } from './domain/segment-pointer.js';
 export {
   parseSegmentCsv,

@@ -486,6 +486,7 @@ describe('package entry point', () => {
       'S3SnapshotError',
       'createS3CurrentPointerReader',
       'createS3SegmentPublisher',
+      'createS3SegmentVersionReader',
       'createS3SnapshotFetcher',
       'createS3SnapshotPublisher',
       'createS3SnapshotSource',

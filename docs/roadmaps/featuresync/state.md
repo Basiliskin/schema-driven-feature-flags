@@ -35,3 +35,5 @@
 - 2026-09-19 | horizon 15 | completed | 4 phases (segment bundle load, Segment Pointer polling, LocalStack re-upload chain test, spec docs); 0 amendments, 0 overrides
 - 2026-09-19 | horizon 16 | planned | 2 phases (fix stale edit-conflict LocalStack tests for kept auto-replay, Host allowlist on dashboard guard); lite; gate passed after 1 blocker + 1 major healed, 0 debt
 - 2026-09-20 | horizon 16 | completed | 2 phases (edit-conflict LocalStack tests match replay; dashboard Host allowlist), 0 amendments, 0 overrides
+- 2026-09-20 | horizon 17 | planned | 7 phases (rollout Flag Edit kinds + form, segment publisher CAS, pointer version reader, upload use case, adapter wiring, upload page); gate passed after 1 blocker + 2 major healed, 3 minor debt
+- 2026-09-20 | horizon 17 | completed | 7 phases (rollout Flag Edit kinds + form, segment publisher CAS, pointer version reader, upload use case, adapter wiring, upload page/route); 3 amendments, 0 overrides

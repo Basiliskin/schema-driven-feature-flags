@@ -85,3 +85,9 @@ export const FEATURE_EXISTS_MESSAGE = (key: string): string =>
 
 export const INVALID_KEY_MESSAGE = (key: string): string =>
   `"${key}" is not a valid feature key; use letters, digits, ".", "_" or "-", starting with a letter or digit.`;
+
+export const INVALID_RULE_INDEX_MESSAGE = (key: string, ruleIndex: number): string =>
+  `"${key}" has no rule at position ${String(ruleIndex)}; reload the flag page and retry.`;
+
+export const INVALID_PERCENTAGE_MESSAGE =
+  'The rollout percentage must be between 0 and 100 with at most two decimal places.';

@@ -8,6 +8,8 @@ import {
   FEATURE_EXISTS_MESSAGE,
   INVALID_DEFAULT_JSON_MESSAGE,
   INVALID_KEY_MESSAGE,
+  INVALID_PERCENTAGE_MESSAGE,
+  INVALID_RULE_INDEX_MESSAGE,
   INVALID_RULES_JSON_MESSAGE,
   UNKNOWN_FEATURE_MESSAGE,
 } from './error-messages.js';
@@ -29,6 +31,10 @@ const describeEdit = (edit: FlagEdit): string => {
       return `Delete feature ${edit.key} via dashboard`;
     case 'setRules':
       return `Set ${edit.key}.rules via dashboard`;
+    case 'setRollout':
+      return `Set ${edit.key} rule ${String(edit.ruleIndex)} rollout to ${String(edit.percentage)}% via dashboard`;
+    case 'removeRollout':
+      return `Remove ${edit.key} rule ${String(edit.ruleIndex)} rollout via dashboard`;
   }
 };
 
@@ -69,6 +75,20 @@ const editFailure = (failure: FlagEditFailure): WriteOutcome => {
         kind: 'failure',
         message: INVALID_KEY_MESSAGE(failure.key),
         issues: [],
+      };
+    case 'INVALID_RULE_INDEX':
+      return {
+        kind: 'failure',
+        message: INVALID_RULE_INDEX_MESSAGE(failure.key, failure.ruleIndex),
+        issues: [],
+        invalidInput: true,
+      };
+    case 'INVALID_PERCENTAGE':
+      return {
+        kind: 'failure',
+        message: INVALID_PERCENTAGE_MESSAGE,
+        issues: [],
+        invalidInput: true,
       };
     case 'INVALID_SNAPSHOT':
       return {

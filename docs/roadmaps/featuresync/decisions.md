@@ -52,3 +52,7 @@
 - 2026-09-19 | horizon 12 | The publisher stamps version/previousVersion/createdAt and rejects a body whose environment differs with ENVIRONMENT_MISMATCH — because stored bodies must match their key.
 - 2026-09-19 | horizon 16 | Dashboard edits auto-replay onto the latest version when the edited feature is unchanged since base (c0c62ee); only same-feature stale edits get 422 CONFLICT — because the user chose to keep replay.
 - 2026-09-20 | horizon 16 | Every dashboard request needs Host 127.0.0.1:<port> or localhost:<port> (403 plain text otherwise), plus the matching Origin on POST; proxies are unsupported — because DNS rebinding could read GET pages.
+- 2026-09-20 | horizon 17 | The dashboard shows a Segment's Current Pointer version only; no per-SDK Segment Version telemetry — because SDKs converge on the pointer and telemetry does not exist.
+- 2026-09-20 | horizon 17 | S3 segment publish takes optional expectedCurrentVersion and throws CONFLICT before any PUT on mismatch; omitted keeps CLI behaviour — because stale browser uploads must write nothing.
+- 2026-09-20 | horizon 17 | Browser CSV upload uses FileReader into a urlencoded csv field, with a 32 MiB body cap on that route only; no multipart parser — because it is the simplest transport and other routes keep 1 MiB.
+- 2026-09-20 | horizon 17 | Rollout is edited per rule (setRollout/removeRollout FlagEdit kinds on a rule index) through the existing edit-feature CAS/replay path — because core rules own rollout.

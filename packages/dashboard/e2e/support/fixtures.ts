@@ -53,6 +53,8 @@ class InMemoryEnvironment {
           ? Promise.reject(Object.assign(new Error('missing'), { reason: 'SNAPSHOT_NOT_FOUND' }))
           : Promise.resolve(text);
       },
+      publishSegment: () => Promise.reject(new Error('Segment upload is not used in these tests.')),
+      readSegmentVersion: () => Promise.resolve(null),
       openWriter: () => ({
         publish: (_environment, snapshot, options) =>
           Promise.resolve().then(() => this.publish(snapshot as Record<string, unknown>, options?.expectedCurrentVersion)),

@@ -9,6 +9,8 @@ import {
   FETCH_ERROR_MESSAGES,
   INVALID_DEFAULT_JSON_MESSAGE,
   INVALID_KEY_MESSAGE,
+  INVALID_PERCENTAGE_MESSAGE,
+  INVALID_RULE_INDEX_MESSAGE,
   INVALID_RULES_JSON_MESSAGE,
   NOTIFY_FAILED_WARNING,
   PUBLISH_ERROR_MESSAGES,
@@ -377,7 +379,7 @@ describe('editFeature', () => {
   );
 
   describe('reports a rejected edit without publishing', () => {
-    it.each<[string, FlagEdit, string, readonly string[]]>([
+    it.each<[string, FlagEdit, string, readonly string[], boolean?]>([
       ['an unknown feature', { kind: 'enabled', key: 'nope', enabled: true }, UNKNOWN_FEATURE_MESSAGE('nope'), []],
       [
         'a default edit on a boolean feature',
@@ -398,12 +400,34 @@ describe('editFeature', () => {
         [],
       ],
       ['a delete of an unknown feature', { kind: 'delete', key: 'nope' }, UNKNOWN_FEATURE_MESSAGE('nope'), []],
-    ])('%s', async (_, edit, message, issues) => {
+      [
+        'a rollout on a rule position that does not exist',
+        { kind: 'setRollout', key: 'dark-mode', ruleIndex: 3, percentage: 50, bucketBy: 'userId', salt: 's' },
+        INVALID_RULE_INDEX_MESSAGE('dark-mode', 3),
+        [],
+        true,
+      ],
+      [
+        'a removed rollout on a rule position that does not exist',
+        { kind: 'removeRollout', key: 'dark-mode', ruleIndex: 0 },
+        INVALID_RULE_INDEX_MESSAGE('dark-mode', 0),
+        [],
+        true,
+      ],
+      [
+        'a rollout percentage outside 0-100',
+        { kind: 'setRollout', key: 'dark-mode', ruleIndex: 0, percentage: 101, bucketBy: 'userId', salt: 's' },
+        INVALID_PERCENTAGE_MESSAGE,
+        [],
+        true,
+      ],
+    ])('%s', async (_, edit, message, issues, invalidInput) => {
       const { ports, writer } = fakePorts();
 
       const outcome = await editFeature(ports, 'production', 4, edit);
 
-      expect(outcome).toEqual({ kind: 'failure', message, issues });
+      // invalidInput marks a malformed request, which the dashboard answers with 400 instead of 422.
+      expect(outcome).toEqual({ kind: 'failure', message, issues, ...(invalidInput === true ? { invalidInput } : {}) });
       expect(writer.publish).not.toHaveBeenCalled();
     });
 

@@ -5,6 +5,7 @@ import { compareWithCurrent } from '../application/compare-versions.js';
 import { applyDraftMerge, mergeDraft } from '../application/merge-draft.js';
 import type { MergeChoices, Side } from '../domain/snapshot-merge.js';
 import { editFeature, type EditFeaturePorts } from '../application/edit-feature.js';
+import type { SegmentUploadPorts } from '../application/upload-segment.js';
 import { describeFailure } from '../application/error-messages.js';
 import type { FlagEdit, FlagType } from '../domain/flag-edit.js';
 import {
@@ -24,8 +25,10 @@ import { renderMergeFragment } from './views/merge-dialog.js';
 import { CLIENT_SCRIPT, CLIENT_SCRIPT_PATH } from './views/client-script.js';
 import { STYLESHEET, STYLESHEET_PATH } from './views/stylesheet.js';
 import { renderVersionPage } from './views/version-page.js';
+import { HttpError, MAX_BODY_BYTES, decodeSegment, readForm, send, type Route } from './http-primitives.js';
+import { matchSegmentRoute } from './segment-routes.js';
 
-export type DashboardPorts = EditFeaturePorts;
+export type DashboardPorts = EditFeaturePorts & SegmentUploadPorts;
 
 export interface DashboardServerOptions {
   readonly ports: DashboardPorts;
@@ -41,34 +44,12 @@ export interface RunningDashboard {
 }
 
 export const LOOPBACK_HOST = '127.0.0.1';
-export const MAX_BODY_BYTES = 1024 * 1024;
+export { MAX_BODY_BYTES };
 
 // A DNS-rebound or proxied request reaches the loopback socket under a foreign Host, so only the dashboard's own names pass.
 export const isAllowedHost = (hostHeader: string | undefined, port: number): boolean => {
   const host = hostHeader?.toLowerCase();
   return host === `${LOOPBACK_HOST}:${String(port)}` || host === `localhost:${String(port)}`;
-};
-
-class HttpError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
-    super(message);
-  }
-}
-
-interface Route {
-  readonly method: 'GET' | 'POST';
-  readonly handle: (request: IncomingMessage, response: ServerResponse, url: URL) => Promise<void> | void;
-}
-
-const send = (response: ServerResponse, status: number, html: string): void => {
-  response.writeHead(status, {
-    'content-type': 'text/html; charset=utf-8',
-    'cache-control': 'no-store',
-  });
-  response.end(html);
 };
 
 // Pages link assets with a content-hash query, so a new release gets a new URL and the old one can be cached for good.
@@ -117,30 +98,11 @@ const redirect = (response: ServerResponse, location: string): void => {
   response.end();
 };
 
-const decodeSegment = (segment: string): string => {
-  try {
-    return decodeURIComponent(segment);
-  } catch {
-    throw new HttpError(400, 'The address contains invalid percent-encoding.');
-  }
-};
-
 const parseVersion = (value: string | null | undefined): number => {
   if (value == null || !/^[1-9]\d{0,8}$/.test(value)) {
     throw new HttpError(400, 'The version must be a positive integer.');
   }
   return Number(value);
-};
-
-const readForm = async (request: IncomingMessage): Promise<URLSearchParams> => {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of request as AsyncIterable<Buffer>) {
-    size += chunk.length;
-    if (size > MAX_BODY_BYTES) throw new HttpError(413, 'The submitted form is too large.');
-    chunks.push(chunk);
-  }
-  return new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
 };
 
 const outcomeNotices = (outcome: WriteOutcome): Notice[] => {
@@ -150,7 +112,10 @@ const outcomeNotices = (outcome: WriteOutcome): Notice[] => {
   return notices;
 };
 
-const writeStatus = (outcome: WriteOutcome): number => (outcome.kind === 'success' ? 200 : 422);
+const writeStatus = (outcome: WriteOutcome): number => {
+  if (outcome.kind === 'success') return 200;
+  return outcome.invalidInput === true ? 400 : 422;
+};
 
 const BASE_VERSION_MESSAGE = 'The edit form is out of date; reload the page and redo your edit.';
 const FIELD_MESSAGE = 'Choose whether to save the enabled flag, the default value or the rules, or to delete the flag.';
@@ -165,8 +130,24 @@ const parseBaseVersion = (fields: URLSearchParams): number | undefined => {
   return baseVersion !== null && /^[1-9]\d{0,8}$/.test(baseVersion) ? Number(baseVersion) : undefined;
 };
 
+// NaN for a missing, empty or non-numeric field, so applyFlagEdit rejects it instead of Number('') silently meaning rule 0.
+const parseNumber = (value: string | null): number => (value === null || value === '' ? Number.NaN : Number(value));
+
+const parseRuleIndex = (fields: URLSearchParams): number => parseNumber(fields.get('ruleIndex'));
+
 const parseFeatureEdit = (key: string, fields: URLSearchParams): FlagEdit | undefined => {
   switch (fields.get('field')) {
+    case 'setRollout':
+      return {
+        kind: 'setRollout',
+        key,
+        ruleIndex: parseRuleIndex(fields),
+        percentage: parseNumber(fields.get('percentage')),
+        bucketBy: fields.get('bucketBy') ?? '',
+        salt: fields.get('salt') ?? '',
+      };
+    case 'removeRollout':
+      return { kind: 'removeRollout', key, ruleIndex: parseRuleIndex(fields) };
     case 'enabled':
       return { kind: 'enabled', key, enabled: fields.has('enabled') };
     case 'default':
@@ -261,7 +242,7 @@ function createDashboardRequestHandler(
     },
   });
 
-  const match = (segments: readonly string[]): Route | undefined => {
+  const match = (segments: readonly string[], method: string | undefined): Route | undefined => {
     if (segments.length === 0) {
       return {
         method: 'GET',
@@ -380,6 +361,8 @@ function createDashboardRequestHandler(
         (fields, message, issues) => ({ editDraft: editDraftOf(key, fields, message, issues) }),
       );
     }
+    const segmentRoute = matchSegmentRoute(ports, environment, segments, method);
+    if (segmentRoute !== undefined) return segmentRoute;
     if (segments.length === 4 && segments[2] === 'versions') {
       return {
         method: 'GET',
@@ -395,7 +378,7 @@ function createDashboardRequestHandler(
   const dispatch = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     const url = new URL(String(request.url), 'http://localhost');
     const segments = url.pathname.split('/').filter((segment) => segment !== '');
-    const route = match(segments);
+    const route = match(segments, request.method);
     if (route === undefined) throw new HttpError(404, 'There is no page at this address.');
     if (route.method !== request.method) {
       response.setHeader('allow', route.method);
