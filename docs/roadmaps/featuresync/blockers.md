@@ -36,10 +36,19 @@
 - 2026-09-20 | horizon 17 | Should setRollout on a schemaVersion 1 snapshot upgrade it to 2, or keep failing and force an explicit migration?
 - 2026-09-20 | horizon 17 | Should a rollout edit that only changes `enabled` on the same flag really auto-replay, or does per-rule editing need a finer conflict check?
 - 2026-09-20 | horizon 17 | A segment publish that loses the pointer IfMatch race leaves an orphaned version object from the IfNoneMatch body put. Readers never see it, but nothing cleans it up. Lifecycle rule, or delete on CONFLICT?
-- 2026-09-20 | horizon 18 | Where should the browser+LocalStack proof run in CI — inside the existing localstack job, or a third job standing up its own LocalStack?
-- 2026-09-20 | horizon 18 | How does the Playwright process get AWS endpoint/credentials? playwright.config.ts has no .env loading; is .env or CI-supplied env right?
-- 2026-09-20 | horizon 18 | Which browser does CI use — bundled Chromium with an install step, or the locally installed Chrome channel the config defaults to?
+- 2026-09-20 | horizon 18 | Where should the browser+LocalStack proof run in CI — inside the existing localstack job, or a third job standing up its own LocalStack? — resolved by decision 2026-09-20
+- 2026-09-20 | horizon 18 | How does the Playwright process get AWS endpoint/credentials? playwright.config.ts has no .env loading; is .env or CI-supplied env right? — resolved by decision 2026-09-20
+- 2026-09-20 | horizon 18 | Which browser does CI use — bundled Chromium with an install step, or the locally installed Chrome channel the config defaults to? — resolved by decision 2026-09-20
 - 2026-09-20 | horizon 18 | Does pnpm test:e2e fail or skip when LOCALSTACK_AUTH_TOKEN is absent? The horizon-3 no-skip rule has not been extended to the browser suite.
 - 2026-09-20 | horizon 18 | Did a real browser ever exercise the FileReader path in app.js? Horizon 18 deferred the browser spec, so it stays unexercised.
 - 2026-09-20 | horizon 18 | Can a Playwright rollout edit collide with the unresolved horizon-16/17 concurrent-replay 200+422 race, and is that CI flakiness?
 - 2026-09-20 | horizon 18 | Does the horizon-18 schemaVersion 2 seed snapshot live somewhere reusable, or must the browser spec duplicate the file-local literal?
+- 2026-09-20 | horizon 19 | Does the concurrent-replay 200+422 race actually reproduce through the browser/rollout-edit surface, or only through direct concurrent HTTP replay — i.e. is it a UI-reachable defect or a test-harness artifact?
+- 2026-09-20 | horizon 19 | What is the real cause of the 200+422 outcome: does the replay path return 200 for an edit that was in fact rejected, or 422 for one that in fact applied? Nobody has characterized — see horizon-19 roadmap.md
+- 2026-09-20 | horizon 19 | How long does the localstack CI job now run with the Chromium install plus browser suite added, and does the added time or new failure surface (apt deps, download flake) make retries:0 untenable?
+- 2026-09-20 | horizon 19 | Did the browser proof actually expose defects in app.js (missing FileReader error listener, double-submit when csv is pre-populated, no size guard against the 32 MiB cap), and were they fixed or accepted?
+- 2026-09-20 | horizon 19 | Given app.js is permanently outside the coverage include glob, what is the project's standing rule for how much logic may live there before it must move into a covered .ts module?
+- 2026-09-20 | horizon 19 | Should setRollout on a schemaVersion 1 snapshot auto-upgrade to 2, fail loudly, or stay as today's parse rejection — horizon 19 sidestepped this by seeding v2.
+- 2026-09-20 | horizon 19 | At what CSV size does the FileReader + urlencoded path actually degrade (memory, latency, the 32 MiB server cap), and is the failure mode a clear error or a silent hang?
+- 2026-09-20 | horizon 19 | Are orphaned segment version objects from a lost pointer IfMatch race actually accumulating in practice, and does anything (SDK read, segment list page, cost) care?
+- 2026-09-20 | horizon 19 | Is there any remaining dashboard behaviour that exists only in browser-executed code and has neither integration nor browser coverage?

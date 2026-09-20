@@ -51,6 +51,13 @@ jobs:
           LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_AUTH_TOKEN }}
         run: docker compose -f docker/docker-compose.yml up -d --wait
       - run: pnpm test:integration
+      - name: Install Chromium for the browser proof
+        run: pnpm --filter @featuresync/dashboard exec playwright install --with-deps chromium
+      - name: Browser proof (pnpm --filter @featuresync/dashboard test:e2e)
+        env:
+          # Empty selects Playwright's bundled Chromium; the default 'chrome' channel is not installed here.
+          PLAYWRIGHT_CHANNEL: ''
+        run: pnpm --filter @featuresync/dashboard test:e2e
       - name: LocalStack logs
         if: failure()
         run: docker compose -f docker/docker-compose.yml logs localstack

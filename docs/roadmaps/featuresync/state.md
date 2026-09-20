@@ -39,3 +39,5 @@
 - 2026-09-20 | horizon 17 | completed | 7 phases (rollout Flag Edit kinds + form, segment publisher CAS, pointer version reader, upload use case, adapter wiring, upload page/route); 3 amendments, 0 overrides
 - 2026-09-20 | horizon 18 | planned | 4 phases (LocalStack segment+rollout proof, referenced segment keys on snapshot contents, segment list use case, Segment List Page); browser proof deferred to horizon 19 — see horizon-18 roadmap.md
 - 2026-09-20 | horizon 18 | completed | 4 phases (LocalStack segment+rollout proof, referenced segment keys on snapshot contents, segment list use case, Segment List Page); 1 amendment, 0 overrides
+- 2026-09-20 | horizon 19 | planned | 5 phases (shared seed snapshot fixture, Playwright AWS env + trace PII, LocalStack Playwright fixture, browser CSV upload + rollout spec, CI browser step); gate passed on — see horizon-19 roadmap.md
+- 2026-09-20 | horizon 19 | completed | 5 phases (shared seed snapshot fixture, Playwright AWS env + trace PII, LocalStack Playwright fixture, browser CSV upload + rollout spec, CI browser step); 0 amendments, 0 overrides

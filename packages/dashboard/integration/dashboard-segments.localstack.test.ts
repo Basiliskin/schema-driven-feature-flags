@@ -13,10 +13,16 @@ import { parseSegmentPointer } from '@featuresync/aws';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { RunningDashboard } from '../src/infrastructure/http-server.js';
 import { EXIT_OK, main, nodeIo } from '../src/main.js';
+import {
+  SEED_MEMBER_ATTRIBUTE,
+  SEED_SEGMENT_KEY,
+  seedPointerFor,
+  seedSnapshotFor,
+} from '../test/support/seed-snapshot.js';
 
 const ENVIRONMENT = 'integration';
-const SEGMENT_KEY = 'beta';
-const MEMBER_ATTRIBUTE = 'userId';
+const SEGMENT_KEY = SEED_SEGMENT_KEY;
+const MEMBER_ATTRIBUTE = SEED_MEMBER_ATTRIBUTE;
 // Synthetic ids only: a failure dump of this test is printed in CI.
 const CSV = `${MEMBER_ATTRIBUTE}\nuser-1\nuser-2\nuser-3\n`;
 const MEMBER_COUNT = 3;
@@ -28,31 +34,8 @@ if (process.env.AWS_ENDPOINT_URL_S3 === undefined) {
 
 const s3 = new S3Client({});
 
-// The first schemaVersion 2 snapshot in the repository: a Percentage Rollout is rejected on schemaVersion 1.
-const seedSnapshot = {
-  schemaVersion: 2,
-  environment: ENVIRONMENT,
-  version: 1,
-  createdAt: '2026-09-20T06:00:00.000Z',
-  createdBy: 'integration',
-  previousVersion: null,
-  reason: 'seed',
-  features: {
-    checkout: {
-      type: 'config',
-      enabled: true,
-      default: { provider: 'stripe' },
-      rules: [{ when: { [MEMBER_ATTRIBUTE]: { inSegment: SEGMENT_KEY } }, value: { provider: 'adyen' } }],
-    },
-  },
-};
-
-const seedPointer = {
-  schemaVersion: 1,
-  environment: ENVIRONMENT,
-  version: 1,
-  snapshotKey: `${ENVIRONMENT}/snapshots/1.json`,
-};
+const seedSnapshot = seedSnapshotFor(ENVIRONMENT);
+const seedPointer = seedPointerFor(ENVIRONMENT);
 
 const listKeys = async (bucket: string) => {
   const { Contents = [] } = await s3.send(new ListObjectsV2Command({ Bucket: bucket }));

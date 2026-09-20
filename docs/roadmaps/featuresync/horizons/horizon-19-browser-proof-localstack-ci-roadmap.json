@@ -1,0 +1,688 @@
+{
+  "task": "Horizon 19 of FeatureSync: land a real-browser (Playwright) proof that the dashboard CSV segment upload (the app.js FileReader path) and per-rule percentage-rollout editing work against LocalStack, plus the CI wiring that runs it as a required step inside the existing localstack job.",
+  "analysis": {
+    "objective": "Prove in a real browser, against LocalStack, that the dashboard's CSV segment upload (the never-executed app.js FileReader path) and per-rule percentage-rollout editing actually work, and land that Playwright spec together with the CI wiring that runs it as a required part of the existing `localstack` job.",
+    "successDefinition": "Done means: (1) a LocalStack-backed Playwright support fixture exists in packages/dashboard/e2e/support/ that provisions a per-test bucket, seeds a schemaVersion 2 snapshot, starts the dashboard via main()/createAwsDashboardPorts on port 0 from AWS SDK env alone, and exposes an S3 client for assertions — distinct from the in-memory InMemoryEnvironment fixture whose publishSegment throws; (2) one browser spec drives the real Chromium/Chrome UI to select a CSV file through the file picker on the segment page ([data-segment-upload]/[data-segment-file]) and complete an upload, and to submit a percentage-rollout edit via the rollout form, asserting the resulting Segment Pointer version and the published snapshot rule rollout in S3; (3) playwright.config.ts receives AWS/LocalStack configuration by an explicit, documented mechanism that works both on a laptop and in CI, and uses bundled Chromium in CI (PLAYWRIGHT_CHANNEL='') with a browser-install step; (4) .github/workflows/ci.yml runs the browser suite inside the EXISTING `localstack` job (no third job), as a required step that fails the build — never skips — consistent with the horizon-3 no-skip rule when LOCALSTACK_AUTH_TOKEN is absent; (5) any genuine defect the real browser exposes in the app.js FileReader upload path or the rollout form is fixed in this horizon, with the browser spec as its regression proof; (6) `pnpm verify` still passes with the 100% coverage gate intact, and the new e2e/ directory stays excluded from coverage; (7) the browser proof and the CI step land in the same horizon — neither alone counts as done (binding horizon-18 decision).",
+    "assumptions": [
+      "The existing `localstack` CI job already exports every AWS_ENDPOINT_URL_*/AWS_REGION/AWS_ACCESS_KEY_ID variable the Playwright process needs, so extending that job requires adding a browser-install step and a run step, not new AWS env plumbing.",
+      "CI supplies AWS configuration through job-level env (as today); any .env loading added to playwright.config.ts is a developer-machine convenience that must not override CI-supplied env.",
+      "CI uses Playwright's bundled Chromium via PLAYWRIGHT_CHANNEL='' plus `playwright install --with-deps chromium`, because GitHub runners have no guaranteed Chrome channel; developers keep the existing `chrome` default.",
+      "app.js is formally outside the 100% coverage gate (horizon-18 decision); the Playwright spec is its only proof, and no jsdom harness is added.",
+      "The schemaVersion 2 seed snapshot currently living as a file-local literal in integration/dashboard-segments.localstack.test.ts is extracted into a shared fixture module once the browser spec becomes its second consumer — this is the in-scope cleanup the brief names.",
+      "The spec asserts through a fixture-exposed S3 client keyed on the Segment Pointer version and the published snapshot body, not on raw object existence.",
+      "Playwright trace/screenshot/video retention is reviewed and configured so a failing upload spec does not persist CSV member content (PII) as a CI artifact.",
+      "The browser spec runs serially / with a per-test bucket so it cannot collide with the unresolved concurrent-replay race.",
+      "`pnpm test:e2e` (root or dashboard-scoped) is introduced or confirmed as the single command CI invokes, after the existing `pnpm test:integration` step in the same job."
+    ],
+    "risks": [
+      "The real browser exposes genuine bugs in the never-executed app.js FileReader path (urlencoded csv field, 32 MiB cap, submit-interception condition) — fixing them is in scope but can consume most of the horizon and turn a proof horizon into a fix horizon.",
+      "A Playwright rollout edit can collide with the unresolved horizon-16/17 concurrent-replay 200+422 race, producing CI flakiness that is not a real regression; retries are 0 today, so a flake fails the build.",
+      "Adding Chromium download plus a browser run to the `localstack` job lengthens it and adds a new failure surface (apt deps, sandbox flags) to a job that already gates the LocalStack suite.",
+      "setRollout requires a schemaVersion 2 snapshot (parseSnapshot rejects rollout on v1); if the seed fixture is wrong the spec fails for a seeding reason that looks like a rollout bug.",
+      "The dashboard Host allowlist (horizon 16) requires Host 127.0.0.1:<port> or localhost:<port> plus a matching Origin on POST — a Playwright baseURL or proxy mismatch yields an opaque 403.",
+      "playwright.config.ts has no webServer block; the fixture must own server lifecycle, and a leaked port-0 server or bucket could poison parallel workers (fullyParallel is true today).",
+      "The binding horizon-18 decision means a spec that works locally but whose CI step is deferred fails the horizon outright — partial landing is not an acceptable outcome.",
+      "Trace/video retention could leak CSV member PII into CI artifacts if not explicitly configured."
+    ],
+    "outOfScope": [
+      "Segment List Page navigation in the browser spec — the user explicitly did not choose it; browser scope stays capped at CSV upload plus a rollout edit.",
+      "A full dashboard walkthrough (publish, rollback, flag create/delete, merge/diff dialogs) in the browser — those paths already have integration and unit coverage; the browser exists to prove the FileReader path.",
+      "A separate third CI job standing up its own LocalStack — the user chose the existing `localstack` job, which already has LocalStack and AWS env.",
+      "SDK / FlagClient read-back of the uploaded segment or the edited rollout — capped in earlier horizons; the proof stops at S3 state and the dashboard UI.",
+      "Segment member count, createdAt, or any per-SDK segment telemetry in the UI — excluded by the horizon-17 decision.",
+      "The 100k-member (~25 MiB) FileReader/urlencoded memory and latency measurement — an open blocker, deliberately not answered here.",
+      "Deciding whether setRollout on a schemaVersion 1 snapshot should auto-upgrade to 2 — an open blocker; the spec seeds schemaVersion 2 rather than resolving it.",
+      "Cleanup of orphaned segment version objects left by a lost pointer IfMatch race — an open blocker with no bearing on the browser proof.",
+      "Fixing the horizon-16/17 concurrent-replay 200+422 race itself — the spec avoids it by construction; fixing the race is its own horizon.",
+      "A jsdom coverage harness for app.js — app.js is accepted as outside the coverage gate, with Playwright as its behavioural proof.",
+      "A segment picker or any new segment navigation affordance in the dashboard UI — new feature work, not a proof.",
+      "The rollout-form.ts DRY cleanup — the brief names it only as the cheapest addition if the horizon finishes early; it is not part of the bar for done.",
+      "Cross-browser coverage (Firefox, WebKit) or a Playwright `projects` matrix — one browser proves the FileReader path; more browsers multiply CI time for no new evidence.",
+      "Real-AWS (non-LocalStack) execution of the browser suite — LocalStack-only is the standing project rule."
+    ],
+    "domainShape": "technical",
+    "domainShapeReason": "The objective is about test machinery and CI wiring — a Playwright fixture, browser configuration, and a GitHub Actions job step — not about flag, segment, or rollout domain rules, which already exist and are only being exercised.",
+    "ubiquitousLanguage": [
+      {
+        "term": "Browser Proof",
+        "meaning": "The Playwright spec that drives a real browser against a LocalStack-backed dashboard to exercise the app.js FileReader upload path and the rollout form."
+      },
+      {
+        "term": "LocalStack Fixture",
+        "meaning": "The new e2e/support module that provisions a per-test bucket, seeds a schemaVersion 2 snapshot, starts the dashboard on port 0 via main()/createAwsDashboardPorts, and exposes an S3 client for assertions."
+      },
+      {
+        "term": "localstack CI job",
+        "meaning": "The existing second job in .github/workflows/ci.yml that stands up pinned LocalStack, exports AWS_* env, and runs pnpm test:integration — the browser suite becomes a required step inside it."
+      },
+      {
+        "term": "CSV Segment Upload",
+        "meaning": "The browser flow where a file chosen via [data-segment-file] is read by FileReader into the urlencoded csv field of the [data-segment-upload] form and posted to the segment route."
+      },
+      {
+        "term": "Rollout Edit",
+        "meaning": "A setRollout/removeRollout FlagEdit on a rule index, submitted from the rollout form through the existing edit-feature CAS/replay path."
+      },
+      {
+        "term": "Segment Pointer",
+        "meaning": "The <env>/segments/<key>/current.json document whose version the browser proof asserts on after an upload, rather than asserting raw object existence."
+      },
+      {
+        "term": "schemaVersion 2 seed snapshot",
+        "meaning": "The seed snapshot required for rollout rules to parse, extracted from the LocalStack integration test into a shared fixture module now that the browser spec is a second consumer."
+      },
+      {
+        "term": "Coverage gate exemption",
+        "meaning": "The standing acceptance that app.js sits outside coverage include ['packages/*/src/**/*.ts'], with the Browser Proof as its only evidence."
+      },
+      {
+        "term": "continuous integration",
+        "meaning": "The GitHub Actions workflow in .github/workflows/ci.yml whose localstack job gains the browser-proof steps."
+      }
+    ]
+  },
+  "discoveryFindings": [
+    {
+      "area": "Playwright config",
+      "finding": "playwright.config.ts is 15 lines: testDir 'e2e', fullyParallel: true, forbidOnly on CI, retries: 0, reporter 'list' locally / 'github' on CI, use: { ...(channel===''?{}:{channel}), trace: 'retain-on-failure' }, channel = process.env.PLAYWRIGHT_CHANNEL ?? 'chrome'. There is NO `projects` array, NO `webServer`, NO `use.baseURL`, NO video/screenshot settings (Playwright defaults: screenshot 'off', video 'off'), and NO .env loading — the file never touches process.env beyond PLAYWRIGHT_CHANNEL and CI.",
+      "filePath": "packages/dashboard/playwright.config.ts",
+      "implication": "The PLAYWRIGHT_CHANNEL='' CI escape hatch already exists and is documented in a comment — CI wiring only needs the env var plus `playwright install --with-deps chromium`, not a config redesign. AWS/.env loading must be ADDED to this file (nothing loads it today), and trace:'retain-on-failure' currently WILL capture the CSV body in network/DOM snapshots, so the PII decision is a real config change, not a review no-op."
+    },
+    {
+      "area": "e2e suite shape",
+      "finding": "e2e/ contains exactly three files: flag-list.spec.ts, concurrent-edits.spec.ts, support/fixtures.ts. fixtures.ts exports `test` (base.extend<Fixtures>), `expect` (re-export), `SEED` (a 3-flag Features record), `checkForUpdates(page)` (dispatches a focus event via page.evaluate), and `expandFlag(page, key)` (clicks `.flag-row > summary` inside `[data-flag=\"key\"]`). Fixtures are `env: InMemoryEnvironment`, `dashboard: RunningDashboard`, `openEnvironment: () => Promise<void>`. InMemoryEnvironment is a file-local class (NOT exported) whose ports() returns publishSegment: () => Promise.reject(new Error('Segment upload is not used in these tests.')) and readSegmentVersion: () => Promise.resolve(null); it publishes schemaVersion 1 snapshots only.",
+      "filePath": "packages/dashboard/e2e/support/fixtures.ts",
+      "implication": "The existing fixture cannot serve the browser proof (publishSegment throws, schemaVersion 1 only). The new LocalStack fixture must be a SEPARATE module exporting its own `test`/`expect`, not an extension of this one. Reuse the `checkForUpdates`/`expandFlag` helper style and the `export { expect }` convention; existing specs import from './support/fixtures.js' with the .js extension."
+    },
+    {
+      "area": "Dashboard startup contract",
+      "finding": "startDashboardServer({ ports, port, logError? }) => Promise<RunningDashboard { url: string; close(): Promise<void> }>; url is always `http://127.0.0.1:<port>`. main(argv, io: DashboardIo) takes io = { env, out, err, createPorts, startServer } and returns EXIT_OK(0)/EXIT_FAILURE(1); it needs --bucket or io.env.FEATURESYNC_BUCKET. createAwsDashboardPorts({ bucket, topicArn?, client? }) builds an S3Client from ambient AWS SDK env when `client` is omitted.",
+      "filePath": "packages/dashboard/src/main.ts",
+      "implication": "The fixture can copy the integration tests' idiom verbatim. Because createAwsDashboardPorts reads ambient process.env, the Playwright WORKER process must already have AWS_* set — vitest does this via `test.env` in vitest.integration.config.ts; Playwright has no equivalent, so playwright.config.ts must mutate process.env at config load."
+    },
+    {
+      "area": "Security guards (403 traps)",
+      "finding": "http-server.ts enforces two guards: isAllowedHost accepts only host `127.0.0.1:<port>` or `localhost:<port>`; isSameOrigin requires the POST's Origin header to equal EXACTLY `http://127.0.0.1:<port>` (localhost Origin is rejected). Non-matching host => 403 text/plain; non-matching Origin on POST => 403 HTML error page.",
+      "filePath": "packages/dashboard/src/infrastructure/http-server.ts",
+      "implication": "The browser spec MUST navigate via dashboard.url (127.0.0.1), never localhost, or every form POST 403s opaquely. Do not set a baseURL that normalises to localhost, and do not route through a proxy."
+    },
+    {
+      "area": "Segment upload markup",
+      "finding": "renderSegmentPage emits: <form method=\"post\" action=\"/env/<env>/segments/<key>\" class=\"stack\" data-segment-upload> containing hidden `expectedCurrentVersion` (empty string when never published), hidden `csv` (value=\"\"), text input name=\"memberAttribute\" value=\"userId\" required, file input name=\"file\" accept=\".csv,text/csv\" required data-segment-file, and a submit button \"Upload members\". Labels are 'Member attribute' and 'CSV file'. segmentPath(env,key) = `/env/<encoded env>/segments/<encodeURIComponent(key)>`.",
+      "filePath": "packages/dashboard/src/infrastructure/views/segment-page.ts",
+      "implication": "Spec selectors are settled: setInputFiles('[data-segment-file]') then click 'Upload members'; success notice text is `Uploaded as version N.` (from segment-routes.ts). The file input carries name=\"file\", so the urlencoded native submit also sends `file=<filename>` — ignored server-side but visible in traces."
+    },
+    {
+      "area": "app.js FileReader path (bug surface)",
+      "finding": "The handler is: for each [data-segment-upload], find [data-segment-file] and [name=\"csv\"]; on submit, `if (csv.value !== '' || !file.files || file.files.length === 0) return;` then preventDefault, new FileReader, on 'load' set csv.value = String(reader.result) and call form.submit(). There is NO 'error' listener, no progress/disabled state, no size guard against the server's 32 MiB cap, and form.submit() bypasses both the submit event and native constraint validation.",
+      "filePath": "packages/dashboard/src/infrastructure/views/scripts/app.js",
+      "implication": "These are the concrete defect candidates the browser will expose (missing reader error handling; double-submit if csv is pre-populated; no feedback during the read). Budget a fix slot scoped to what the spec observes. This file is linted as sourceType 'script' with an explicit globals allowlist in eslint.config.js that already includes FileReader — new browser globals require editing that list."
+    },
+    {
+      "area": "Rollout form markup & nesting",
+      "finding": "renderRolloutForms returns '' when flag.rules.length === 0. Otherwise it emits <details class=\"rollouts\"><summary>Rollout</summary> containing ONE <form method=post action=\"/env/<env>/features/<key>\"> PER RULE, each with hidden baseVersion, hidden ruleIndex, `<label>Percentage <input type=number name=percentage min=0 max=100 step=0.01>`, `<label>Bucket by <input type=text name=bucketBy>`, `<label>Salt <input type=text name=salt>`, a submit `name=field value=setRollout` labelled 'Save rollout', and (only when a rollout already exists) `name=field value=removeRollout` labelled 'Remove'. The badge is `<span class=\"badge badge-rollout\">N% by <bucketBy></span>` or `<span class=\"muted\">No rollout</span>`. This block sits OUTSIDE the main edit form but INSIDE the flag row.",
+      "filePath": "packages/dashboard/src/infrastructure/views/rollout-form.ts",
+      "implication": "The spec must expand two disclosures (the flag row, then the 'Rollout' summary) before the inputs are visible — reuse expandFlag's pattern. The seeded flag MUST have rules or the whole control is absent. Assert on the badge text after save for a UI proof, plus the S3 snapshot for the state proof."
+    },
+    {
+      "area": "Rollout server parsing",
+      "finding": "http-server.ts parseFeatureEdit maps field=setRollout to { kind:'setRollout', key, ruleIndex, percentage, bucketBy, salt } with parseNumber returning NaN for missing/empty, and field=removeRollout to { kind:'removeRollout', key, ruleIndex }. baseVersion must match /^[1-9]\\d{0,8}$/ or the request fails with 'The edit form is out of date…'. Success renders the environment page with status 200; failures render 400 (invalidInput) or 422.",
+      "filePath": "packages/dashboard/src/infrastructure/http-server.ts",
+      "implication": "No new route work is needed. The 422 path is the conflict/replay surface the risks flag; a serial, single-tab spec avoids it."
+    },
+    {
+      "area": "Segment routes & body caps",
+      "finding": "matchSegmentRoute handles GET /env/<env>/segments (list), GET/POST /env/<env>/segments/<key>. POST reads the form with MAX_SEGMENT_CSV_BYTES = 32*1024*1024 (exported from segment-routes.ts); every other route uses MAX_BODY_BYTES = 1*1024*1024 from http-primitives.ts, and readForm throws HttpError(413) past the limit. Failure statuses: EMPTY_FILE/MALFORMED_ROW/HEADER/TOO_MANY_MEMBERS/INVALID_SEGMENT=400, CONFLICT/VERSION_EXISTS=422, REQUEST_FAILED=502. Success notice: `Uploaded as version N.`",
+      "filePath": "packages/dashboard/src/infrastructure/segment-routes.ts",
+      "implication": "A small synthetic CSV is well under every cap; the 32 MiB question stays out of scope. Use the exact notice string for the UI assertion."
+    },
+    {
+      "area": "Navigation to the segment page",
+      "finding": "The environment page links 'Segments' -> segmentListPath(env) = /env/<env>/segments, and the segment LIST page links each referenced key to segmentPath(env,key). listReferencedSegments only lists keys that the CURRENT snapshot's rules reference via `when: { <attr>: { inSegment: <key> } }`.",
+      "filePath": "packages/dashboard/src/infrastructure/views/environment-page.ts",
+      "implication": "List-page navigation is out of scope — the spec should page.goto the segment URL directly. The seed snapshot's checkout rule already references segment 'beta' via inSegment."
+    },
+    {
+      "area": "Integration test seeding pattern (extraction target)",
+      "finding": "dashboard-segments.localstack.test.ts defines file-local `seedSnapshot` (schemaVersion 2, environment 'integration', version 1, createdAt '2026-09-20T06:00:00.000Z', createdBy 'integration', previousVersion null, reason 'seed', features.checkout = { type:'config', enabled:true, default:{provider:'stripe'}, rules:[{ when:{ userId:{ inSegment:'beta' } }, value:{ provider:'adyen' } }] }) and `seedPointer` ({ schemaVersion:1, environment:'integration', version:1, snapshotKey:'integration/snapshots/1.json' }). Per-test lifecycle: beforeEach creates bucket `featuresync-it-${randomUUID()}`, starts the dashboard via main(...) on port 0, then PUTs the snapshot at `<env>/snapshots/1.json` and the pointer at `<env>/current.json`; afterEach closes the dashboard, ListObjectsV2 + DeleteObjects + DeleteBucket; afterAll s3.destroy(). A module-level guard throws if AWS_ENDPOINT_URL_S3 is undefined. Helpers: listKeys, objectText, put, segmentPointer, publishedSegment, snapshotVersion, checkoutRule. dashboard.localstack.test.ts uses the same lifecycle with a schemaVersion 1 seed.",
+      "filePath": "packages/dashboard/integration/dashboard-segments.localstack.test.ts",
+      "implication": "The fixture is a near-mechanical port of this beforeEach/afterEach into Playwright fixture scope. Extracting seedSnapshot/seedPointer into a shared module is real but small; place it where BOTH integration/ and e2e/ can import it. Keep the AWS_ENDPOINT_URL_S3 guard. Note existing integration tests already prove upload + setRollout/removeRollout at the HTTP level; the browser spec's only NEW evidence is the FileReader path and the rendered form."
+    },
+    {
+      "area": "CI workflow",
+      "finding": ".github/workflows/ci.yml has exactly two jobs. `verify`: checkout, pnpm/action-setup@v4, setup-node@v4, pnpm install --frozen-lockfile, pnpm verify, pnpm example:node-local. `localstack`: job-level env with AWS_ENDPOINT_URL_S3=http://s3.localhost.localstack.cloud:4566, AWS_ENDPOINT_URL_{SNS,SQS,CLOUDFORMATION,IAM,STS}=http://localhost:4566, AWS_REGION=us-east-1, AWS_ACCESS_KEY_ID/SECRET=test; steps are checkout, a 'Require LOCALSTACK_AUTH_TOKEN' gate that `exit 1`s when the secret is missing, pnpm setup/install, 'Start LocalStack' via `docker compose -f docker/docker-compose.yml up -d --wait`, `pnpm test:integration`, 'LocalStack logs' if: failure(), 'Stop LocalStack' if: always(). LocalStack is pinned to localstack/localstack:2026.08.3 with a healthcheck in docker/docker-compose.yml.",
+      "filePath": ".github/workflows/ci.yml",
+      "implication": "AWS env is already job-level, so the new work is exactly two steps inserted after `pnpm test:integration` and before the logs step — a `playwright install --with-deps chromium` step and the e2e run step with PLAYWRIGHT_CHANNEL: ''. The 'Require LOCALSTACK_AUTH_TOKEN' gate is the in-repo precedent for no-skip; mirror its hard-fail style, add no `continue-on-error`."
+    },
+    {
+      "area": "Scripts",
+      "finding": "packages/dashboard/package.json ALREADY has `test:e2e: playwright test` and `test:integration: vitest run --config vitest.integration.config.ts`. The ROOT package.json has NO test:e2e. Root `test:integration` = build core+aws+cli+dashboard, then run aws and dashboard integration suites. Root `verify` = build core+nestjs+aws+cli+dashboard, then typecheck, lint, `vitest run --coverage`. @playwright/test ^1.63.0 is a dashboard devDependency, NOT a root dependency.",
+      "filePath": "package.json",
+      "implication": "'Introduce or confirm pnpm test:e2e' resolves to CONFIRM at the package level; the open decision is whether to add a root `test:e2e` alias or have CI call `pnpm --filter @featuresync/dashboard test:e2e`. Root test:integration already builds the workspace packages and runs before e2e in the same job, so the e2e step inherits fresh builds. `pnpm exec playwright install` must run from packages/dashboard."
+    },
+    {
+      "area": "Coverage & typecheck scope",
+      "finding": "vitest.config.ts builds one project per packages/* dir, each excluding 'integration/**' and 'e2e/**'; coverage include is ['packages/*/src/**/*.ts'] with 100% thresholds. packages/dashboard/tsconfig.json includes ['src','test','integration','e2e','vitest.integration.config.ts','playwright.config.ts'].",
+      "filePath": "vitest.config.ts",
+      "implication": "No coverage-config change is needed: e2e/** is already excluded and app.js can never enter the coverage include glob. But new e2e files ARE typechecked by `pnpm typecheck` and linted by `eslint . --max-warnings=0` under tseslint strictTypeChecked — the fixture must be strictly typed (existing fixtures.ts needed an `eslint-disable no-empty-pattern`)."
+    },
+    {
+      "area": "Env configuration mechanism to copy",
+      "finding": "vitest.integration.config.ts loads ../../.env with node:util parseEnv when the file exists, then builds `awsEnv` from `{ ...dotenv, ...process.env }` filtered to keys starting with 'AWS_' — process.env wins over the file — and passes it as test.env, with coverage disabled and 30s test/hook timeouts. A real .env exists at the repo root (gitignored) carrying LOCALSTACK_AUTH_TOKEN plus the same AWS_* keys as .env.example.",
+      "filePath": "packages/dashboard/vitest.integration.config.ts",
+      "implication": "This is the exact precedent for 'an explicit, documented mechanism that works on a laptop and in CI', including the CI-wins precedence rule. Port the same ~8 lines into playwright.config.ts, but assign into process.env and keep `...process.env` last so job-level CI env overrides the file. Also mirror the 30s timeouts."
+    }
+  ],
+  "requiredMaterials": [],
+  "phases": [
+    {
+      "id": "shared-seed-snapshot-fixture",
+      "order": 0,
+      "name": "Extract shared schemaVersion 2 seed snapshot",
+      "goal": "Move the schemaVersion 2 seed snapshot and pointer literals out of the LocalStack integration test into one shared fixture module that both the integration suite and the coming browser proof import.",
+      "rationale": "The dashboard test that talks to LocalStack currently defines its seed data (a feature-flag snapshot document and the pointer file naming it) as literals inside a single test file. A second consumer is about to need exactly the same seed, and rollout rules only parse when the snapshot says schemaVersion 2, so one copied-and-drifted literal would cause failures that look like product bugs.",
+      "filesAffected": [
+        "packages/dashboard/integration/dashboard-segments.localstack.test.ts",
+        "packages/dashboard/test/support/seed-snapshot.ts"
+      ],
+      "changes": [
+        "Create a new module exporting the schemaVersion 2 seed snapshot (environment 'integration', version 1, features.checkout config flag with one rule whose `when` is { userId: { inSegment: 'beta' } }) and the matching seed pointer ({ schemaVersion: 1, environment, version: 1, snapshotKey: '<env>/snapshots/1.json' }), parameterised by environment name so each consumer can pick its own.",
+        "Place the module at a path both packages/dashboard/integration/** and packages/dashboard/e2e/** can import, and confirm packages/dashboard/tsconfig.json already includes that path.",
+        "Replace the file-local seedSnapshot/seedPointer literals in dashboard-segments.localstack.test.ts with imports from the new module, changing no assertions.",
+        "Run pnpm typecheck, pnpm lint and pnpm test:integration to confirm the extraction is behaviour-neutral."
+      ],
+      "boundedContext": "dashboard test fixtures",
+      "layer": "infrastructure",
+      "blastRadius": "small",
+      "inputs": [
+        "packages/dashboard/integration/dashboard-segments.localstack.test.ts"
+      ],
+      "expectedResult": "A single shared seed-snapshot fixture module that the existing LocalStack integration test imports, with that suite still green.",
+      "dependsOn": [],
+      "rubric": [
+        {
+          "id": "single-source-of-seed",
+          "label": "No duplicated seed literals remain",
+          "ruleStatement": "After the extraction, the schemaVersion 2 snapshot and pointer literals exist in exactly one module; 10 means grep finds no second copy anywhere under packages/dashboard, 8 means the integration test is fully converted with no stray literal, minScore is the bar for acceptable.",
+          "passCriteria": [
+            "grep for \"schemaVersion\" and \"snapshots/1.json\" under packages/dashboard/integration and packages/dashboard/test returns hits only in the new fixture module and in imports of it",
+            "packages/dashboard/integration/dashboard-segments.localstack.test.ts contains no inline object literal describing a snapshot or pointer; it imports them",
+            "The fixture module exports both the snapshot and the pointer, not just one of them"
+          ],
+          "failureExamples": [
+            "The test imports the snapshot but keeps its own inline pointer object because the pointer 'is only three fields'",
+            "The literal is extracted but the old constant is left in the test file unused, so a later editor edits the dead copy"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "environment-parameterisation",
+          "label": "Environment is a parameter, not a constant",
+          "ruleStatement": "The fixture builds snapshot and pointer from a caller-supplied environment name so two consumers can use different environments; 10 means every environment-derived string (including keys) is computed from the argument, 8 means the exported factory takes the environment and derives the snapshot key from it.",
+          "passCriteria": [
+            "The exported API is a function (or factory) taking an environment name, not a frozen object hard-coding 'integration'",
+            "The snapshotKey in the pointer is built from the passed environment (e.g. `${env}/snapshots/1.json`), not a literal starting with 'integration/'",
+            "Calling the factory twice with different environment names yields documents whose environment field and key prefix both differ"
+          ],
+          "failureExamples": [
+            "The factory takes an env argument but the pointer's snapshotKey still starts with the literal 'integration/'",
+            "Exports a single shared mutable object that a second consumer would have to mutate to retarget"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "behaviour-neutral-extraction",
+          "label": "Extraction changed no test behaviour",
+          "ruleStatement": "The integration suite's assertions and seeded bytes are identical to before; 10 means a diff of the test file shows only import/usage changes, 8 means assertions are untouched and the suite passes unchanged.",
+          "passCriteria": [
+            "git diff of dashboard-segments.localstack.test.ts shows no changes inside any expect(...) call",
+            "pnpm test:integration passes with the same number of tests as before the change",
+            "The seeded snapshot still contains features.checkout with one rule whose `when` is { userId: { inSegment: 'beta' } } and version 1"
+          ],
+          "failureExamples": [
+            "While extracting, the rule's `when` is 'tidied' to a different segment key and the assertion is adjusted to match, silently changing what is proven",
+            "schemaVersion is dropped from the snapshot because the type made it optional, so rollout rules would no longer parse for the next consumer"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "importable-from-both-trees",
+          "label": "Reachable and type-checked from integration and e2e",
+          "ruleStatement": "The module sits where both packages/dashboard/integration/** and packages/dashboard/e2e/** can import it under the package's tsconfig; 10 means a proof import from e2e type-checks today, 8 means the path is inside tsconfig include and uses the repo's .js-extension import convention.",
+          "passCriteria": [
+            "The module's directory is covered by the include globs in packages/dashboard/tsconfig.json",
+            "Imports of the module use the repo's existing extension convention (explicit .js suffix if other modules do)",
+            "pnpm typecheck and pnpm lint both pass with zero warnings"
+          ],
+          "failureExamples": [
+            "The module is placed under integration/ so an e2e spec importing it falls outside tsconfig include and only fails later in the fixture phase",
+            "The import omits the .js extension, which tsc accepts under the current settings but the ESM runtime rejects at test time"
+          ],
+          "minScore": 7
+        }
+      ],
+      "healerHint": "If this fails, it is almost always a leftover or subtly altered literal in the integration test — re-diff that file and make the only changes the import plus call sites."
+    },
+    {
+      "id": "playwright-config-aws-env",
+      "order": 1,
+      "name": "Load AWS env and trim Playwright traces",
+      "goal": "Make packages/dashboard/playwright.config.ts supply AWS/LocalStack configuration to the Playwright worker process on a laptop and in CI, and stop failure traces from persisting uploaded CSV member data.",
+      "rationale": "Playwright's config today never touches AWS settings, so a test that starts the dashboard against LocalStack would find no credentials or endpoint. The vitest integration config already solves this exact problem and is the pattern to copy. Separately, traces are retained on failure and would capture uploaded CSV rows, which are personal data, in CI artifacts.",
+      "filesAffected": [
+        "packages/dashboard/playwright.config.ts",
+        "packages/dashboard/vitest.integration.config.ts"
+      ],
+      "changes": [
+        "At config load, parse the repo-root .env with node:util parseEnv when the file exists, and assign its AWS_*-prefixed keys into process.env only where process.env does not already define them, so CI job-level env always wins.",
+        "Keep the existing PLAYWRIGHT_CHANNEL behaviour (empty string means Playwright's bundled Chromium) untouched.",
+        "Set trace/screenshot/video retention so no artifact retains request bodies or DOM containing CSV member values; document the choice in a short comment naming the PII reason.",
+        "Raise test and hook timeouts to match the 30s used by the integration config, since the dashboard boots and talks to LocalStack per test.",
+        "Add a comment stating the configuration mechanism: .env for developers, job-level env in CI, CI wins."
+      ],
+      "boundedContext": "dashboard e2e configuration",
+      "layer": "application",
+      "blastRadius": "small",
+      "inputs": [
+        "packages/dashboard/vitest.integration.config.ts",
+        "packages/dashboard/playwright.config.ts"
+      ],
+      "expectedResult": "An updated playwright.config.ts that exposes AWS_* env to the Playwright worker with CI precedence and retains no CSV content in failure artifacts.",
+      "dependsOn": [],
+      "rubric": [
+        {
+          "id": "ci-env-precedence",
+          "label": "CI env wins over .env",
+          "ruleStatement": "The .env load assigns only keys process.env does not already define, so job-level CI values always win; 10 means the precedence is proven by a check or comment plus code that cannot overwrite, 8 means the assignment is guarded per key.",
+          "passCriteria": [
+            "The assignment loop skips any key already present in process.env (e.g. guarded by `in` / `??=`-style per-key check), not a blanket Object.assign onto process.env",
+            "Setting AWS_ENDPOINT_URL_S3 in the shell before running playwright leaves that value unchanged even when .env sets a different one",
+            "Only AWS_*-prefixed keys from the .env file are copied into process.env"
+          ],
+          "failureExamples": [
+            "`Object.assign(process.env, parsed)` is used, so a stale developer .env silently overrides CI's LocalStack endpoint",
+            "All keys from .env are copied, dragging unrelated secrets into the Playwright worker environment"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "missing-env-file-tolerance",
+          "label": "Config loads with no .env present",
+          "ruleStatement": "Config evaluation must not throw or warn noisily when the repo-root .env is absent, which is the CI case; 10 means absence is handled explicitly and silently, 8 means an existence check precedes the read.",
+          "passCriteria": [
+            "Running `pnpm --filter dashboard exec playwright test --list` in a tree with no root .env prints no error about a missing file",
+            "The code checks for file existence (or catches ENOENT) before parsing",
+            "The resolved .env path is anchored to the repo root, not to process.cwd()"
+          ],
+          "failureExamples": [
+            "readFileSync is wrapped in a try/catch that swallows every error, so a malformed .env fails silently and tests run with no credentials",
+            "The path is resolved relative to cwd, so it works from the package directory but not when playwright is invoked from the repo root"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "no-pii-in-artifacts",
+          "label": "Failure artifacts retain no CSV content",
+          "ruleStatement": "Trace, screenshot and video retention are set so no artifact can carry uploaded CSV member values; 10 means every one of the three is off (or trace explicitly excludes sources/snapshots) with a comment naming the PII reason, 8 means trace is no longer 'retain-on-failure' and video/screenshot do not capture the filled form.",
+          "passCriteria": [
+            "playwright.config.ts no longer sets trace to 'retain-on-failure' or 'on'",
+            "screenshot and video settings do not retain images of the form on failure (e.g. both 'off')",
+            "A comment in the file states that CSV member data is personal data and is the reason for the setting"
+          ],
+          "failureExamples": [
+            "trace is set to 'off' but screenshot stays 'only-on-failure', so a failure screenshot still shows member identifiers in the rendered page",
+            "Retention is disabled but no comment explains why, so a later contributor turns traces back on for debugging"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "timeouts-and-channel-preserved",
+          "label": "Timeouts raised, channel behaviour untouched",
+          "ruleStatement": "Test and hook timeouts match the 30s integration precedent while the existing PLAYWRIGHT_CHANNEL semantics are byte-for-byte preserved; 10 means both test and hook timeouts are raised and the channel expression is unchanged, 8 means timeouts are 30s and empty-string channel still means bundled Chromium.",
+          "passCriteria": [
+            "timeout and the hook timeout in the config are both at least 30000",
+            "An empty PLAYWRIGHT_CHANNEL value still results in no `channel` being passed to the browser (bundled Chromium), same as before",
+            "git diff shows no change to the channel-resolution expression other than formatting"
+          ],
+          "failureExamples": [
+            "Only the top-level `timeout` is raised; beforeEach bucket creation against LocalStack still dies at the default hook timeout",
+            "The channel expression is refactored so an empty string becomes a literal channel name and breaks CI"
+          ],
+          "minScore": 7
+        }
+      ],
+      "healerHint": "The usual miss is precedence or hook timeouts — guard the .env assignment per key and raise the hook timeout, not just the test timeout."
+    },
+    {
+      "id": "localstack-playwright-fixture",
+      "order": 2,
+      "name": "Add LocalStack-backed Playwright dashboard fixture",
+      "goal": "Add a Playwright support module that, per test, creates an S3 bucket in LocalStack, seeds the shared schemaVersion 2 snapshot, starts the dashboard on an ephemeral port, exposes an S3 client for assertions, and tears everything down.",
+      "rationale": "The existing Playwright fixture runs the dashboard against an in-memory stub whose segment-publish operation deliberately throws, so it cannot prove a real CSV upload. A second, separate fixture is needed that wires the dashboard to real storage the way the LocalStack integration tests already do.",
+      "filesAffected": [
+        "packages/dashboard/e2e/support/localstack-fixtures.ts",
+        "packages/dashboard/e2e/support/fixtures.ts",
+        "packages/dashboard/src/main.ts"
+      ],
+      "changes": [
+        "Create a new fixture module (do not modify the existing in-memory fixtures.ts) exporting its own `test` and a re-exported `expect`, following the existing file's conventions including .js import extensions.",
+        "In a per-test fixture, throw a clear error if AWS_ENDPOINT_URL_S3 is unset, create a uniquely named bucket, start the dashboard via main()/createAwsDashboardPorts on port 0 so it binds 127.0.0.1, and PUT the shared seed snapshot and pointer.",
+        "Expose fixtures for the running dashboard URL, the environment name, the bucket name, and an S3 client so specs can read the segment pointer and published snapshot.",
+        "Tear down after each test: close the dashboard, delete all objects, delete the bucket; destroy the S3 client once at the end.",
+        "Keep the module strictly typed so pnpm typecheck and eslint --max-warnings=0 pass under the strict type-checked ruleset."
+      ],
+      "boundedContext": "dashboard e2e fixtures",
+      "layer": "infrastructure",
+      "blastRadius": "medium",
+      "inputs": [
+        "packages/dashboard/integration/dashboard-segments.localstack.test.ts",
+        "packages/dashboard/e2e/support/fixtures.ts",
+        "shared seed snapshot module from the Extract shared schemaVersion 2 seed snapshot phase"
+      ],
+      "expectedResult": "A LocalStack-backed Playwright fixture module that boots a real dashboard per test and hands the spec a URL plus an S3 client.",
+      "dependsOn": [
+        "shared-seed-snapshot-fixture",
+        "playwright-config-aws-env"
+      ],
+      "compensation": "Fixture teardown deletes only buckets it created; a leaked bucket can be removed manually from LocalStack, which is disposable.",
+      "rubric": [
+        {
+          "id": "per-test-isolation",
+          "label": "Unique bucket per test",
+          "ruleStatement": "Each test gets its own bucket name so parallel or repeated runs never collide; 10 means the name includes both a random component and a run-safe prefix and is asserted unique, 8 means it is derived from a random/unique source rather than a constant or the test title alone.",
+          "passCriteria": [
+            "The bucket name is built with randomUUID (or equivalent entropy), not a fixed string or a counter",
+            "Running the suite twice in a row without manual cleanup succeeds both times",
+            "Two tests running concurrently under fullyParallel do not read or write the same bucket or key prefix"
+          ],
+          "failureExamples": [
+            "The bucket name is derived from the test title, so two tests with the same title in different files collide under fullyParallel",
+            "A module-level counter is used, which repeats across worker processes because each worker starts the counter at zero"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "teardown-completeness",
+          "label": "Teardown removes everything it created",
+          "ruleStatement": "After each test the dashboard is closed and every created object and bucket is gone, even when the test body failed; 10 means teardown is failure-safe and handles paginated/many-object listings, 8 means objects then bucket are deleted and the server closed in a fixture teardown that runs after failures.",
+          "passCriteria": [
+            "Teardown runs in the fixture's post-`use` section so it executes when the test body throws",
+            "All objects are listed and deleted before DeleteBucket is called (a bucket with objects cannot be deleted)",
+            "The dashboard HTTP server is closed and awaited, and the S3 client is destroyed once at the end rather than per test",
+            "After a full suite run, `aws --endpoint-url=$AWS_ENDPOINT_URL_S3 s3 ls` lists no buckets left by the tests"
+          ],
+          "failureExamples": [
+            "Only the seeded snapshot and pointer keys are deleted by name, so the segment document the test itself published blocks DeleteBucket and leaks the bucket",
+            "Teardown is written after `await use(...)` but an earlier throw during setup leaves a half-created bucket with no cleanup path"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "loopback-binding",
+          "label": "Dashboard binds 127.0.0.1 on an ephemeral port",
+          "ruleStatement": "The fixture starts the dashboard on port 0 bound to loopback and exposes the resolved URL as 127.0.0.1, matching the host guard; 10 means the URL is read from the listening address rather than assumed, 8 means port 0 is used and the exposed URL uses 127.0.0.1.",
+          "passCriteria": [
+            "The server is started with port 0 and the actual port is read back from the server's address",
+            "The URL fixture string contains 127.0.0.1 and never the word localhost",
+            "Two tests started simultaneously get different ports"
+          ],
+          "failureExamples": [
+            "The port is read correctly but the URL is assembled as http://localhost:<port>, which makes every POST fail the host guard with an opaque 403",
+            "A fixed port is used to keep things simple, causing EADDRINUSE under fullyParallel"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "missing-endpoint-diagnostic",
+          "label": "Clear failure when LocalStack config is absent",
+          "ruleStatement": "Absent AWS_ENDPOINT_URL_S3 produces an immediate, explanatory error rather than an AWS SDK timeout; 10 means the message names the variable and how to supply it, 8 means an explicit throw naming the variable happens before any AWS call.",
+          "passCriteria": [
+            "Running the e2e spec with AWS_ENDPOINT_URL_S3 unset fails within seconds with a message naming that variable",
+            "The check happens before the CreateBucket call, not as a catch around it",
+            "The error text tells the reader where to set it (.env or CI job env)"
+          ],
+          "failureExamples": [
+            "The check exists but runs after the S3 client is constructed with a default region, so the failure surfaces as a 30s connect timeout to a real AWS endpoint",
+            "The guard checks only for undefined and passes on an empty string, producing an invalid-endpoint SDK error instead"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "existing-fixture-untouched",
+          "label": "In-memory fixture left intact",
+          "ruleStatement": "The new module stands alongside packages/dashboard/e2e/support/fixtures.ts without altering it or its consumers; 10 means the new module shares conventions (own `test`, re-exported `expect`, .js import extensions) with zero diff to the old one, 8 means fixtures.ts is unmodified and existing specs still pass.",
+          "passCriteria": [
+            "git diff shows no changes to packages/dashboard/e2e/support/fixtures.ts",
+            "The new module exports its own `test` and re-exports `expect`",
+            "Existing e2e specs that use the in-memory fixture still pass unchanged"
+          ],
+          "failureExamples": [
+            "The two fixtures are 'unified' behind a flag parameter, so the in-memory specs now depend on AWS env being present",
+            "The new module imports `test` from the old fixtures file and extends it, inheriting the stub ports that deliberately throw on segment publish"
+          ],
+          "minScore": 7
+        }
+      ],
+      "healerHint": "Most failures here are leaked buckets — make teardown list-and-delete every object (not just seeded keys) in a post-use block that also runs after setup errors."
+    },
+    {
+      "id": "browser-proof-spec",
+      "order": 3,
+      "name": "Add browser spec for CSV upload and rollout edit",
+      "goal": "Add one Playwright spec that drives a real browser through the dashboard's CSV segment upload and a percentage-rollout edit against LocalStack, and fix any genuine defect the real browser exposes in the upload script or rollout form.",
+      "rationale": "The browser-side script that reads a chosen CSV file and copies its text into a hidden form field has never actually run in a browser under test, so nothing proves the upload works end to end. Driving it for real is the only evidence, and it is also the first chance to catch real bugs in that script.",
+      "filesAffected": [
+        "packages/dashboard/e2e/segment-upload-rollout.spec.ts",
+        "packages/dashboard/src/infrastructure/views/scripts/app.js",
+        "packages/dashboard/src/infrastructure/views/rollout-form.ts"
+      ],
+      "changes": [
+        "Navigate directly to the segment page using the fixture's 127.0.0.1 dashboard URL (never localhost, which the server's host/origin guards reject on POST), set a small synthetic CSV on the file input, submit, and assert the success notice text 'Uploaded as version 1.'",
+        "Assert via the fixture's S3 client that the segment pointer document reports the expected version and that the published segment body contains the uploaded members.",
+        "In the same spec, expand the flag row and the 'Rollout' disclosure, fill percentage/bucket-by/salt, save the rollout, assert the rendered rollout badge, and assert the newly published snapshot's rule carries that rollout.",
+        "Keep the spec serial and single-tab so it cannot hit the known concurrent-edit conflict path; add no navigation through the segment list page.",
+        "If the real browser exposes a genuine defect in the file-reading script (for example an unhandled read error or a double submit) or in the rollout form, fix it minimally and let this spec stand as its regression proof; if new browser globals are used, extend the globals allowlist in eslint.config.js.",
+        "Run pnpm verify to confirm the 100% coverage gate still passes and e2e stays outside coverage."
+      ],
+      "boundedContext": "dashboard browser proof",
+      "layer": "interface",
+      "blastRadius": "medium",
+      "inputs": [
+        "LocalStack fixture from the Add LocalStack-backed Playwright dashboard fixture phase",
+        "packages/dashboard/src/infrastructure/views/segment-page.ts",
+        "packages/dashboard/src/infrastructure/views/rollout-form.ts",
+        "packages/dashboard/src/infrastructure/segment-routes.ts"
+      ],
+      "expectedResult": "One passing browser spec that proves CSV segment upload and a rollout edit against LocalStack, with S3 state assertions.",
+      "dependsOn": [
+        "localstack-playwright-fixture"
+      ],
+      "compensation": "The spec creates only per-test LocalStack buckets, which teardown removes; any product fix it forces is an ordinary revertible code change.",
+      "rubric": [
+        {
+          "id": "real-filereader-exercised",
+          "label": "The upload really goes through the browser file path",
+          "ruleStatement": "The spec proves the app.js FileReader path by setting a file on the input and letting the page populate the hidden field; 10 means the assertion would fail if app.js were deleted, 8 means the CSV reaches the server only via the file input and page script.",
+          "passCriteria": [
+            "The spec uses setInputFiles on [data-segment-file] with synthetic CSV content",
+            "The spec never writes the csv field value directly via evaluate/fill or posts the form body itself",
+            "Temporarily breaking app.js (e.g. renaming its handler) makes this spec fail, not pass"
+          ],
+          "failureExamples": [
+            "The spec sets the file and also page.fill()s the hidden csv field 'to be safe', so it would still pass with the FileReader path dead",
+            "The spec submits the form with request.post to avoid flakiness, bypassing the browser path entirely"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "s3-state-assertions",
+          "label": "Assertions read real S3 state, not just the UI",
+          "ruleStatement": "Both the upload and the rollout edit are verified against documents read from LocalStack; 10 means pointer version, segment members and the rule's rollout fields are all asserted from fetched documents, 8 means the pointer version and the published rollout rule are asserted from S3.",
+          "passCriteria": [
+            "The spec fetches <env>/segments/<key>/current.json through the fixture's S3 client and asserts its version",
+            "The published segment body is fetched and asserted to contain the uploaded member ids",
+            "The newly published snapshot is fetched and the target rule's rollout percentage, bucketBy and salt are asserted"
+          ],
+          "failureExamples": [
+            "Only the 'Uploaded as version 1.' notice is asserted, so a server that renders success without persisting would pass",
+            "The snapshot is fetched by the seeded key 1.json rather than by following the pointer, so it asserts the pre-edit document and passes regardless of the rollout edit"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "flake-resistance",
+          "label": "No sleeps, no races, loopback host",
+          "ruleStatement": "The spec contains no fixed waits and cannot race the page or the edit path; 10 means every wait is an assertion or a response wait and the spec is serial/single-tab, 8 means no waitForTimeout and navigation uses the fixture's 127.0.0.1 URL.",
+          "passCriteria": [
+            "grep of the spec finds no waitForTimeout / sleep / arbitrary setTimeout",
+            "The spec never navigates to a URL containing 'localhost'",
+            "The spec is declared serial (test.describe.serial or equivalent) and uses one page, opening no second tab",
+            "Running the spec 5 times consecutively passes 5 times"
+          ],
+          "failureExamples": [
+            "A 500ms waitForTimeout is added after setInputFiles to let FileReader finish, which passes locally and flakes on slower CI runners",
+            "The rollout save is asserted by re-reading S3 immediately after click without first waiting for the resulting navigation/response, so it occasionally reads the pre-edit snapshot"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "product-fix-discipline",
+          "label": "Any product fix is minimal and covered",
+          "ruleStatement": "If a real defect in app.js or rollout-form.ts was fixed, the change is minimal and does not disturb the coverage gate; 10 means the fix is a few lines with the spec standing as its regression proof and a note explaining it, 8 means the fix is scoped to the defect and pnpm verify stays green.",
+          "passCriteria": [
+            "git diff of app.js / rollout-form.ts contains no refactoring unrelated to the observed browser failure",
+            "pnpm verify passes, with 100% coverage still met and e2e still outside the coverage include globs",
+            "If new browser globals are used in app.js, eslint.config.js's globals allowlist is extended and lint passes with zero warnings"
+          ],
+          "failureExamples": [
+            "The FileReader path is rewritten to async/await FileReader-as-Promise while fixing a small bug, changing behaviour the unit tests never covered",
+            "A helper is added to a covered src/ TypeScript file to support the fix, dropping coverage below 100% because only the browser spec exercises it"
+          ],
+          "minScore": 7
+        }
+      ],
+      "healerHint": "The likeliest failure is a spec that passes without the real browser path or without re-reading S3 through the pointer — assert on freshly fetched documents and never touch the hidden csv field."
+    },
+    {
+      "id": "ci-browser-step",
+      "order": 4,
+      "name": "Run browser proof in the localstack CI job",
+      "goal": "Make the existing localstack job in .github/workflows/ci.yml install a browser and run the browser proof as a required step that fails the build.",
+      "rationale": "A browser proof that only ever runs on a developer laptop protects nothing. The repository's LocalStack CI job already stands up LocalStack and exports every AWS setting the test needs, so the work is adding a browser install step and a run step to that job — no new job, and no option to skip.",
+      "filesAffected": [
+        ".github/workflows/ci.yml",
+        "packages/dashboard/package.json"
+      ],
+      "changes": [
+        "After the existing integration-test step in the localstack job, add a step that installs Playwright's bundled Chromium with its system dependencies, run from the dashboard package.",
+        "Add a following step that runs the dashboard's existing test:e2e script with PLAYWRIGHT_CHANNEL set to the empty string so the bundled Chromium is used instead of a system Chrome channel.",
+        "Add no continue-on-error and no conditional skip; mirror the hard-fail style of the existing required-secret gate so a missing prerequisite fails rather than silently passes.",
+        "Decide and apply one invocation form (a root test:e2e alias or a filtered call to the dashboard package) and document it in the step name.",
+        "Confirm the new steps sit before the failure-logs and stop-LocalStack steps so diagnostics still run on failure."
+      ],
+      "boundedContext": "continuous integration",
+      "layer": "cross-cutting",
+      "blastRadius": "small",
+      "inputs": [
+        ".github/workflows/ci.yml",
+        "packages/dashboard/package.json",
+        "browser spec from the Add browser spec for CSV upload and rollout edit phase"
+      ],
+      "expectedResult": "A localstack CI job that installs Chromium and runs the browser proof as a required, non-skippable step.",
+      "dependsOn": [
+        "browser-proof-spec"
+      ],
+      "compensation": "Revert the two added workflow steps to restore the previous job definition.",
+      "rubric": [
+        {
+          "id": "non-skippable-step",
+          "label": "The step cannot be skipped or soft-failed",
+          "ruleStatement": "The browser-proof step fails the localstack job on any failure and has no escape hatch; 10 means a missing prerequisite also hard-fails with a named message in the workflow's existing style, 8 means no continue-on-error and no conditional on the run step.",
+          "passCriteria": [
+            "The new steps in .github/workflows/ci.yml carry no `continue-on-error`",
+            "The new steps carry no `if:` that could evaluate false on a normal push or pull_request run",
+            "`|| true`, `|| echo`, and similar swallowing suffixes do not appear in the run commands",
+            "Deliberately making the spec fail causes the localstack job to report failure"
+          ],
+          "failureExamples": [
+            "`if: github.event_name == 'push'` is added so pull requests never run the proof",
+            "The playwright install step is given continue-on-error, so a failed browser download leads to a confusing but non-blocking run step failure later"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "browser-install-correctness",
+          "label": "Chromium and its system deps are installed",
+          "ruleStatement": "The job installs the Playwright-bundled Chromium with OS dependencies from the dashboard package so the version matches the installed Playwright; 10 means the install is pinned to the package's own Playwright and only chromium, 8 means `--with-deps chromium` runs in the dashboard package context after dependency install.",
+          "passCriteria": [
+            "The install command runs Playwright's install with the `--with-deps` flag and names chromium",
+            "It is invoked through the dashboard package (e.g. pnpm --filter) so the bundled browser matches that package's Playwright version",
+            "The step is placed after the repository's dependency-install step"
+          ],
+          "failureExamples": [
+            "`npx playwright install --with-deps` is used without a filter, resolving a different Playwright version than the dashboard's and downloading a browser the test then rejects",
+            "Only `install chromium` is run without `--with-deps`, so the runner is missing shared libraries and Chromium fails to launch"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "env-and-channel-wiring",
+          "label": "Bundled Chromium is selected and AWS env reaches the run",
+          "ruleStatement": "The run step sets PLAYWRIGHT_CHANNEL to the empty string and inherits the job's AWS_* env; 10 means the empty-string channel is explicit and the step needs no extra env duplication, 8 means the channel is set and the spec reaches LocalStack in the run.",
+          "passCriteria": [
+            "The run step sets `PLAYWRIGHT_CHANNEL: ''` (explicit empty string, not an unset or omitted key)",
+            "No AWS_* value is redefined in the step in a way that differs from the job-level env already exported",
+            "The step's command runs the dashboard's existing test:e2e script"
+          ],
+          "failureExamples": [
+            "PLAYWRIGHT_CHANNEL is omitted on the assumption the config defaults to bundled Chromium, so CI tries to launch a system Chrome channel that is not installed",
+            "AWS_ENDPOINT_URL_S3 is re-declared at step level pointing at localhost while the job exports the LocalStack host, breaking the fixture"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "step-ordering-and-diagnostics",
+          "label": "Ordered so diagnostics and cleanup still run",
+          "ruleStatement": "The new steps sit after the integration-test step and before the failure-logs and stop-LocalStack steps so LocalStack logs are captured on browser-proof failure; 10 means ordering is correct and the step name states the chosen invocation form, 8 means ordering is correct.",
+          "passCriteria": [
+            "In ci.yml the two new steps appear below the existing `pnpm test:integration` step",
+            "Both new steps appear above the LocalStack failure-logs step and the stop-LocalStack step",
+            "The failure-logs step's condition (e.g. if: failure()) still covers a failure originating in the new steps",
+            "The run step's `name` states how the proof is invoked (root alias vs filtered dashboard call)"
+          ],
+          "failureExamples": [
+            "The steps are appended at the end of the job, after stop-LocalStack, so the browser proof runs against a torn-down LocalStack",
+            "The steps are placed correctly but the failure-logs step uses a condition scoped to the integration step, so a browser-proof failure produces no LocalStack logs"
+          ],
+          "minScore": 7
+        }
+      ],
+      "healerHint": "The common miss is ordering or the channel — put both steps between the integration step and the stop-LocalStack/failure-logs steps and set PLAYWRIGHT_CHANNEL to an explicit empty string."
+    }
+  ],
+  "successCriteria": [
+    "Done means: (1) a LocalStack-backed Playwright support fixture exists in packages/dashboard/e2e/support/ that provisions a per-test bucket, seeds a schemaVersion 2 snapshot, starts the dashboard via main()/createAwsDashboardPorts on port 0 from AWS SDK env alone, and exposes an S3 client for assertions — distinct from the in-memory InMemoryEnvironment fixture whose publishSegment throws; (2) one browser spec drives the real Chromium/Chrome UI to select a CSV file through the file picker on the segment page ([data-segment-upload]/[data-segment-file]) and complete an upload, and to submit a percentage-rollout edit via the rollout form, asserting the resulting Segment Pointer version and the published snapshot rule rollout in S3; (3) playwright.config.ts receives AWS/LocalStack configuration by an explicit, documented mechanism that works both on a laptop and in CI, and uses bundled Chromium in CI (PLAYWRIGHT_CHANNEL='') with a browser-install step; (4) .github/workflows/ci.yml runs the browser suite inside the EXISTING `localstack` job (no third job), as a required step that fails the build — never skips — consistent with the horizon-3 no-skip rule when LOCALSTACK_AUTH_TOKEN is absent; (5) any genuine defect the real browser exposes in the app.js FileReader upload path or the rollout form is fixed in this horizon, with the browser spec as its regression proof; (6) `pnpm verify` still passes with the 100% coverage gate intact, and the new e2e/ directory stays excluded from coverage; (7) the browser proof and the CI step land in the same horizon — neither alone counts as done (binding horizon-18 decision).",
+    "Extract shared schemaVersion 2 seed snapshot: A single shared seed-snapshot fixture module that the existing LocalStack integration test imports, with that suite still green.",
+    "Load AWS env and trim Playwright traces: An updated playwright.config.ts that exposes AWS_* env to the Playwright worker with CI precedence and retains no CSV content in failure artifacts.",
+    "Add LocalStack-backed Playwright dashboard fixture: A LocalStack-backed Playwright fixture module that boots a real dashboard per test and hands the spec a URL plus an S3 client.",
+    "Add browser spec for CSV upload and rollout edit: One passing browser spec that proves CSV segment upload and a rollout edit against LocalStack, with S3 state assertions.",
+    "Run browser proof in the localstack CI job: A localstack CI job that installs Chromium and runs the browser proof as a required, non-skippable step."
+  ],
+  "deferred": [
+    "Segment List Page navigation in the browser spec — the user explicitly did not choose it; browser scope stays capped at CSV upload plus a rollout edit.",
+    "A full dashboard walkthrough (publish, rollback, flag create/delete, merge/diff dialogs) in the browser — those paths already have integration and unit coverage; the browser exists to prove the FileReader path.",
+    "A separate third CI job standing up its own LocalStack — the user chose the existing `localstack` job, which already has LocalStack and AWS env.",
+    "SDK / FlagClient read-back of the uploaded segment or the edited rollout — capped in earlier horizons; the proof stops at S3 state and the dashboard UI.",
+    "Segment member count, createdAt, or any per-SDK segment telemetry in the UI — excluded by the horizon-17 decision.",
+    "The 100k-member (~25 MiB) FileReader/urlencoded memory and latency measurement — an open blocker, deliberately not answered here.",
+    "Deciding whether setRollout on a schemaVersion 1 snapshot should auto-upgrade to 2 — an open blocker; the spec seeds schemaVersion 2 rather than resolving it.",
+    "Cleanup of orphaned segment version objects left by a lost pointer IfMatch race — an open blocker with no bearing on the browser proof.",
+    "Fixing the horizon-16/17 concurrent-replay 200+422 race itself — the spec avoids it by construction; fixing the race is its own horizon.",
+    "A jsdom coverage harness for app.js — app.js is accepted as outside the coverage gate, with Playwright as its behavioural proof.",
+    "A segment picker or any new segment navigation affordance in the dashboard UI — new feature work, not a proof.",
+    "The rollout-form.ts DRY cleanup — the brief names it only as the cheapest addition if the horizon finishes early; it is not part of the bar for done.",
+    "Cross-browser coverage (Firefox, WebKit) or a Playwright `projects` matrix — one browser proves the FileReader path; more browsers multiply CI time for no new evidence.",
+    "Real-AWS (non-LocalStack) execution of the browser suite — LocalStack-only is the standing project rule."
+  ],
+  "revision": 0
+}

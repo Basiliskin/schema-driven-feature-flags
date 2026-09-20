@@ -1,0 +1,198 @@
+{
+  "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-19-browser-proof-localstack-ci-roadmap.json",
+  "roadmapTask": "Horizon 19 of FeatureSync: land a real-browser (Playwright) proof that the dashboard CSV segment upload (the app.js FileReader path) and per-rule percentage-rollout editing work against LocalStack, plus the CI wiring that runs it as a required step inside the existing localstack job.",
+  "createdAt": "2026-09-20T09:38:16Z",
+  "updatedAt": "2026-09-20T13:05:00Z",
+  "roadmapRevision": 0,
+  "phases": [
+    {
+      "phaseId": "shared-seed-snapshot-fixture",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-20T09:38:16Z",
+      "baseRef": "6c6016e1649b305854d3c3aa487a09a23da766cf",
+      "baseDirty": true,
+      "notes": "Changed: packages/dashboard/test/support/seed-snapshot.ts (new), packages/dashboard/integration/dashboard-segments.localstack.test.ts. Extracted the schemaVersion 2 seed snapshot and seed pointer into seedSnapshotFor(env)/seedPointerFor(env) plus SEED_SEGMENT_KEY/SEED_MEMBER_ATTRIBUTE; the integration test imports them instead of its file-local literals, assertions untouched. pnpm typecheck and pnpm lint both exit 0; pnpm test:integration not run (needs LocalStack) — left to VERIFY. Already dirty at start (not this phase): docs/roadmaps/featuresync/*.md and horizon-19 roadmap files. | VERIFIED: gates green, grade 8/9/10/8 all above minScore (7/7/8/7), overallPass true. No 10->9 demotions: the single 10 named what a 9 lacks.",
+      "unplannedFiles": [],
+      "completedAt": "2026-09-20T09:46:55Z",
+      "gateRun": "pnpm verify: pass (exit 0; 57 files/1298 tests, 100% coverage); pnpm test:integration: pass (exit 0; dashboard 2 files/16 tests, unchanged count). First verify run flaked on an unrelated @featuresync/core fs.watch test (file-snapshot-source.test.ts); passed 3/3 isolated and on full re-run.",
+      "gradeResult": {
+        "phaseId": "shared-seed-snapshot-fixture",
+        "dimensionScores": [
+          {
+            "dimensionId": "single-source-of-seed",
+            "score": 8,
+            "pass": true,
+            "evidence": "Both snapshot and pointer exported; integration test fully converted, no inline literal and no dead constant. Other schemaVersion hits under packages/dashboard are unrelated pre-existing fixtures, not copies of this seed, so the 10 bar (no second copy anywhere) is not met."
+          },
+          {
+            "dimensionId": "environment-parameterisation",
+            "score": 9,
+            "pass": true,
+            "evidence": "Plain factories; snapshot.environment is the argument and pointer.snapshotKey is `${environment}/snapshots/1.json`; no literal integration/ prefix. Two different env names yield differing environment field and key prefix."
+          },
+          {
+            "dimensionId": "behaviour-neutral-extraction",
+            "score": 10,
+            "pass": true,
+            "evidence": "Diff is 4 hunks confined to the import block and the two const declarations; zero lines changed inside any it()/expect(). Rule when still { userId: { inSegment: beta } }, version 1. Integration 16/16, count unchanged. Above a 9: provably zero-touch inside every test body, not merely free of assertion edits."
+          },
+          {
+            "dimensionId": "importable-from-both-trees",
+            "score": 8,
+            "pass": true,
+            "evidence": "test/support/ falls under the tsconfig test include glob, sibling to integration and e2e; import uses the repo .js ESM convention; typecheck and lint zero warnings. No e2e import exists yet (next phases) so the 10 bar is not demonstrated."
+          }
+        ],
+        "overallPass": true
+      }
+    },
+    {
+      "phaseId": "playwright-config-aws-env",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-20T09:52:04Z",
+      "baseRef": "6c6016e1649b305854d3c3aa487a09a23da766cf",
+      "baseDirty": true,
+      "notes": "Changed: packages/dashboard/playwright.config.ts (only). vitest.integration.config.ts was read as the pattern to copy and correctly left unmodified - no changes entry asked for an edit to it. Config now parses repo-root .env with node:util parseEnv and assigns AWS_*-prefixed keys into process.env only where unset, so CI job-level env wins per key; PLAYWRIGHT_CHANNEL behaviour untouched; trace/screenshot/video all off with a comment naming the CSV-member PII reason; timeout and expect.timeout 30s (Playwright has no separate hookTimeout - hooks run under the test timeout), actionTimeout/navigationTimeout 30s. Verified: pnpm typecheck and pnpm lint exit 0; playwright test --list exit 0 still listing 8 tests; precedence proven by loading the config with AWS_REGION preset (preset survived) and AWS_ENDPOINT_URL_S3 unset (filled from .env). Full gates left to VERIFY. | VERIFIED: first grade failed missing-env-file-tolerance 5/7 - envFile was cwd-relative, so loading from the repo root silently left every AWS_* var unset (the dimension own failureExample). healerHint retry anchored the path via import.meta.url; gates re-run green; that dimension re-graded 5->9 and the other three (9/10/8) carried forward unchanged per the scoped-fix rule. Final 9/9/10/8, overallPass true, no override. No 10->9 demotion: the single 10 named what a 9 lacks.",
+      "unplannedFiles": [],
+      "completedAt": "2026-09-20T10:03:49Z",
+      "gateRun": "pnpm verify: pass; pnpm test:integration: pass; pnpm --filter @featuresync/dashboard test:e2e: pass (8 tests). All three re-run after the healer fix, all exit 0.",
+      "gradeResult": {
+        "phaseId": "playwright-config-aws-env",
+        "dimensionScores": [
+          {
+            "dimensionId": "ci-env-precedence",
+            "score": 9,
+            "pass": true,
+            "evidence": "Per-key guard process.env[key]===undefined, AWS_ prefix filter, no blanket Object.assign. Proven experimentally: preset AWS_REGION survived, unset AWS_ENDPOINT_URL_S3 filled. Not 10: precedence rests on a comment, not a regression test."
+          },
+          {
+            "dimensionId": "missing-env-file-tolerance",
+            "score": 9,
+            "pass": true,
+            "evidence": "RE-GRADED after healer fix (was 5). envFile now fileURLToPath(new URL(../../.env, import.meta.url)), anchored to the file not cwd; existsSync still guards the read; parse errors still throw loudly rather than being swallowed. Verified with .env absent and cwd at repo root: playwright test --list exit 0, 8 tests, no error. Not 10: no regression test encodes the anchoring."
+          },
+          {
+            "dimensionId": "no-pii-in-artifacts",
+            "score": 10,
+            "pass": true,
+            "evidence": "trace, screenshot and video all off, replacing retain-on-failure, with a comment naming CSV member ids as personal data. Above a 9: the stated PII reason stops a later contributor re-enabling traces without knowing why."
+          },
+          {
+            "dimensionId": "timeouts-and-channel-preserved",
+            "score": 8,
+            "pass": true,
+            "evidence": "timeout and expect.timeout 30_000 plus action/navigation timeouts; channel expression byte-for-byte unchanged. Playwright has no separate hookTimeout - hooks run under the test timeout, so this is the only lever. Not higher: 30s is Playwright default, made explicit rather than raised."
+          }
+        ],
+        "overallPass": true
+      }
+    },
+    {
+      "phaseId": "localstack-playwright-fixture",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-20T10:20:00Z",
+      "baseRef": "6c6016e1649b305854d3c3aa487a09a23da766cf",
+      "baseDirty": true,
+      "notes": "Changed: packages/dashboard/e2e/support/localstack-fixtures.ts (new, only file this phase). Adds a second Playwright fixture module beside the in-memory one: worker-scoped S3Client (guarded by an explicit AWS_ENDPOINT_URL_S3 check that throws before the client is built and names .env / CI job env), per-test bucket featuresync-e2e-<randomUUID>, seeds the shared schemaVersion 2 snapshot and pointer, boots the dashboard via main([--bucket, --port 0]) with env:{} so no FEATURESYNC_* leaks in, and exposes bucket / environment / dashboard / s3. Teardown sits after await use(), so it runs on test failure: paginated list-and-delete of EVERY object, then DeleteBucket; the client is destroyed once per worker. e2e/support/fixtures.ts has a zero-line diff. Verified locally: pnpm typecheck 0, pnpm lint 0, pnpm test:e2e 0 (existing 8 tests unchanged). Throwaway smoke specs (since deleted) proved against live LocalStack: url contains 127.0.0.1, seeded pointer readable, bucket name matches the uuid shape, a deliberately failing test that also wrote an extra object left no featuresync-e2e-* bucket behind, and with AWS_ENDPOINT_URL_S3 unset the run fails immediately with the named-variable message. Full gates left to VERIFY. | VERIFIED: gates green, grade 9/10/9/10/10 all above minScore (8/8/8/7/7), overallPass true. No 10->9 demotions: each 10 named what a 9 lacks. Compensation (delete only buckets the fixture created; a leaked bucket is removed by hand from disposable LocalStack) was not needed - teardown left no featuresync-e2e-* bucket - and is invoked by deleting the named bucket via the S3 client.",
+      "unplannedFiles": [],
+      "completedAt": "2026-09-20T10:52:00Z",
+      "gateRun": "pnpm verify: pass (exit 0); pnpm test:integration: pass (exit 0); pnpm --filter @featuresync/dashboard test:e2e: pass (exit 0, existing 8 specs). All three green on one run, no flakes.",
+      "gradeResult": {
+        "phaseId": "localstack-playwright-fixture",
+        "dimensionScores": [
+          {
+            "dimensionId": "per-test-isolation",
+            "score": 9,
+            "pass": true,
+            "evidence": "Bucket is featuresync-e2e-${randomUUID()} created in a test-scoped fixture, so every test in every worker gets a distinct bucket and prefix under fullyParallel; no counter or title-derived name. Short of 10 only because uniqueness is verified by a throwaway regex check rather than an asserted invariant in a committed spec."
+          },
+          {
+            "dimensionId": "teardown-completeness",
+            "score": 10,
+            "pass": true,
+            "evidence": "Beyond deleting objects then the bucket after use, it loops ListObjectsV2 with ContinuationToken/IsTruncated so arbitrarily many objects (not just seeded keys) are removed, closes the dashboard, destroys the S3Client once per worker, and was empirically proven failure-safe: a deliberately failing test that wrote an extra object left no featuresync-e2e-* bucket per ListBuckets."
+          },
+          {
+            "dimensionId": "loopback-binding",
+            "score": 9,
+            "pass": true,
+            "evidence": "main is invoked with --port 0 and RunningDashboard.url is built as http://${LOOPBACK_HOST}:${port} with LOOPBACK_HOST=127.0.0.1 and the port read back from the bound address; no localhost anywhere in the fixture. All criteria met, nothing beyond them."
+          },
+          {
+            "dimensionId": "missing-endpoint-diagnostic",
+            "score": 10,
+            "pass": true,
+            "evidence": "requireLocalStackEndpoint throws before new S3Client({}) is ever constructed, and the guard rejects the empty string as well as undefined - the exact failure the rubric second failureExample calls out - while the message names AWS_ENDPOINT_URL_S3 and both places to set it (.env or the CI job env)."
+          },
+          {
+            "dimensionId": "existing-fixture-untouched",
+            "score": 10,
+            "pass": true,
+            "evidence": "git diff for e2e/support/fixtures.ts and src/main.ts is empty, and rather than only coexisting the new module independently reproduces the old conventions - its own base.extend test, a re-exported expect, .js ESM import extensions - with no import of the stub fixture whose publishSegment rejects."
+          }
+        ],
+        "overallPass": true
+      }
+    },
+    {
+      "phaseId": "browser-proof-spec",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-20T11:30:00Z",
+      "baseRef": "6c6016e1649b305854d3c3aa487a09a23da766cf",
+      "baseDirty": true,
+      "notes": "Changed: packages/dashboard/e2e/segment-upload-rollout.spec.ts (new, only file this phase). One serial describe with two single-tab tests against the LocalStack fixture: (1) sets a synthetic CSV on [data-segment-file] via setInputFiles and submits, asserting the \"Uploaded as version 1.\" notice, then reads e2e/segments/beta/current.json from S3 for version/segmentKey and the pointed-to version object for memberAttribute and members; (2) expands the checkout flag row and the Rollout disclosure, fills 25/userId/autumn, saves, asserts the \"Published version 2 to e2e.\" notice and the 25% by userId badge, then follows e2e/current.json to the new snapshot and asserts features.checkout.rules[0].rollout. The hidden csv field is never filled and the form is never posted directly. No waitForTimeout; navigation uses the fixture 127.0.0.1 URL only. NO PRODUCT FIX WAS NEEDED: the real browser exposed no defect in app.js or rollout-form.ts, so both are untouched (git diff empty) and filesAffected entries 2 and 3 went unused - not an amendment, the changes entry was conditional (\"if the real browser exposes a genuine defect\"). Verified locally against live LocalStack: pnpm typecheck 0, pnpm lint 0, spec 2/2 passed, --repeat-each=5 10/10 passed, full pnpm test:e2e 10/10 passed (8 existing + 2 new). Mutation check: renaming the app.js [data-segment-upload] selector makes the upload test FAIL (exit 1), proving the FileReader path is really exercised; app.js restored, git diff clean. No featuresync-e2e-* bucket left behind, including after the deliberately failing mutant run. pnpm verify (coverage gate) NOT run - left to VERIFY. Already dirty at start (not this phase): docs/roadmaps/featuresync/*.md, archive/, horizons/horizon-19-*, packages/dashboard/integration/dashboard-segments.localstack.test.ts, packages/dashboard/playwright.config.ts, packages/dashboard/e2e/support/localstack-fixtures.ts, packages/dashboard/test/support/seed-snapshot.ts. | VERIFIED: gates green (pnpm verify 0, pnpm test:integration 0, pnpm test:e2e 0 with 10 tests). Grade 10/9/10/8 against minScore 8/8/8/7, overallPass true, no override. No 10->9 demotions: both 10s named what a 9 lacks (the executed app.js mutation check; every S3 read gated behind a web-first assertion). Compensation (per-test LocalStack buckets removed by fixture teardown; any product fix would be an ordinary revertible change) was not needed - zero featuresync-e2e-* buckets remained, including after the deliberately failing mutant run - and would be invoked by deleting the named bucket via the fixture S3 client.",
+      "unplannedFiles": [],
+      "completedAt": "2026-09-20T12:30:00Z",
+      "gradeResult": {
+        "phaseId": "browser-proof-spec",
+        "dimensionScores": [
+          {
+            "dimensionId": "real-filereader-exercised",
+            "score": 10,
+            "pass": true,
+            "evidence": "Only input to the CSV path is setInputFiles on [data-segment-file] plus a real button click; no fill/evaluate of the csv field and no request.post in the 77 lines. Above a 9: the kill-the-handler claim was executed, not argued - renaming the [data-segment-upload] selector made the upload assertion time out (exit 1), app.js restored clean."
+          },
+          {
+            "dimensionId": "s3-state-assertions",
+            "score": 9,
+            "pass": true,
+            "evidence": "Upload test reads the segment pointer via the fixture S3 client (version 1, segmentKey), then follows pointer.objectKey for members and memberAttribute. Rollout test reads env current.json (version 2), follows pointer.snapshotKey - not the seeded 1.json - and exact-matches rules[0].rollout on all three fields. All passCriteria met; no assertion that the prior version document is untouched, so 9 not 10."
+          },
+          {
+            "dimensionId": "flake-resistance",
+            "score": 10,
+            "pass": true,
+            "evidence": "No waitForTimeout/sleep/setTimeout and no 'localhost'; both navigations use dashboard.url, built from LOOPBACK_HOST 127.0.0.1. describe.serial, one page per test, no second tab. --repeat-each=5 gave 10/10. Above a 9: every S3 read is gated behind a preceding web-first assertion (the upload notice; the rollout notice AND the re-rendered badge), so the pre-edit-snapshot race in the second failureExample is structurally impossible, not merely unobserved."
+          },
+          {
+            "dimensionId": "product-fix-discipline",
+            "score": 8,
+            "pass": true,
+            "evidence": "No product fix made: app.js, rollout-form.ts and eslint.config.js all have a zero diff, so criterion 1 holds vacuously and criterion 3 does not apply. pnpm verify exits 0 with the 100% coverage gate intact; coverage include is packages/*/src/**/*.ts, which excludes e2e/, so the spec cannot dilute coverage. Expected competent outcome, with no fix present to carry a regression-proof note - which is what a 10 would need."
+          }
+        ],
+        "overallPass": true
+      },
+      "gateRun": "pnpm verify: pass; pnpm test:integration: pass; pnpm test:e2e: pass"
+    },
+    {
+      "phaseId": "ci-browser-step",
+      "status": "awaiting-verification",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-20T12:45:00Z",
+      "baseRef": "6c6016e1649b305854d3c3aa487a09a23da766cf",
+      "baseDirty": true,
+      "notes": "Changed: .github/workflows/ci.yml (only file this phase; +6 lines). Two steps added to the EXISTING localstack job, between \"pnpm test:integration\" and the \"LocalStack logs\"/\"Stop LocalStack\" steps: (1) \"Install Chromium for the browser proof\" running pnpm --filter @featuresync/dashboard exec playwright install --with-deps chromium, so the browser matches that package own Playwright and lands after pnpm install; (2) \"Browser proof (pnpm --filter @featuresync/dashboard test:e2e)\" with step-level env PLAYWRIGHT_CHANNEL: (empty string) and nothing else - every AWS_* value comes from the job-level env untouched. No third job, no continue-on-error, no if: on either new step, no || true. INVOCATION FORM DECIDED: the filtered dashboard call, not a root alias, so packages/dashboard/package.json needed no edit and was left alone (filesAffected entry 2 unused - the changes entry offered both forms and asked for one). Verified locally: the workflow parses (PyYAML) with the two new steps at index 7 and 8, both between the integration step (6) and LocalStack logs (9, if: failure(), job-scoped so it covers these) / Stop LocalStack (10, if: always()); PLAYWRIGHT_CHANNEL parses as an empty string, and playwright.config.ts reads it with ?? so empty selects bundled Chromium. Ran the exact CI commands: playwright install chromium exit 0, then PLAYWRIGHT_CHANNEL= pnpm --filter @featuresync/dashboard test:e2e exit 0 with 10/10 on bundled Chromium. Non-skippability proven: with pointer.version deliberately asserted as 99, the same CI=true invocation exited 1; the spec was then restored byte-identical (cmp). Full gates left to VERIFY. Already dirty at start (not this phase): docs/roadmaps/featuresync/*.md, archive/, horizons/horizon-19-*, packages/dashboard/integration/dashboard-segments.localstack.test.ts, packages/dashboard/playwright.config.ts, packages/dashboard/e2e/support/localstack-fixtures.ts, packages/dashboard/e2e/segment-upload-rollout.spec.ts, packages/dashboard/test/support/seed-snapshot.ts.",
+      "unplannedFiles": []
+    }
+  ]
+}
