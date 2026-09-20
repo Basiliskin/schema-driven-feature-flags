@@ -1,12 +1,17 @@
 import type { FlagDefinitionView } from '../../application/browse-environment.js';
 import { environmentPath, escapeHtml } from './escape.js';
 import { renderRolloutForms } from './rollout-form.js';
+import { renderSegmentAttachForm } from './segment-attach-form.js';
 
 export interface EditDraft {
   readonly key: string;
   readonly enabled?: boolean;
   readonly defaultJson?: string;
   readonly rulesJson?: string;
+  readonly segmentKey?: string;
+  readonly memberAttribute?: string;
+  /** The attached value exactly as typed, so a rejected submission re-renders it rather than its decoded form. */
+  readonly segmentValue?: string;
   readonly message: string;
   readonly issues: readonly string[];
 }
@@ -15,6 +20,8 @@ export interface EditContext {
   readonly environment: string;
   readonly baseVersion: number;
   readonly draft?: EditDraft;
+  /** Segment Keys this snapshot already references, offered as suggestions by the attach form. */
+  readonly segmentKeys?: readonly string[];
 }
 
 export const renderDraftError = (draft: { readonly message: string; readonly issues: readonly string[] }): string => {
@@ -65,5 +72,11 @@ ${flag.type === 'config' ? renderDefaultControl(flag, draft) : ''}
 ${renderRulesControl(flag, draft)}
 </form>
 ${renderRolloutForms(flag, action, baseVersionInput(context))}
+${renderSegmentAttachForm(flag, {
+    action,
+    baseVersionInput: baseVersionInput(context),
+    segmentKeys: context.segmentKeys ?? [],
+    ...(draft === undefined ? {} : { draft }),
+  })}
 ${renderDeleteControl(flag, action, context)}`;
 };

@@ -28,7 +28,7 @@
 - 2026-09-19 | horizon 15 | Does LocalStack handle many concurrent IfNoneMatch pointer GETs like real S3, or must tests run them serially?
 - 2026-09-19 | horizon 15 | Should a push-triggered snapshot re-read also re-check segment pointers?
 - 2026-09-19 | horizon 15 | After a segment fails to load, is it retried every tick or only when its pointer ETag changes?
-- 2026-09-19 | horizon 14 | dashboard LocalStack edit-conflict tests (sequential + concurrent same-base edits) return 200 instead of 422; fails identically at commit c0c62ee, so pre-existing — needs its own fix. — see horizon-18 roadmap.md
+- 2026-09-19 | horizon 14 | 'dashboard LocalStack edit-conflict tests return 200 instead of 422' — resolved 2026-09-20 horizon 20: horizon 16 fixed the TESTS, not the publisher; pnpm test:integration passes 13/13 on nine runs
 - 2026-09-20 | horizon 17 | Do operators need a Segment list with member count/createdAt, or are referenced keys plus the pointer version enough?
 - 2026-09-20 | horizon 17 | Does a 100k-member (~25 MiB) upload via FileReader and the 32 MiB urlencoded route fit node:http memory/latency limits?
 - 2026-09-20 | horizon 17 | Does the horizon-16 concurrent-replay 200+422 race also hit setRollout/removeRollout edits?
@@ -52,3 +52,14 @@
 - 2026-09-20 | horizon 19 | At what CSV size does the FileReader + urlencoded path actually degrade (memory, latency, the 32 MiB server cap), and is the failure mode a clear error or a silent hang?
 - 2026-09-20 | horizon 19 | Are orphaned segment version objects from a lost pointer IfMatch race actually accumulating in practice, and does anything (SDK read, segment list page, cost) care?
 - 2026-09-20 | horizon 19 | Is there any remaining dashboard behaviour that exists only in browser-executed code and has neither integration nor browser coverage?
+- 2026-09-20 | horizon 20 | Is any other open blockers.md entry — beyond the horizon-14 one retired this horizon — also already fixed or already answered in the repo, and how many of the ~30 open entries survive — see horizon-20 roadmap.md
+- 2026-09-20 | horizon 20 | Does the pointer-read timing window also occur on the segment write path (s3-segment-publisher.ts) and on rollback/publish-from-pasted-JSON, or is it unique to the flag-edit replayOnLatest path?
+- 2026-09-20 | horizon 20 | Is the orphaned snapshot/segment object left behind when the pointer IfMatch PUT loses actually accumulating in any real or LocalStack bucket, and does anything (SDK read, segment — see horizon-20 roadmap.md
+- 2026-09-20 | horizon 20 | Does the field-granular replay rule behave correctly for setRollout/removeRollout edits specifically — i.e. do two operators editing different rules of the SAME flag both land, and is — see horizon-20 roadmap.md
+- 2026-09-20 | horizon 20 | Can the browser e2e suite be moved off the in-memory InMemoryEnvironment fake onto localstack-fixtures without a rewrite, and what would that cost?
+- 2026-09-20 | horizon 20 | How much logic now lives in app.js, which is permanently outside the 100% coverage include glob, and what is the project's standing rule for when that logic must move into a covered .ts module?
+- 2026-09-20 | horizon 20 | What is the localstack CI job's actual wall-clock runtime since the Chromium install and browser suite were added, and does retries:0 remain tenable at that runtime and failure surface?
+- 2026-09-20 | horizon 21 | A hand-typed Member Attribute that does not match the one the segment was uploaded with yields a rule matching nobody, and nothing detects it. Is a memberAttribute-only read port — see horizon-21 roadmap.md
+- 2026-09-20 | horizon 21 | A segment created but not yet referenced by any flag rule appears in no listing; is the on-page note enough, or does an unreferenced-segment list need a storage mechanism that does not require bucket listing?
+- 2026-09-20 | horizon 21 | Does detach-by-rule-index stay correct in practice once operators reorder or hand-edit rules between render and submit?
+- 2026-09-20 | horizon 21 | EDIT_PARSERS is a plain object keyed by the untrusted form field, so field=toString answers 400 with an undefined message instead of 422 — fix with Object.create(null) or a hasOwn — see horizon-21 roadmap.md

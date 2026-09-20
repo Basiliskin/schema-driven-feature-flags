@@ -1,0 +1,23 @@
+.segment-attach > summary {
+  cursor: pointer;
+}
+
+.segment-attach .muted {
+  margin: 0.25rem 0 0;
+}
+
+.rule-segments {
+  list-style: none;
+  padding: 0;
+}
+
+.rule-segment {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.badge-segment {
+  background: var(--surface-muted);
+}

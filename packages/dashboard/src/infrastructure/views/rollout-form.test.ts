@@ -102,6 +102,55 @@ describe('renderRolloutForms', () => {
   });
 });
 
+const SEGMENT_RULE_25 = {
+  when: { userId: { inSegment: 'beta-testers' } },
+  rollout: { percentage: 25, bucketBy: 'userId', salt: 'launch' },
+  enabled: true,
+};
+const SEGMENT_RULE_FULL = { when: { userId: { inSegment: 'vips' } }, enabled: true };
+
+describe('the attached segments of a flag', () => {
+  it('lists every attached segment with its own percentage', () => {
+    const html = render([SEGMENT_RULE_25, SEGMENT_RULE_FULL]);
+    expect(html).toContain('<code>beta-testers</code>');
+    expect(html).toContain('25% of members');
+    expect(html).toContain('<code>vips</code>');
+    expect(html).toContain('100% of members');
+  });
+
+  it('gives each attached segment its own Detach form carrying that rule’s index', () => {
+    const html = render([SEGMENT_RULE_25, SEGMENT_RULE_FULL]);
+    const detachForms = html.split('value="detachSegment"');
+    expect(detachForms).toHaveLength(3);
+    expect(detachForms[0]).toContain('name="ruleIndex" value="0"');
+    expect(detachForms[1]).toContain('name="ruleIndex" value="1"');
+  });
+
+  it('indexes a Detach against the full rules array, not the segment rules alone', () => {
+    const html = render([PLAIN_RULE, SEGMENT_RULE_FULL]);
+    const detach = html.slice(0, html.indexOf('value="detachSegment"'));
+    expect(detach.lastIndexOf('name="ruleIndex" value="1"')).toBeGreaterThan(detach.lastIndexOf('name="ruleIndex" value="0"'));
+  });
+
+  it('keeps Detach out of the rollout form, so it cannot also save a percentage', () => {
+    const html = render([SEGMENT_RULE_25]);
+    const detachForm = html.slice(html.lastIndexOf('<form', html.indexOf('value="detachSegment"')), html.indexOf('value="detachSegment"'));
+    expect(detachForm).not.toContain('name="percentage"');
+    expect(detachForm).toContain('name="baseVersion" value="7"');
+  });
+
+  it('offers the percentage input and the Detach button on one row under the same index', () => {
+    const row = render([PLAIN_RULE, SEGMENT_RULE_25]).split('<li class="rule-rollout">')[2] ?? '';
+    expect(row).toContain('value="detachSegment"');
+    expect(row.match(/name="ruleIndex" value="1"/g)).toHaveLength(2);
+    expect(row).not.toContain('value="0"');
+  });
+
+  it('offers no Detach for a rule that targets no segment', () => {
+    expect(render([PLAIN_RULE])).not.toContain('detachSegment');
+  });
+});
+
 describe('the flag editor', () => {
   it('places the rollout forms outside the enabled/rules form, since forms cannot nest', () => {
     const html = renderFeatureEditForm(flagWith([ROLLED_OUT_RULE]), CONTEXT);

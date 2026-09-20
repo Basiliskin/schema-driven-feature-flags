@@ -1,0 +1,131 @@
+{
+  "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-20-edit-conflict-docs-characterization-roadmap.json",
+  "roadmapTask": "Planning Horizon 20 of FeatureSync: make the dashboard's concurrent-edit behaviour, its documentation, and the project's open-problem list agree — document the field-granular replay rule, pin both branches of the Current Pointer read timing window with characterization tests, mark the tolerant integration assertion correct-by-design, and retire the stale horizon-14 blocker. No behavioural change to product code.",
+  "createdAt": "2026-09-20T13:08:19Z",
+  "updatedAt": "2026-09-20T13:39:33Z",
+  "roadmapRevision": 0,
+  "phases": [
+    {
+      "phaseId": "document-field-granular-replay-rule",
+      "status": "done",
+      "attempts": 1,
+      "baseRef": "3eb42bbfb617c1ceb3998c890d285fea5367a1be",
+      "baseDirty": true,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-20T13:08:19Z",
+      "notes": "Changed: packages/dashboard/src/domain/flag-edit.ts (comment-only, 21 added / 2 removed comment lines above canReplayEdit), docs/roadmaps/featuresync/decisions.md (one appended rule line, 217 chars). No behaviour, signature or caller change; git diff of flag-edit.ts contains no non-comment lines. NOTE FOR VERIFY: rubric branch-coverage-of-doc-comment passCriteria #4 says the create branch checks the key is absent in the LATEST snapshot; the code checks the BASE (!Object.hasOwn(before, edit.key)). The comment documents the code, per the phase goal, and says so explicitly — see amendment. | VERIFY: pnpm verify exit 0, no test file modified. Graded 9/10/8/9/10, overallPass true, no 10->9 demotions (both 10s named an earned above-the-bar clause). Grader independently confirmed in source that the create branch tests the BASE snapshot, so rubric passCriteria #4 of branch-coverage-of-doc-comment misdescribes the code; it scored on the ruleStatement and did not penalize the comment for documenting the code accurately. The recorded amendment stands.",
+      "unplannedFiles": [],
+      "amendments": [
+        {
+          "at": "2026-09-20T13:09:11Z",
+          "by": "execute",
+          "reason": "The changes bullet said create replay requires the key to \"still be absent\" without naming the snapshot, and the rubric reads that as the latest snapshot. canReplayEdit actually tests the BASE snapshot (!Object.hasOwn(before, edit.key)), leaving FEATURE_EXISTS on re-application to catch a key taken meanwhile. The phase goal is to document what the code does, so the bullet is made explicit rather than the comment made wrong.",
+          "grounding": "packages/dashboard/src/domain/flag-edit.ts, canReplayEdit line: `if (edit.kind === create) return !Object.hasOwn(before, edit.key);` — before is featuresIn(baseText).",
+          "before": {
+            "changes": [
+              "create -> the key must still be absent"
+            ]
+          },
+          "after": {
+            "changes": [
+              "create -> the key must have been absent in the BASE snapshot; the latest is not checked, and re-applying the edit reports FEATURE_EXISTS if someone else took the key meanwhile"
+            ]
+          }
+        }
+      ],
+      "completedAt": "2026-09-20T13:31:11Z",
+      "gateRun": "pnpm verify (core/nestjs/aws/cli/dashboard builds -> pnpm typecheck -> eslint --max-warnings=0 -> vitest run --coverage at 100% threshold): exit 0, pass",
+      "gradeResult": {
+        "phaseId": "document-field-granular-replay-rule",
+        "dimensionScores": [
+          {
+            "dimensionId": "branch-coverage-of-doc-comment",
+            "score": 9,
+            "pass": true,
+            "evidence": "Comment covers every return path in order: featuresIn undefined for either snapshot (parse failure or non-object features map), create short-circuit, non-object from/to (deleted-meanwhile), touched==='all' whole-entry compare, and per-field compare; field lists match touchedFields exactly and it names JSON.stringify string equality with the reordered-rules caveat. On the flagged tension: confirmed in source that the create branch checks only the BASE snapshot, so passCriteria #4 misdescribes the code; scored on the ruleStatement (no documented branch wrong, no early return missing) rather than penalizing the comment for refusing to state something false."
+          },
+          {
+            "dimensionId": "reader-consequence-stated",
+            "score": 10,
+            "pass": true,
+            "evidence": "Beyond stating both outcomes, the closing paragraph names the layering chain explicitly - the function returns a boolean and knows nothing about transport, a false result leads the calling use case to reject and the HTTP layer renders 422 - attributing the 422 to a named other layer rather than merely avoiding the misattribution, and pairs it with the positive branch."
+          },
+          {
+            "dimensionId": "decisions-line-supersedes-old-wording",
+            "score": 8,
+            "pass": true,
+            "evidence": "New decisions.md line uses field-granular wording, explicitly supersedes horizon 16's quoted 'edited feature is unchanged', matches the surrounding date|horizon|rule format, and the horizon-16 line is left intact. Short of 10 because the authority reference is the bare basename 'see flag-edit.ts', not the full path passCriteria #3 asks for."
+          },
+          {
+            "dimensionId": "domain-layer-purity",
+            "score": 9,
+            "pass": true,
+            "evidence": "Diff of flag-edit.ts is 21 added / 2 removed lines entirely inside the block comment; no statement, signature or import changed, imports remain the single @featuresync/core line, and 422 appears only as what the HTTP layer renders. Not a 10: the dimension's 10 bar (publisher/S3 framing as caller behaviour) is only partly exercised."
+          },
+          {
+            "dimensionId": "no-caller-or-signature-drift",
+            "score": 10,
+            "pass": true,
+            "evidence": "git diff --stat is exactly the two declared files; canReplayEdit's parameter list and boolean return are byte-identical. What a 9 lacks: pnpm verify (build, typecheck, lint, vitest at a 100% coverage threshold) passed exit 0 with zero test files touched and no coverage-ignore pragma, so the untouched-behaviour claim is machine-proven rather than inferred from the diff."
+          }
+        ],
+        "overallPass": true
+      }
+    },
+    {
+      "phaseId": "characterize-pointer-read-timing-window",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-20T13:32:52Z",
+      "baseRef": "3eb42bbfb617c1ceb3998c890d285fea5367a1be",
+      "baseDirty": true,
+      "notes": "Changed 4 files. packages/dashboard/test/application/edit-feature.test.ts: new describe group pinning both branches of the Current Pointer read timing window via a hand-built test-local ports object (racedPorts) - fresh read asserts success, expectedCurrentVersion=5 on the replayed publish, replayed features, publish called exactly twice; stale read asserts EDIT_CONFLICT(4) with conflict.since=4, invalidInput undefined (so 422 not 400), publish called exactly twice. packages/dashboard/integration/dashboard.localstack.test.ts: comment-only above the tolerant statuses assertion (assertion itself untouched, no eslint-disable). blockers.md: horizon-14 line marked resolved in place with evidence. discoveries.md: 4 one-fact entries. NOT CHANGED: packages/dashboard/src/application/edit-feature.ts - git diff vs baseRef is empty, despite being listed in filesAffected as the unit under test. Mutation check for rubric fresh-read-branch-forced passCriteria #5: temporarily replacing the replayOnLatest call with `return outcome` made both new tests fail (6 failed / 36 passed); edit-feature.ts was restored byte-identical and re-verified with an empty diff. Dashboard unit file runs 42 passed. Full pnpm verify not run - that is VERIFY step 4. | VERIFY: pnpm verify (5 package builds -> tsc typecheck -> eslint --max-warnings=0 -> vitest run --coverage at 100% thresholds) exit 0, pass. Disk reconciled against the ledger summary: git diff vs baseRef matches the reported files and edit-feature.ts diff is empty as claimed. Graded 10/9/9/9/9/9, overallPass true; no 10->9 demotions (the single 10 named an earned above-the-bar clause: the merged-snapshot assertion plus the EDIT_REPLAYED(5) message suffix). Grader independently read the source rather than trusting the diff. Compensation is non-empty and NOT invoked (not needed): to invoke, restore the horizon-14 blocker line verbatim via `git show 3eb42bb:docs/roadmaps/featuresync/blockers.md | grep \"horizon 14\"` and replace line 31 of blockers.md with it. Note: the orchestrator ran routine 240-char compaction on blockers.md and discoveries.md during this run, truncating 3 unrelated lines; it did not touch the horizon-14 entry or the 4 horizon-20 discovery entries.",
+      "unplannedFiles": [],
+      "completedAt": "2026-09-20T13:39:33Z",
+      "gateRun": "pnpm verify (core/nestjs/aws/cli/dashboard builds -> pnpm typecheck -> eslint --max-warnings=0 -> vitest run --coverage at 100% threshold): exit 0, pass",
+      "gradeResult": {
+        "phaseId": "characterize-pointer-read-timing-window",
+        "dimensionScores": [
+          {
+            "dimensionId": "fresh-read-branch-forced",
+            "score": 10,
+            "pass": true,
+            "evidence": "Fresh-read test: first publish rejects with awsError('S3PublishError','CONFLICT'); readCurrentVersion returns 5 and fetchSnapshotText(5) returns the winner's text. Asserts outcome {kind:'success', version:6, message ending EDIT_REPLAYED(5)}, publish.mock.calls[1] options {expectedCurrentVersion:5}, publish called exactly twice. Above a 9: it also asserts the second publish's snapshot.features carries BOTH the winner's checkout-limits edit and the replayed dark-mode toggle, and pins the EDIT_REPLAYED(5) suffix that only replayOnLatest's success branch appends — so removing the replay fails loudly on outcome, message and merged snapshot."
+          },
+          {
+            "dimensionId": "stale-read-branch-forced",
+            "score": 9,
+            "pass": true,
+            "evidence": "Stale-read test keeps readCurrentVersion at 4 and fetchSnapshotText on the base text; asserts outcome {kind:'failure', message EDIT_CONFLICT(4), issues:[], conflict:{since:4}}, asserts invalidInput is undefined (the 422-vs-400 discriminator), and asserts publish called exactly twice as the no-loop guarantee. Synchronous fakes, no timers or sleeps. Meets the 10 bar's content; nothing observable exceeds it."
+          },
+          {
+            "dimensionId": "non-tightening-comment",
+            "score": 9,
+            "pass": true,
+            "evidence": "dashboard.localstack.test.ts L255-261, immediately above expect(statuses).toContain(200): opens 'Do NOT narrow this to [200, 200]', names both branches, lists all three invariants, gives the retries:0 flake reason, and names packages/dashboard/test/application/edit-feature.test.ts. Assertion byte-unchanged, no eslint-disable. Off 10: vitest.integration.config.ts sets no explicit retries key, so retries:0 is the default rather than a locatable setting."
+          },
+          {
+            "dimensionId": "product-code-unchanged",
+            "score": 9,
+            "pass": true,
+            "evidence": "git diff vs 3eb42bb for packages/dashboard/src/application/edit-feature.ts is empty; no new export added for testability — the tests call the public editFeature with an inline EditFeaturePorts literal built in the test-local racedPorts. The lost race uses a local awsError helper (plain Error with name/reason), not an import from packages/aws or src/infrastructure; the file's only @featuresync/aws import is a pre-existing type-only NotifyErrorHandler. pnpm verify exits 0 with no coverage-ignore pragma."
+          },
+          {
+            "dimensionId": "blocker-retired-with-named-evidence",
+            "score": 9,
+            "pass": true,
+            "evidence": "blockers.md L31 marks the 2026-09-19 horizon-14 line resolved with a date, quotes the original wording, attributes the fix to the horizon-16 test correction rather than the publisher, cites 13/13 across nine runs, and names pnpm test:integration as the re-verification command. Off 10: names the horizon but no commit hash."
+          },
+          {
+            "dimensionId": "discovery-entry-accuracy-and-brevity",
+            "score": 9,
+            "pass": true,
+            "evidence": "discoveries.md adds exactly four one-fact entries, all <=240 chars: timing-window-not-lost-update; invariants hold in both branches; not operator-reachable in the browser (explicitly noting the in-memory e2e fixtures have no true concurrency, so the claim rests on reasoning); both branches pinned in packages/dashboard/test/application/edit-feature.test.ts. Wording is 'characterize it, do not fix it' — no claim the race was eliminated."
+          }
+        ],
+        "overallPass": true
+      }
+    }
+  ]
+}

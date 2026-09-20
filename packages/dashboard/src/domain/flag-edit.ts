@@ -1,4 +1,10 @@
-import { FEATURE_KEY_PATTERN, parseSnapshot, type Result, type ValidationIssue } from '@featuresync/core';
+import {
+  FEATURE_KEY_PATTERN,
+  parseSnapshot,
+  segmentKeySchema,
+  type Result,
+  type ValidationIssue,
+} from '@featuresync/core';
 
 export type FlagType = 'boolean' | 'config';
 
@@ -22,7 +28,16 @@ export type FlagEdit =
       readonly bucketBy: string;
       readonly salt: string;
     }
-  | { readonly kind: 'removeRollout'; readonly key: string; readonly ruleIndex: number };
+  | { readonly kind: 'removeRollout'; readonly key: string; readonly ruleIndex: number }
+  | {
+      readonly kind: 'attachSegment';
+      readonly key: string;
+      readonly segmentKey: string;
+      readonly memberAttribute: string;
+      /** Already decoded by the caller; used only when the flag is config-typed. */
+      readonly value?: unknown;
+    }
+  | { readonly kind: 'detachSegment'; readonly key: string; readonly ruleIndex: number };
 
 /** Authorship for the edited snapshot. The publisher stamps `version`, `previousVersion` and `createdAt`. */
 export interface FlagEditMeta {
@@ -39,6 +54,8 @@ export type FlagEditFailure =
   | { readonly kind: 'INVALID_KEY'; readonly key: string }
   | { readonly kind: 'INVALID_RULE_INDEX'; readonly key: string; readonly ruleIndex: number }
   | { readonly kind: 'INVALID_PERCENTAGE'; readonly percentage: number }
+  | { readonly kind: 'INVALID_SEGMENT_KEY'; readonly segmentKey: string }
+  | { readonly kind: 'SEGMENT_NEEDS_SCHEMA_VERSION_2'; readonly key: string }
   | { readonly kind: 'INVALID_SNAPSHOT'; readonly issues: readonly string[] };
 
 type JsonObject = Record<string, unknown>;
@@ -52,6 +69,9 @@ export function applyFlagEdit(
   meta: FlagEditMeta,
 ): Result<JsonObject, FlagEditFailure> {
   const base: unknown = JSON.parse(rawSnapshotText);
+  if (edit.kind === 'attachSegment' && isObject(base) && base.schemaVersion === 1) {
+    return { ok: false, error: { kind: 'SEGMENT_NEEDS_SCHEMA_VERSION_2', key: edit.key } };
+  }
   const features = isObject(base) && isObject(base.features) ? base.features : {};
   const nextFeatures = editFeatures(features, edit);
   if (!nextFeatures.ok) return nextFeatures;
@@ -105,6 +125,8 @@ function editFeature(
     return rules.ok ? { ok: true, value: { ...feature, rules: rules.value } } : rules;
   }
   if (edit.kind === 'setRollout' || edit.kind === 'removeRollout') return editRollout(feature, edit);
+  if (edit.kind === 'attachSegment') return attachSegment(feature, edit);
+  if (edit.kind === 'detachSegment') return detachSegment(feature, edit);
   if (feature.type === 'boolean') return { ok: false, error: { kind: 'DEFAULT_NOT_EDITABLE', key: edit.key } };
   const defaultValue = parseJson(edit.defaultJson, 'INVALID_DEFAULT_JSON');
   return defaultValue.ok ? { ok: true, value: { ...feature, default: defaultValue.value } } : defaultValue;
@@ -125,19 +147,9 @@ function editRollout(
     }
   }
 
-  const rules = feature.rules;
-  if (
-    !Array.isArray(rules) ||
-    !Number.isInteger(edit.ruleIndex) ||
-    edit.ruleIndex < 0 ||
-    edit.ruleIndex >= rules.length
-  ) {
-    return { ok: false, error: { kind: 'INVALID_RULE_INDEX', key: edit.key, ruleIndex: edit.ruleIndex } };
-  }
-  const rule: unknown = rules[edit.ruleIndex];
-  if (!isObject(rule)) {
-    return { ok: false, error: { kind: 'INVALID_RULE_INDEX', key: edit.key, ruleIndex: edit.ruleIndex } };
-  }
+  const addressed = addressRule(feature, edit);
+  if (!addressed.ok) return addressed;
+  const { rules, rule } = addressed.value;
 
   let nextRule: JsonObject;
   if (edit.kind === 'removeRollout') {
@@ -147,9 +159,61 @@ function editRollout(
     nextRule = { ...rule, rollout: { percentage, bucketBy, salt } };
   }
 
-  const nextRules = [...(rules as unknown[])];
+  const nextRules = [...rules];
   nextRules[edit.ruleIndex] = nextRule;
   return { ok: true, value: { ...feature, rules: nextRules } };
+}
+
+interface AddressedRule {
+  readonly rules: readonly unknown[];
+  readonly rule: JsonObject;
+}
+
+/** The single index guard shared by every edit that addresses one existing rule by position. */
+function addressRule(
+  feature: JsonObject,
+  edit: { readonly key: string; readonly ruleIndex: number },
+): Result<AddressedRule, FlagEditFailure> {
+  const invalid: Result<AddressedRule, FlagEditFailure> = {
+    ok: false,
+    error: { kind: 'INVALID_RULE_INDEX', key: edit.key, ruleIndex: edit.ruleIndex },
+  };
+  const rules = feature.rules;
+  if (
+    !Array.isArray(rules) ||
+    !Number.isInteger(edit.ruleIndex) ||
+    edit.ruleIndex < 0 ||
+    edit.ruleIndex >= rules.length
+  ) {
+    return invalid;
+  }
+  const rule: unknown = rules[edit.ruleIndex];
+  return isObject(rule) ? { ok: true, value: { rules: rules as unknown[], rule } } : invalid;
+}
+
+function attachSegment(
+  feature: JsonObject,
+  edit: Extract<FlagEdit, { kind: 'attachSegment' }>,
+): Result<JsonObject, FlagEditFailure> {
+  if (!segmentKeySchema.safeParse(edit.segmentKey).success) {
+    return { ok: false, error: { kind: 'INVALID_SEGMENT_KEY', segmentKey: edit.segmentKey } };
+  }
+  const when = { [edit.memberAttribute]: { inSegment: edit.segmentKey } };
+  const rule = feature.type === 'config' ? { when, value: edit.value ?? null } : { when, enabled: true };
+  const rules = Array.isArray(feature.rules) ? (feature.rules as unknown[]) : [];
+  return { ok: true, value: { ...feature, rules: [...rules, rule] } };
+}
+
+function detachSegment(
+  feature: JsonObject,
+  edit: Extract<FlagEdit, { kind: 'detachSegment' }>,
+): Result<JsonObject, FlagEditFailure> {
+  const addressed = addressRule(feature, edit);
+  if (!addressed.ok) return addressed;
+  return {
+    ok: true,
+    value: { ...feature, rules: addressed.value.rules.filter((_, index) => index !== edit.ruleIndex) },
+  };
 }
 
 function parseJson(
@@ -176,6 +240,8 @@ const touchedFields = (edit: Exclude<FlagEdit, { kind: 'create' }>): readonly st
     case 'setRules':
     case 'setRollout':
     case 'removeRollout':
+    case 'attachSegment':
+    case 'detachSegment':
       return ['rules'];
     case 'delete':
       return 'all';
@@ -195,8 +261,27 @@ const sameJson = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON
 
 /**
  * Whether an edit made against `baseText` can be replayed on `latestText` without overriding anything that
- * changed in between: true when nothing the edit touches differs between the two. A create only needs the
- * key to still be free in both, and re-applying it reports FEATURE_EXISTS if someone else took it.
+ * changed in between. The comparison is **field-granular, not flag-granular**: only the fields this edit
+ * writes are compared, so two edits to the SAME flag touching DIFFERENT fields both land by design. This
+ * supersedes the looser "replay when the edited feature is unchanged" wording recorded at horizon 16.
+ *
+ * Returns false (no replay) when:
+ * - `baseText` or `latestText` does not parse as JSON, or has no object `features` map;
+ * - for a non-create edit, the flag is absent or not an object in either snapshot — the deleted-meanwhile case.
+ *
+ * Otherwise:
+ * - `create` replays when the key was absent in the BASE snapshot. It is deliberately not checked against
+ *   the latest: re-applying the edit is what reports FEATURE_EXISTS if someone else took the key meanwhile.
+ * - every other kind replays when its touched fields are equal between base and latest. Equality is string
+ *   equality of `JSON.stringify` of each field, not an order-insensitive deep compare — a `rules` array
+ *   reordered with the same members counts as changed.
+ *
+ * Touched fields, per `touchedFields`: `enabled` -> ['enabled']; `default` -> ['type', 'default'];
+ * `setRules` / `setRollout` / `removeRollout` / `attachSegment` / `detachSegment` -> ['rules']; `delete` -> the whole flag entry.
+ *
+ * This function returns a boolean and knows nothing about transport. A false result is what leads the
+ * calling use case to reject the stale edit, which the HTTP layer then renders as 422 Edit Conflict; an
+ * edit whose own touched fields did not move is replayed and published instead.
  */
 export function canReplayEdit(baseText: string, latestText: string, edit: FlagEdit): boolean {
   const before = featuresIn(baseText);

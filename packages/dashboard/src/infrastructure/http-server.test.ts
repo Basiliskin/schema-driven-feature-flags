@@ -2,7 +2,14 @@ import { request as httpRequest, type OutgoingHttpHeaders } from 'node:http';
 import { connect } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SnapshotWriter } from '../application/publish-snapshot.js';
-import { isAllowedHost, MAX_BODY_BYTES, startDashboardServer, type DashboardPorts, type RunningDashboard } from './http-server.js';
+import {
+  decodeAttachValue,
+  isAllowedHost,
+  MAX_BODY_BYTES,
+  startDashboardServer,
+  type DashboardPorts,
+  type RunningDashboard,
+} from './http-server.js';
 
 const snapshotText = (features: Record<string, unknown>) =>
   JSON.stringify({
@@ -759,7 +766,7 @@ describe('startDashboardServer', () => {
 
       expect(reply.status).toBe(422);
       expect(reply.body).toContain(
-        'Choose whether to save the enabled flag, the default value or the rules, or to delete the flag.',
+        'Choose one of these actions: setRollout, removeRollout, enabled, default, rules, delete, attachSegment, detachSegment.',
       );
       expect(openWriter).not.toHaveBeenCalled();
     });
@@ -1347,5 +1354,183 @@ describe('rollout edits on POST /env/:env/features/:key', () => {
     const [, replayed] = writer.publish.mock.calls[1] as [string, { features: { checkout: { rules: Record<string, unknown>[] }; other: { enabled: boolean } } }];
     expect(replayed.features.checkout.rules[1]?.rollout).toEqual({ percentage: 30, bucketBy: 'userId', salt: 's' });
     expect(replayed.features.other.enabled).toBe(true);
+  });
+});
+
+describe('decodeAttachValue', () => {
+  it.each([
+    ['a plain word', 'dark', 'dark'],
+    ['a word padded with spaces', '  dark  ', 'dark'],
+    ['empty text', '', ''],
+    ['a version string', '1.2.3', '1.2.3'],
+    ['a leading-zero id', '007', '007'],
+    ['a signed number', '+1', '+1'],
+    ['a number with a trailing dot', '1.', '1.'],
+    ['an integer', '42', 42],
+    ['a negative decimal', '-2.5', -2.5],
+    ['exponent notation', '1e3', 1000],
+    ['true', 'true', true],
+    ['false', 'false', false],
+    ['null', 'null', null],
+    ['a quoted string', '"dark"', 'dark'],
+    ['an object literal', '{"max":3}', { max: 3 }],
+    ['a padded object literal', '  {"max":3}  ', { max: 3 }],
+    ['an array literal', '[1,2]', [1, 2]],
+  ])('reads %s as %j', (_, raw, expected) => {
+    expect(decodeAttachValue(raw)).toEqual({ ok: true, value: expected });
+  });
+
+  it.each([
+    ['a truncated object', '{"max":'],
+    ['a truncated array', '[1,'],
+    ['an unterminated string', '"dark'],
+    ['a padded truncated object', '  {"max":  '],
+  ])('rejects %s', (_, raw) => {
+    expect(decodeAttachValue(raw)).toEqual({ ok: false });
+  });
+});
+
+describe('attaching and detaching segments', () => {
+  const ATTACH_SNAPSHOT = JSON.stringify({
+    schemaVersion: 2,
+    environment: 'production',
+    version: 3,
+    createdAt: '2026-09-19T06:00:00.000Z',
+    createdBy: 'test',
+    previousVersion: null,
+    reason: 'test',
+    features: {
+      checkout: { type: 'boolean', enabled: true, rules: [{ when: { plan: 'free' }, enabled: false }] },
+      theme: { type: 'config', enabled: true, default: 'light', rules: [{ when: { plan: 'free' }, value: 'plain' }] },
+    },
+  });
+
+  const attachFakes = (writer: Partial<SnapshotWriter> = {}) =>
+    fakes({ fetchSnapshotText: () => Promise.resolve(ATTACH_SNAPSHOT) }, writer);
+
+  const publishedRules = (writer: Fakes['writer'], key: string): Record<string, unknown>[] => {
+    const [, snapshot] = writer.publish.mock.calls[0] as [string, { features: Record<string, { rules: Record<string, unknown>[] }> }];
+    return (snapshot.features[key] as { rules: Record<string, unknown>[] }).rules;
+  };
+
+  const ATTACH_FORM = {
+    baseVersion: '3',
+    field: 'attachSegment',
+    segmentKey: 'beta-testers',
+    memberAttribute: 'userId',
+  };
+
+  it('appends a segment rule to a boolean flag, keeping the rules already there', async () => {
+    const { ports, writer } = attachFakes();
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', '/env/production/features/checkout', { body: form(ATTACH_FORM) });
+
+    expect(reply.status).toBe(200);
+    expect(publishedRules(writer, 'checkout')).toEqual([
+      { when: { plan: 'free' }, enabled: false },
+      { when: { userId: { inSegment: 'beta-testers' } }, enabled: true },
+    ]);
+  });
+
+  it.each([
+    ['a plain word', 'dark', 'dark'],
+    ['a number', '42', 42],
+    ['true', 'true', true],
+    ['an object literal', '{"max":3}', { max: 3 }],
+  ])('attaches %s to a config flag as %j', async (_, typed, expected) => {
+    const { ports, writer } = attachFakes();
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', '/env/production/features/theme', {
+      body: form({ ...ATTACH_FORM, value: typed }),
+    });
+
+    expect(reply.status).toBe(200);
+    expect(publishedRules(writer, 'theme')[1]).toEqual({ when: { userId: { inSegment: 'beta-testers' } }, value: expected });
+  });
+
+  it('answers 400 and publishes nothing when the value looks like JSON but does not parse', async () => {
+    const { ports, writer } = attachFakes();
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', '/env/production/features/theme', {
+      body: form({ ...ATTACH_FORM, value: '{"max":' }),
+    });
+
+    expect(reply.status).toBe(400);
+    expect(reply.body).toContain('The value starts like JSON but is not valid JSON');
+    expect(writer.publish).not.toHaveBeenCalled();
+  });
+
+  it('answers 400 for a segment key the core schema rejects', async () => {
+    const { ports, writer } = attachFakes();
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', '/env/production/features/checkout', {
+      body: form({ ...ATTACH_FORM, segmentKey: '-nope' }),
+    });
+
+    expect(reply.status).toBe(400);
+    expect(writer.publish).not.toHaveBeenCalled();
+  });
+
+  it('answers 400 when the attach form carries neither a segment key nor a member attribute', async () => {
+    const { ports, writer } = attachFakes();
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', '/env/production/features/checkout', {
+      body: form({ baseVersion: '3', field: 'attachSegment' }),
+    });
+
+    expect(reply.status).toBe(400);
+    expect(writer.publish).not.toHaveBeenCalled();
+  });
+
+  it('detaches the rule at index 0', async () => {
+    const { ports, writer } = attachFakes();
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', '/env/production/features/checkout', {
+      body: form({ baseVersion: '3', field: 'detachSegment', ruleIndex: '0' }),
+    });
+
+    expect(reply.status).toBe(200);
+    expect(publishedRules(writer, 'checkout')).toEqual([]);
+  });
+
+  it.each([
+    ['an empty index', ''],
+    ['a non-numeric index', 'abc'],
+    ['a trailing-text index', '2abc'],
+    ['a negative index', '-1'],
+    ['a fractional index', '1.5'],
+    ['a leading-zero index', '01'],
+    ['exponent notation', '1e0'],
+    ['a padded index', ' 0 '],
+    ['a signed index', '+0'],
+    ['an index past the last rule', '9'],
+  ])('answers 400 for %s and publishes nothing', async (_, ruleIndex) => {
+    const { ports, writer } = attachFakes();
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', '/env/production/features/checkout', {
+      body: form({ baseVersion: '3', field: 'detachSegment', ruleIndex }),
+    });
+
+    expect(reply.status).toBe(400);
+    expect(writer.publish).not.toHaveBeenCalled();
+  });
+
+  it('rejects a segment edit whose base version is missing, before reading anything', async () => {
+    const { ports, openWriter } = attachFakes();
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', '/env/production/features/checkout', {
+      body: form({ field: 'attachSegment', segmentKey: 'beta-testers', memberAttribute: 'userId' }),
+    });
+
+    expect(reply.status).toBe(422);
+    expect(openWriter).not.toHaveBeenCalled();
   });
 });

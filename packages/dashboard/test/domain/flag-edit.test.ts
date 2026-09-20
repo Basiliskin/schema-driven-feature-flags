@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { parseSnapshot } from '@featuresync/core';
 import { applyFlagEdit, canReplayEdit, type FlagEditMeta } from '../../src/domain/flag-edit.js';
+import { SEED_MEMBER_ATTRIBUTE, SEED_SEGMENT_KEY, seedSnapshotFor } from '../support/seed-snapshot.js';
 
 const baseSnapshot = {
   schemaVersion: 1,
@@ -448,6 +450,150 @@ describe('applyFlagEdit', () => {
         false,
       );
     });
+  });
+});
+
+describe('attachSegment and detachSegment', () => {
+  const betaRule = {
+    when: { [SEED_MEMBER_ATTRIBUTE]: { inSegment: SEED_SEGMENT_KEY } },
+    rollout: { percentage: 25, bucketBy: 'userId', salt: 'beta' },
+    value: { provider: 'adyen' },
+  };
+  const seeded = seedSnapshotFor('production');
+  const segmentSnapshot = {
+    ...seeded,
+    features: {
+      ...seeded.features,
+      checkout: { ...seeded.features.checkout, rules: [betaRule] },
+      'new-dashboard': { type: 'boolean', enabled: true },
+    },
+  };
+  const segmentText = JSON.stringify(segmentSnapshot);
+  const attachVip = {
+    kind: 'attachSegment',
+    key: 'checkout',
+    segmentKey: 'vip',
+    memberAttribute: SEED_MEMBER_ATTRIBUTE,
+    value: { provider: 'braintree' },
+  } as const;
+  const rulesOf = (value: Record<string, unknown>, key: string) =>
+    (features(value)[key]?.rules ?? []) as Record<string, unknown>[];
+
+  it('appends the new segment rule last and leaves an existing segment rule and its rollout intact', () => {
+    const result = applyFlagEdit(segmentText, attachVip, meta);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const rules = rulesOf(result.value, 'checkout');
+    expect(rules).toHaveLength(2);
+    expect(rules[0]).toEqual(betaRule);
+    expect(rules[1]).toEqual({
+      when: { [SEED_MEMBER_ATTRIBUTE]: { inSegment: 'vip' } },
+      value: { provider: 'braintree' },
+    });
+  });
+
+  it('never mutates the caller’s snapshot text or its parsed rules', () => {
+    const before = segmentText;
+    applyFlagEdit(segmentText, attachVip, meta);
+
+    expect(segmentText).toBe(before);
+    expect(rulesOf(JSON.parse(segmentText) as Record<string, unknown>, 'checkout')).toEqual([betaRule]);
+  });
+
+  it('attaches an enabled rule to a boolean flag that has no rules yet', () => {
+    const result = applyFlagEdit(segmentText, { ...attachVip, key: 'new-dashboard' }, meta);
+
+    expect(result.ok && rulesOf(result.value, 'new-dashboard')).toEqual([
+      { when: { [SEED_MEMBER_ATTRIBUTE]: { inSegment: 'vip' } }, enabled: true },
+    ]);
+  });
+
+  it('gives config members null when the edit carries no value', () => {
+    const result = applyFlagEdit(
+      segmentText,
+      { kind: 'attachSegment', key: 'checkout', segmentKey: 'vip', memberAttribute: SEED_MEMBER_ATTRIBUTE },
+      meta,
+    );
+
+    expect(result.ok && rulesOf(result.value, 'checkout')[1]).toEqual({
+      when: { [SEED_MEMBER_ATTRIBUTE]: { inSegment: 'vip' } },
+      value: null,
+    });
+  });
+
+  it.each([
+    ['the config value form', 'checkout'],
+    ['the enabled form', 'new-dashboard'],
+  ])('produces a snapshot core accepts for %s', (_label, key) => {
+    const result = applyFlagEdit(segmentText, { ...attachVip, key }, meta);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(parseSnapshot(result.value).ok).toBe(true);
+  });
+
+  it.each(['', 'not a key', '-leading', 'a'.repeat(65)])('rejects the Segment Key %s', (segmentKey) => {
+    expect(applyFlagEdit(segmentText, { ...attachVip, segmentKey }, meta)).toEqual({
+      ok: false,
+      error: { kind: 'INVALID_SEGMENT_KEY', segmentKey },
+    });
+  });
+
+  it('refuses to attach to a schemaVersion 1 snapshot instead of upgrading it', () => {
+    expect(applyFlagEdit(rawText, { ...attachVip, key: 'new-dashboard' }, meta)).toEqual({
+      ok: false,
+      error: { kind: 'SEGMENT_NEEDS_SCHEMA_VERSION_2', key: 'new-dashboard' },
+    });
+    expect((JSON.parse(rawText) as Record<string, unknown>).schemaVersion).toBe(1);
+  });
+
+  it('removes exactly the addressed rule and leaves the other one intact', () => {
+    const attached = applyFlagEdit(segmentText, attachVip, meta);
+    expect(attached.ok).toBe(true);
+    if (!attached.ok) return;
+    const twoRules = JSON.stringify(attached.value);
+    const vipRule = rulesOf(attached.value, 'checkout')[1];
+
+    const result = applyFlagEdit(twoRules, { kind: 'detachSegment', key: 'checkout', ruleIndex: 0 }, meta);
+
+    expect(result.ok && rulesOf(result.value, 'checkout')).toEqual([vipRule]);
+  });
+
+  it.each([-1, 1.5, 1, Number.NaN])('rejects the detach rule index %s', (ruleIndex) => {
+    expect(applyFlagEdit(segmentText, { kind: 'detachSegment', key: 'checkout', ruleIndex }, meta)).toEqual({
+      ok: false,
+      error: { kind: 'INVALID_RULE_INDEX', key: 'checkout', ruleIndex },
+    });
+  });
+
+  it('rejects a detach against a flag whose rules are missing or not objects', () => {
+    const broken = JSON.stringify({
+      ...segmentSnapshot,
+      features: { ...segmentSnapshot.features, broken: { type: 'boolean', enabled: true, rules: [7] } },
+    });
+
+    expect(applyFlagEdit(broken, { kind: 'detachSegment', key: 'broken', ruleIndex: 0 }, meta)).toEqual({
+      ok: false,
+      error: { kind: 'INVALID_RULE_INDEX', key: 'broken', ruleIndex: 0 },
+    });
+  });
+
+  it('treats both kinds as touching only rules, exactly as setRules does', () => {
+    const latestEnabled = JSON.stringify({
+      ...segmentSnapshot,
+      features: { ...segmentSnapshot.features, checkout: { ...segmentSnapshot.features.checkout, enabled: false } },
+    });
+    const latestRules = JSON.stringify({
+      ...segmentSnapshot,
+      features: { ...segmentSnapshot.features, checkout: { ...segmentSnapshot.features.checkout, rules: [] } },
+    });
+    const detach = { kind: 'detachSegment', key: 'checkout', ruleIndex: 0 } as const;
+
+    expect(canReplayEdit(segmentText, latestEnabled, attachVip)).toBe(true);
+    expect(canReplayEdit(segmentText, latestEnabled, detach)).toBe(true);
+    expect(canReplayEdit(segmentText, latestRules, attachVip)).toBe(false);
+    expect(canReplayEdit(segmentText, latestRules, detach)).toBe(false);
   });
 });
 

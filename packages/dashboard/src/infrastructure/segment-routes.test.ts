@@ -41,6 +41,7 @@ const fakes = (overrides: Partial<DashboardPorts> = {}): Fakes => {
 interface Reply {
   readonly status: number;
   readonly body: string;
+  readonly headers: Record<string, string | string[] | undefined>;
 }
 
 let running: RunningDashboard | undefined;
@@ -70,7 +71,7 @@ const call = (
       const chunks: Buffer[] = [];
       incoming.on('data', (chunk: Buffer) => chunks.push(chunk));
       incoming.on('end', () => {
-        resolve({ status: incoming.statusCode ?? 0, body: Buffer.concat(chunks).toString() });
+        resolve({ status: incoming.statusCode ?? 0, body: Buffer.concat(chunks).toString(), headers: incoming.headers });
       });
     });
     outgoing.on('error', reject);
@@ -325,13 +326,14 @@ describe('the segment list route', () => {
     expect(publishSegment).toHaveBeenCalledTimes(1);
   });
 
-  it('does not accept a POST to the list path', async () => {
+  it('answers 405 with both accepted methods for a method the list path does not take', async () => {
     const { ports, publishSegment } = fakes();
     const dashboard = await start(ports);
 
-    const reply = await call(dashboard, 'POST', LIST_PATH, { body: upload({ csv: 'u1' }) });
+    const reply = await call(dashboard, 'PUT', LIST_PATH, { body: upload({ csv: 'u1' }) });
 
     expect(reply.status).toBe(405);
+    expect(reply.headers.allow).toBe('GET, POST');
     expect(publishSegment).not.toHaveBeenCalled();
   });
 
@@ -339,5 +341,187 @@ describe('the segment list route', () => {
     const dashboard = await start(fakes().ports);
 
     expect((await call(dashboard, 'GET', `${SEGMENT_PATH}/members`)).status).toBe(404);
+  });
+});
+
+interface CreateFakes {
+  readonly ports: DashboardPorts;
+  readonly publishSegment: ReturnType<typeof vi.fn>;
+  readonly readSegmentVersion: ReturnType<typeof vi.fn>;
+}
+
+const createFakes = (overrides: Partial<DashboardPorts> = {}): CreateFakes => {
+  const base = fakes({ readSegmentVersion: () => Promise.resolve(null), ...overrides });
+  return {
+    ...base,
+    ports: { ...base.ports, readCurrentVersion: () => Promise.resolve(1), fetchSnapshotText: () => Promise.resolve(snapshotText([])) },
+  };
+};
+
+const createForm = (fields: Record<string, string>) => upload({ memberAttribute: 'userId', csv: 'u1', ...fields });
+
+describe('creating a segment from the list page', () => {
+  it('publishes a first version for a typed key and reports it on the list page', async () => {
+    const { ports, publishSegment } = createFakes();
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', LIST_PATH, { body: createForm({ key: 'beta', csv: `${MEMBER}\nu2` }) });
+
+    expect(reply.status).toBe(200);
+    expect(reply.body).toContain('Created as version 5.');
+    expect(reply.body).not.toContain(MEMBER);
+    expect(publishSegment).toHaveBeenCalledWith('production', {
+      key: 'beta',
+      memberAttribute: 'userId',
+      members: [MEMBER, 'u2'],
+      expectedCurrentVersion: null,
+    });
+  });
+
+  it('still renders the list on GET', async () => {
+    const dashboard = await start(listFakes(['beta'], () => Promise.resolve(4)));
+
+    const page = await call(dashboard, 'GET', LIST_PATH);
+
+    expect(page.status).toBe(200);
+    expect(page.body).toContain('>beta</a>');
+    expect(page.body).not.toContain('class="notice');
+  });
+
+  it.each(['a.b', 'has space', '', '-leading', 'x'.repeat(65)])('answers 400 for the malformed key %j and publishes nothing', async (key) => {
+    const { ports, publishSegment, readSegmentVersion } = createFakes();
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', LIST_PATH, { body: createForm({ key }) });
+
+    expect(reply.status).toBe(400);
+    expect(reply.body).toContain('not valid');
+    expect(publishSegment).not.toHaveBeenCalled();
+    expect(readSegmentVersion).not.toHaveBeenCalled();
+  });
+
+  it('validates the trimmed key the publisher would store', async () => {
+    const { ports, publishSegment } = createFakes();
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', LIST_PATH, { body: createForm({ key: '  beta  ' }) });
+
+    expect(reply.status).toBe(200);
+    expect(publishSegment.mock.calls[0]?.[1]).toMatchObject({ key: 'beta' });
+  });
+
+  it('puts the typed key and attribute back in the form when the submit is refused, and keeps the CSV out', async () => {
+    const { ports } = createFakes({ readSegmentVersion: () => Promise.resolve(4) });
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', LIST_PATH, {
+      body: createForm({ key: 'beta', memberAttribute: 'accountId', csv: MEMBER }),
+    });
+
+    expect(reply.status).toBe(422);
+    expect(reply.body).toContain('name="key" value="beta"');
+    expect(reply.body).toContain('name="memberAttribute" value="accountId"');
+    expect(reply.body).not.toContain(MEMBER);
+  });
+
+  it('clears the form after a successful create', async () => {
+    const { ports } = createFakes();
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', LIST_PATH, { body: createForm({ key: 'beta', memberAttribute: 'accountId' }) });
+
+    expect(reply.status).toBe(200);
+    expect(reply.body).toContain('name="key" value=""');
+    expect(reply.body).toContain('name="memberAttribute" value="userId"');
+  });
+
+  it('answers 422 without publishing when the key is already published', async () => {
+    const { ports, publishSegment } = createFakes({ readSegmentVersion: () => Promise.resolve(4) });
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', LIST_PATH, { body: createForm({ key: 'beta' }) });
+
+    expect(reply.status).toBe(422);
+    expect(reply.body).toContain('already in use');
+    expect(publishSegment).not.toHaveBeenCalled();
+  });
+
+  it('answers 502 without publishing when the existing-key check cannot be read', async () => {
+    const { ports, publishSegment } = createFakes({ readSegmentVersion: () => Promise.reject(new Error('boom')) });
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', LIST_PATH, { body: createForm({ key: 'beta' }) });
+
+    expect(reply.status).toBe(502);
+    expect(publishSegment).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['EMPTY_FILE', { csv: '' }, 400],
+    ['MALFORMED_ROW', { csv: 'u1\nu2,extra' }, 400],
+    ['HEADER', { memberAttribute: '' }, 400],
+  ] as const)('maps the %s upload failure to %i as the key-bearing POST does', async (_reason, fields, status) => {
+    const { ports, publishSegment } = createFakes();
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', LIST_PATH, { body: createForm({ key: 'beta', ...fields }) });
+
+    expect(reply.status).toBe(status);
+    expect(publishSegment).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['CONFLICT', 422],
+    ['VERSION_EXISTS', 422],
+    ['REQUEST_FAILED', 502],
+  ] as const)('maps a %s publisher rejection to %i', async (reason, status) => {
+    const { ports } = createFakes({ publishSegment: publishRejecting(reason) });
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', LIST_PATH, { body: createForm({ key: 'beta' }) });
+
+    expect(reply.status).toBe(status);
+  });
+
+  it('reads a create body far above the 1 MiB default', async () => {
+    const { ports, publishSegment } = createFakes();
+    const dashboard = await start(ports);
+    // Padding rather than members: the point is the byte count the branch accepts.
+    const padding = 'x'.repeat(MAX_BODY_BYTES * 2);
+
+    const reply = await call(dashboard, 'POST', LIST_PATH, { body: `${createForm({ key: 'beta' })}&pad=${padding}` });
+
+    expect(reply.status).toBe(200);
+    expect(publishSegment).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers 400 for a submission with no key field at all', async () => {
+    const { ports, publishSegment } = createFakes();
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', LIST_PATH, { body: upload({ csv: 'u1' }) });
+
+    expect(reply.status).toBe(400);
+    expect(publishSegment).not.toHaveBeenCalled();
+  });
+
+  it('treats a submission with a key but no member attribute or file as an empty upload', async () => {
+    const { ports, publishSegment } = createFakes();
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', LIST_PATH, { body: 'key=beta' });
+
+    expect(reply.status).toBe(400);
+    expect(publishSegment).not.toHaveBeenCalled();
+  });
+
+  it('refuses a create without the dashboard origin and never calls the port', async () => {
+    const { ports, publishSegment } = createFakes();
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', LIST_PATH, { body: createForm({ key: 'beta' }), sameOrigin: false });
+
+    expect(reply.status).toBe(403);
+    expect(publishSegment).not.toHaveBeenCalled();
   });
 });

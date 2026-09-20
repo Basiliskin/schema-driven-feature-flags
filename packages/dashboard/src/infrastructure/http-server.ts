@@ -118,12 +118,13 @@ const writeStatus = (outcome: WriteOutcome): number => {
 };
 
 const BASE_VERSION_MESSAGE = 'The edit form is out of date; reload the page and redo your edit.';
-const FIELD_MESSAGE = 'Choose whether to save the enabled flag, the default value or the rules, or to delete the flag.';
 const TYPE_MESSAGE = 'Choose whether the new flag is a boolean or a config flag.';
+const ATTACH_VALUE_MESSAGE =
+  'The value starts like JSON but is not valid JSON; correct it, or remove the leading quote or bracket to save it as plain text.';
 
 type EditRequest =
   | { readonly ok: true; readonly baseVersion: number; readonly edit: FlagEdit }
-  | { readonly ok: false; readonly message: string };
+  | { readonly ok: false; readonly message: string; readonly invalidInput?: boolean };
 
 const parseBaseVersion = (fields: URLSearchParams): number | undefined => {
   const baseVersion = fields.get('baseVersion');
@@ -135,37 +136,83 @@ const parseNumber = (value: string | null): number => (value === null || value =
 
 const parseRuleIndex = (fields: URLSearchParams): number => parseNumber(fields.get('ruleIndex'));
 
-const parseFeatureEdit = (key: string, fields: URLSearchParams): FlagEdit | undefined => {
-  switch (fields.get('field')) {
-    case 'setRollout':
-      return {
-        kind: 'setRollout',
-        key,
-        ruleIndex: parseRuleIndex(fields),
-        percentage: parseNumber(fields.get('percentage')),
-        bucketBy: fields.get('bucketBy') ?? '',
-        salt: fields.get('salt') ?? '',
-      };
-    case 'removeRollout':
-      return { kind: 'removeRollout', key, ruleIndex: parseRuleIndex(fields) };
-    case 'enabled':
-      return { kind: 'enabled', key, enabled: fields.has('enabled') };
-    case 'default':
-      return { kind: 'default', key, defaultJson: fields.get('default') ?? '' };
-    case 'rules':
-      return { kind: 'setRules', key, rulesJson: fields.get('rules') ?? '' };
-    case 'delete':
-      return { kind: 'delete', key };
-    default:
-      return undefined;
+// A rule position comes from a hidden field, so anything Number() would stretch into an index -- '01', '1e0', ' 2 ', '+1' -- is a tampered form, not a choice.
+const PLAIN_INDEX_PATTERN = /^(?:0|[1-9]\d*)$/;
+
+const parseDetachIndex = (value: string | null): number =>
+  value !== null && PLAIN_INDEX_PATTERN.test(value) ? Number(value) : Number.NaN;
+
+/** JSON's own number grammar, so a version like 1.2.3 and an id like 007 stay text while 1e3 is a number. */
+const JSON_NUMBER_PATTERN = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
+
+const looksLikeJson = (text: string): boolean =>
+  text.startsWith('{') ||
+  text.startsWith('[') ||
+  text.startsWith('"') ||
+  text === 'true' ||
+  text === 'false' ||
+  text === 'null' ||
+  JSON_NUMBER_PATTERN.test(text);
+
+export type DecodedValue = { readonly ok: true; readonly value: unknown } | { readonly ok: false };
+
+/**
+ * A config flag's attached value as the operator typed it. Text that does not look like JSON is the string
+ * itself, so `dark` needs no quotes; text that does look like JSON must parse, so a truncated object is
+ * reported rather than published as its own source.
+ */
+export const decodeAttachValue = (raw: string): DecodedValue => {
+  const text = raw.trim();
+  if (!looksLikeJson(text)) return { ok: true, value: text };
+  try {
+    return { ok: true, value: JSON.parse(text) as unknown };
+  } catch {
+    return { ok: false };
   }
 };
+
+type EditParse = { readonly ok: true; readonly edit: FlagEdit } | { readonly ok: false; readonly message: string };
+
+const okEdit = (edit: FlagEdit): EditParse => ({ ok: true, edit });
+
+const EDIT_PARSERS: Record<string, (key: string, fields: URLSearchParams) => EditParse> = {
+  setRollout: (key, fields) =>
+    okEdit({
+      kind: 'setRollout',
+      key,
+      ruleIndex: parseRuleIndex(fields),
+      percentage: parseNumber(fields.get('percentage')),
+      bucketBy: fields.get('bucketBy') ?? '',
+      salt: fields.get('salt') ?? '',
+    }),
+  removeRollout: (key, fields) => okEdit({ kind: 'removeRollout', key, ruleIndex: parseRuleIndex(fields) }),
+  enabled: (key, fields) => okEdit({ kind: 'enabled', key, enabled: fields.has('enabled') }),
+  default: (key, fields) => okEdit({ kind: 'default', key, defaultJson: fields.get('default') ?? '' }),
+  rules: (key, fields) => okEdit({ kind: 'setRules', key, rulesJson: fields.get('rules') ?? '' }),
+  delete: (key) => okEdit({ kind: 'delete', key }),
+  attachSegment: (key, fields) => {
+    const value = decodeAttachValue(fields.get('value') ?? '');
+    if (!value.ok) return { ok: false, message: ATTACH_VALUE_MESSAGE };
+    return okEdit({
+      kind: 'attachSegment',
+      key,
+      segmentKey: fields.get('segmentKey') ?? '',
+      memberAttribute: fields.get('memberAttribute') ?? '',
+      value: value.value,
+    });
+  },
+  detachSegment: (key, fields) => okEdit({ kind: 'detachSegment', key, ruleIndex: parseDetachIndex(fields.get('ruleIndex')) }),
+};
+
+const FIELD_MESSAGE = `Choose one of these actions: ${Object.keys(EDIT_PARSERS).join(', ')}.`;
 
 const parseEditForm = (key: string, fields: URLSearchParams): EditRequest => {
   const baseVersion = parseBaseVersion(fields);
   if (baseVersion === undefined) return { ok: false, message: BASE_VERSION_MESSAGE };
-  const edit = parseFeatureEdit(key, fields);
-  return edit === undefined ? { ok: false, message: FIELD_MESSAGE } : { ok: true, baseVersion, edit };
+  const parse = EDIT_PARSERS[fields.get('field') ?? ''];
+  if (parse === undefined) return { ok: false, message: FIELD_MESSAGE };
+  const edit = parse(key, fields);
+  return edit.ok ? { ok: true, baseVersion, edit: edit.edit } : { ok: false, message: edit.message, invalidInput: true };
 };
 
 const isFlagType = (value: string | null): value is FlagType => value === 'boolean' || value === 'config';
@@ -199,11 +246,17 @@ const createDraftOf = (fields: URLSearchParams, message: string, issues: readonl
 const editDraftOf = (key: string, fields: URLSearchParams, message: string, issues: readonly string[]): EditDraft => {
   const defaultJson = fields.get('default');
   const rulesJson = fields.get('rules');
+  const segmentKey = fields.get('segmentKey');
+  const memberAttribute = fields.get('memberAttribute');
+  const segmentValue = fields.get('value');
   return {
     key,
     enabled: fields.has('enabled'),
     ...(defaultJson === null ? {} : { defaultJson }),
     ...(rulesJson === null ? {} : { rulesJson }),
+    ...(segmentKey === null ? {} : { segmentKey }),
+    ...(memberAttribute === null ? {} : { memberAttribute }),
+    ...(segmentValue === null ? {} : { segmentValue }),
     message,
     issues,
   };
@@ -229,7 +282,12 @@ function createDashboardRequestHandler(
       const parsed = parse(fields);
       const outcome: WriteOutcome = parsed.ok
         ? await editFeature(ports, environment, parsed.baseVersion, parsed.edit)
-        : { kind: 'failure', message: parsed.message, issues: [] };
+        : {
+            kind: 'failure',
+            message: parsed.message,
+            issues: [],
+            ...(parsed.invalidInput === true ? { invalidInput: true } : {}),
+          };
       const view = await browseEnvironment(ports, environment);
       const state = {
         notices: outcomeNotices(outcome),
@@ -381,7 +439,7 @@ function createDashboardRequestHandler(
     const route = match(segments, request.method);
     if (route === undefined) throw new HttpError(404, 'There is no page at this address.');
     if (route.method !== request.method) {
-      response.setHeader('allow', route.method);
+      response.setHeader('allow', (route.allow ?? [route.method]).join(', '));
       throw new HttpError(405, 'This address does not accept that request method.');
     }
     if (route.method === 'POST' && !isSameOrigin(request)) {

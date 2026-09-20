@@ -11,8 +11,12 @@ export class HttpError extends Error {
   }
 }
 
+export type HttpMethod = 'GET' | 'POST';
+
 export interface Route {
-  readonly method: 'GET' | 'POST';
+  readonly method: HttpMethod;
+  /** Every method the address accepts, when it accepts more than `method`; drives the 405 Allow header. */
+  readonly allow?: readonly HttpMethod[];
   readonly handle: (request: IncomingMessage, response: ServerResponse, url: URL) => Promise<void> | void;
 }
 

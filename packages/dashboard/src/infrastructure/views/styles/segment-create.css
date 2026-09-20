@@ -1,0 +1,12 @@
+.segment-create h2 {
+  margin-top: 0;
+}
+
+.segment-create input[type='file'] {
+  display: block;
+  margin-top: 0.25rem;
+}
+
+.segment-create .actions {
+  margin-top: 0.75rem;
+}

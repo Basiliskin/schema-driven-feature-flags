@@ -41,3 +41,7 @@
 - 2026-09-20 | horizon 18 | completed | 4 phases (LocalStack segment+rollout proof, referenced segment keys on snapshot contents, segment list use case, Segment List Page); 1 amendment, 0 overrides
 - 2026-09-20 | horizon 19 | planned | 5 phases (shared seed snapshot fixture, Playwright AWS env + trace PII, LocalStack Playwright fixture, browser CSV upload + rollout spec, CI browser step); gate passed on — see horizon-19 roadmap.md
 - 2026-09-20 | horizon 19 | completed | 5 phases (shared seed snapshot fixture, Playwright AWS env + trace PII, LocalStack Playwright fixture, browser CSV upload + rollout spec, CI browser step); 0 amendments, 0 overrides
+- 2026-09-20 | horizon 20 | planned | 2 phases (document the field-granular replay rule; test both outcomes of the pointer-read window); no behaviour change; gate passed after 1 blocker healed, 0 debt
+- 2026-09-20 | horizon 20 | completed | 2 phases (document the field-granular replay rule; test both outcomes of the pointer-read window); 1 amendment, 0 overrides; no behaviour change to product code
+- 2026-09-20 | horizon 21 | planned | 7 phases (schemaVersion-2 first-version template, create-segment POST branch, Create Segment form, attach/detach flag edits, edit outcomes, form parsing with lenient config — see horizon-21 roadmap.md
+- 2026-09-20 | horizon 21 | completed | 7 phases (schemaVersion-2 template, create-segment POST branch, Create Segment form, attach/detach flag edits, edit outcomes, form parsing, Attach form + Detach list); 3 amendments, 0 overrides

@@ -11,6 +11,8 @@ import {
   INVALID_PERCENTAGE_MESSAGE,
   INVALID_RULE_INDEX_MESSAGE,
   INVALID_RULES_JSON_MESSAGE,
+  INVALID_SEGMENT_KEY_MESSAGE,
+  SEGMENT_NEEDS_SCHEMA_VERSION_2_MESSAGE,
   UNKNOWN_FEATURE_MESSAGE,
 } from './error-messages.js';
 import { publishExpecting, type WriteOutcome, type WritePorts } from './publish-snapshot.js';
@@ -35,6 +37,10 @@ const describeEdit = (edit: FlagEdit): string => {
       return `Set ${edit.key} rule ${String(edit.ruleIndex)} rollout to ${String(edit.percentage)}% via dashboard`;
     case 'removeRollout':
       return `Remove ${edit.key} rule ${String(edit.ruleIndex)} rollout via dashboard`;
+    case 'attachSegment':
+      return `Attach segment ${edit.segmentKey} to ${edit.key} via dashboard`;
+    case 'detachSegment':
+      return `Detach ${edit.key} rule ${String(edit.ruleIndex)} via dashboard`;
   }
 };
 
@@ -89,6 +95,19 @@ const editFailure = (failure: FlagEditFailure): WriteOutcome => {
         message: INVALID_PERCENTAGE_MESSAGE,
         issues: [],
         invalidInput: true,
+      };
+    case 'INVALID_SEGMENT_KEY':
+      return {
+        kind: 'failure',
+        message: INVALID_SEGMENT_KEY_MESSAGE(failure.segmentKey),
+        issues: [],
+        invalidInput: true,
+      };
+    case 'SEGMENT_NEEDS_SCHEMA_VERSION_2':
+      return {
+        kind: 'failure',
+        message: SEGMENT_NEEDS_SCHEMA_VERSION_2_MESSAGE(failure.key),
+        issues: [],
       };
     case 'INVALID_SNAPSHOT':
       return {

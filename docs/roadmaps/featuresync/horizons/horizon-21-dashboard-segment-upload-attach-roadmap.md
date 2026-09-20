@@ -1,0 +1,868 @@
+# Horizon 21 — Upload a member set and attach it to a flag
+
+## Executive summary
+
+### 🎯 What are we trying to achieve?
+
+Today the FeatureSync dashboard can evaluate flags against member sets ("segments"), but an operator cannot reach them: the segments page lists only sets some flag rule already mentions, the upload page is reachable only by typing its URL, and pointing a flag at a set means hand-editing raw rules JSON. This horizon makes both actions visible: create and upload a member set from the segments page, and attach or detach a set on a flag with a form. One flag can carry several attached sets, each keeping its own rollout percentage.
+
+### 🧠 Why does this change need to happen?
+
+The capability shipped in pieces across earlier horizons — the CSV parser, the publisher, the evaluation rule, the list page — but nothing ever linked them into a path an operator can walk. The result is a feature that exists in the code and not in the product. A brand-new environment makes it worse: its starting snapshot is stamped at schema version 1, which the shared contract forbids from carrying segment rules at all, so the first attempt to use segments would fail with a validation error.
+
+### At a glance
+
+- **Phases:** 7
+- **Complexity:** Medium — no new ports, no SDK change, but seven files of existing dashboard code gain new branches under a 100% coverage gate
+- **Main risk:** the member attribute is typed by hand on both forms and nothing checks it against the attribute the set was uploaded with, so a typo yields a rule that looks right and matches nobody
+- **Quality target:** every new TypeScript branch covered, ESLint layer boundaries green, and no segment member value ever rendered, echoed or logged
+- **Testing focus:** multi-rule cases (two segments on one flag at different percentages), rule-index correctness for detach, lenient value decoding boundaries, and privacy of member data
+
+## Implementation plan
+
+### Order of work
+
+1. **Change first version template to schemaVersion 2** — can start immediately
+2. **Add Create Segment POST branch to segment routes** — can start immediately
+3. **Add Create Segment form to Segment List Page** — needs Add Create Segment POST branch to segment routes first
+4. **Add attach and detach Segment flag edits** — can start immediately
+5. **Describe attach and detach edit outcomes** — needs Add attach and detach Segment flag edits first
+6. **Parse attach and detach Segment form submissions** — needs Describe attach and detach edit outcomes first
+7. **Add Attach form and attached segment list** — needs Parse attach and detach Segment form submissions first
+
+```mermaid
+graph TD
+  first-version-schema-version-2["Change first version template to schemaVersion 2<br/>(first-version-schema-version-2)"]
+  create-segment-post-route["Add Create Segment POST branch to segment routes<br/>(create-segment-post-route)"]
+  create-segment-form-view["Add Create Segment form to Segment List Page<br/>(create-segment-form-view)"]
+  attach-detach-flag-edits["Add attach and detach Segment flag edits<br/>(attach-detach-flag-edits)"]
+  attach-detach-edit-outcomes["Describe attach and detach edit outcomes<br/>(attach-detach-edit-outcomes)"]
+  attach-detach-edit-parsing["Parse attach and detach Segment form submissions<br/>(attach-detach-edit-parsing)"]
+  attach-detach-form-view["Add Attach form and attached segment list<br/>(attach-detach-form-view)"]
+  create-segment-post-route --> create-segment-form-view
+  attach-detach-flag-edits --> attach-detach-edit-outcomes
+  attach-detach-edit-outcomes --> attach-detach-edit-parsing
+  attach-detach-edit-parsing --> attach-detach-form-view
+```
+
+### Phase 1 — Change first version template to schemaVersion 2
+
+Technical ID: `first-version-schema-version-2` · Snapshot Publishing · interface layer · small blast radius
+
+**Goal** — Make the dashboard's create-first-version form prefill schemaVersion 2 so a brand-new environment can hold segment-membership rules from the start. The create-first-version form on the environment page prefills a schemaVersion 2 snapshot, asserted by a colocated unit test.
+
+**Why** — When an environment has no snapshot yet, the dashboard shows a prefilled JSON template the operator publishes as version 1. That template currently says schemaVersion 1, and the shared snapshot contract rejects any rule that mentions a segment on a schemaVersion 1 snapshot. So every freshly created environment is born unable to use member sets, and the failure only shows up much later as an opaque validation error.
+
+**Changes**
+
+- In environment-page.ts, change firstVersionTemplate so the prefilled document carries schemaVersion 2 instead of 1.
+- Check for any other place in the dashboard that hard-codes a starting schemaVersion (search for 'schemaVersion' under packages/dashboard/src) and change it the same way; do not touch stored snapshots or add any migration or auto-upgrade of existing environments.
+- Update the colocated environment-page.test.ts assertions that pin the template text, and assert the template still parses with core's parseSnapshot.
+- Leave existing schemaVersion 1 environments alone — an operator on an old environment still gets a loud validation failure when attaching a segment, which later phases give a readable message.
+
+**Files / areas**
+
+- `packages/dashboard/src/infrastructure/views/environment-page.ts`
+- `packages/dashboard/src/infrastructure/views/environment-page.test.ts`
+
+**How to verify**
+
+- **Prefilled template says schemaVersion 2** — Open packages/dashboard/src/infrastructure/views/environment-page.ts and confirm the first-version template text contains "schemaVersion": 2
+- **Template is a publishable snapshot** — A test in environment-page.test.ts extracts the template from the rendered page and calls parseSnapshot on it, asserting a success result
+- **No silent upgrade of stored snapshots** — The diff for this phase adds no code that reads a stored snapshot and changes its schemaVersion
+- **Change stays in the interface layer** — Files changed are limited to packages/dashboard/src/infrastructure/views/environment-page.ts and its colocated test
+
+**Done when** — The create-first-version form on the environment page prefills a schemaVersion 2 snapshot, asserted by a colocated unit test. Every check under *How to verify* passes its bar.
+
+**Depends on** — nothing — can start immediately
+
+**Rollback** — Revert the constant; nothing persisted depends on it because each published snapshot stores its own schemaVersion.
+
+<details><summary>Reference — full rubric</summary>
+
+**Prefilled template says schemaVersion 2** (`template-literal-is-v2`, minScore 7)
+
+- Rule: The string the environment page prefills into the create-first-version textarea must carry schemaVersion 2, and no dashboard source file may still hard-code a starting schemaVersion of 1. 8 = template changed and a repo-wide search for schemaVersion under packages/dashboard/src shows no leftover 1; 10 = the test asserts the value by parsing the template, not by substring match, so a reformat cannot fake a pass. minScore is the acceptable bar.
+- Pass criteria:
+  - Open packages/dashboard/src/infrastructure/views/environment-page.ts and confirm the first-version template text contains "schemaVersion": 2
+  - Run: grep -rn 'schemaVersion' packages/dashboard/src — every literal starting value found is 2, not 1
+  - A test JSON.parses the rendered template and asserts the parsed schemaVersion equals 2
+- Failure examples:
+  - The constant is updated but a second copy of the template (a placeholder attribute, a doc comment, or a fallback in another view) still says 1, so the form a fresh environment actually sees is inconsistent
+  - The test asserts the page HTML contains the substring 'schemaVersion' without asserting the number, so a 1 would still pass
+  - The template value becomes the string "2" instead of the number 2
+
+**Template is a publishable snapshot** (`template-parses-as-snapshot`, minScore 7)
+
+- Rule: The edited template must still be a document core accepts, proven by a test that runs it through core's parseSnapshot rather than eyeballed. 8 = a test parses the exact rendered template and asserts success; 10 = it also asserts the parsed result's schemaVersion, so the assertion cannot pass on a lenient parse.
+- Pass criteria:
+  - A test in environment-page.test.ts extracts the template from the rendered page and calls parseSnapshot on it, asserting a success result
+  - The test parses the text actually rendered into the form, not a separately written copy of the JSON
+  - Running the dashboard test suite passes with no snapshot-validation error
+- Failure examples:
+  - The test parses a hand-written literal that matches the old template, so a typo introduced in the real template goes undetected
+  - Bumping the version leaves a field that schemaVersion 2 requires missing or a v1-only field present, and no parse test catches it because only string assertions were updated
+  - JSON.parse is used instead of parseSnapshot, so structural contract errors are invisible
+
+**No silent upgrade of stored snapshots** (`no-migration-of-existing`, minScore 7)
+
+- Rule: This phase touches only the prefilled template for environments with no snapshot; nothing may rewrite, upgrade or coerce an already-stored snapshot's schemaVersion. 8 = the diff contains no write, migration or coercion path touching loaded snapshots; 10 = a test asserts a loaded schemaVersion 1 environment still renders as version 1.
+- Pass criteria:
+  - The diff for this phase adds no code that reads a stored snapshot and changes its schemaVersion
+  - No new migration, upgrade or backfill function appears in packages/dashboard/src
+  - A test loading a schemaVersion 1 snapshot shows the page still reporting schemaVersion 1
+- Failure examples:
+  - A well-meant schemaVersion normalisation is added where the page loads an existing snapshot, silently changing old environments on the next publish
+  - The template default is applied as a fallback for any snapshot whose schemaVersion is falsy, quietly upgrading malformed stored documents
+  - Existing v1 fixtures in other tests are edited to 2 to make the suite green, hiding the behaviour change
+
+**Change stays in the interface layer** (`interface-layer-only`, minScore 7)
+
+- Rule: The deliverable is a view-layer constant; it must not pull snapshot rules into the view or push presentation defaults into domain/application code. 8 = only the view file and its colocated test change and imports stay within what the view already imports; 10 = the version constant has a single named home in the view with no duplicate literal elsewhere.
+- Pass criteria:
+  - Files changed are limited to packages/dashboard/src/infrastructure/views/environment-page.ts and its colocated test
+  - No file under packages/dashboard/src/domain or src/application is modified by this phase
+  - npm run lint passes with no import-boundary error
+- Failure examples:
+  - The starting schemaVersion is moved into a domain or application module 'so it is shared', giving domain code a presentation default
+  - The view begins importing a snapshot-migration helper from infrastructure to compute the default
+  - The literal 2 is duplicated in both the view and a test helper, so the next bump silently diverges
+
+_Healer hint:_ Most likely miss is a second hard-coded schemaVersion 1 elsewhere under packages/dashboard/src or a substring-only assertion — grep for schemaVersion and make the test parse the rendered template with parseSnapshot.
+
+</details>
+
+### Phase 2 — Add Create Segment POST branch to segment routes
+
+Technical ID: `create-segment-post-route` · Segment Publishing · infrastructure layer · medium blast radius
+
+**Goal** — Let the key-less Segment List Page URL /env/<env>/segments accept a POST that carries the Segment Key as a form field and publishes that segment's first version through the existing upload path. matchSegmentRoute handles POST /env/<env>/segments by publishing a first segment version for a form-supplied Segment Key, with unit tests covering every new branch.
+
+**Why** — Today a member-set CSV can only be uploaded at /env/<env>/segments/<key>, a URL that has to be typed by hand because the key sits in the path. A plain HTML form cannot put a typed value into a URL path, so the key-less list URL needs to accept a POST that reads the key out of the submitted form instead.
+
+**Changes**
+
+- In matchSegmentRoute, add a POST branch for the 3-segment path /env/<env>/segments (only GET is matched at that length today), preserving the existing 405-with-Allow response for other methods.
+- Read the form fields key, memberAttribute and csv; validate the key with core's segmentKeySchema.safeParse (the raw pattern constant is not exported from core, so do not import it) and re-render with a 400 notice, publishing nothing, when it fails.
+- Before publishing, call the existing readSegmentVersion port for the typed key; when a pointer already exists, re-render with a 422 notice saying that Segment Key is already in use, instead of letting the publisher surface a raw CONFLICT.
+- Call the existing uploadSegment use case with expectedCurrentVersion null, which already means 'this key does not exist yet', and map its failure reasons to the same 400/422/502 statuses the key-bearing POST already uses.
+- Pass the same 32 MiB body cap to readForm that the existing segment upload POST passes, not the 1 MiB default.
+- Add colocated unit tests for every new branch: malformed key, key already published, each mapped upload failure, and success.
+
+**Files / areas**
+
+- `packages/dashboard/src/infrastructure/segment-routes.ts`
+- `packages/dashboard/src/infrastructure/segment-routes.test.ts`
+
+**How to verify**
+
+- **POST arm added without breaking method handling** — A unit test asserts POST /env/x/segments is routed (not 404, not 405)
+- **Key validated and existing key refused** — A test submits a malformed key and asserts a 400 response and that no publish or upload port was invoked
+- **Upload failure reasons mapped as on the key-bearing POST** — A test exists per uploadSegment failure reason asserting the response status
+- **32 MiB cap applied and members never echoed** — The readForm call for this branch passes the explicit 32 MiB limit, not the 1 MiB default
+- **Routing stays infrastructure, uses existing use case** — The new branch's publish goes through packages/dashboard/src/application/upload-segment.ts, not a direct store or port write
+
+**Done when** — matchSegmentRoute handles POST /env/<env>/segments by publishing a first segment version for a form-supplied Segment Key, with unit tests covering every new branch. Every check under *How to verify* passes its bar.
+
+**Depends on** — nothing — can start immediately
+
+**Rollback** — The branch is additive; removing the new POST arm restores previous routing exactly. Already-published segment versions are immutable and stay.
+
+<details><summary>Reference — full rubric</summary>
+
+**POST arm added without breaking method handling** (`post-branch-and-405`, minScore 7)
+
+- Rule: matchSegmentRoute must match POST on the 3-segment /env/<env>/segments path while every other method on that path still returns 405 with an accurate Allow header. 8 = POST routes and a test asserts 405 plus Allow listing both GET and POST; 10 = the Allow header is derived from the matched methods rather than a hand-edited string.
+- Pass criteria:
+  - A unit test asserts POST /env/x/segments is routed (not 404, not 405)
+  - A unit test asserts an unsupported method such as PUT on that path returns 405 and an Allow header naming GET and POST
+  - GET /env/x/segments still renders the list page in an existing or updated test
+- Failure examples:
+  - POST is handled but the Allow header still reads only 'GET', so clients are told POST is unsupported
+  - The new branch is placed after a catch-all arm and never reached for some environment names
+  - The 405 test is left asserting the old Allow string and is 'fixed' by deleting the assertion
+
+**Key validated and existing key refused** (`key-validation-and-conflict`, minScore 7)
+
+- Rule: A submitted Segment Key must be validated with core's segmentKeySchema.safeParse and an already-published key must be refused before publishing, with distinct statuses. 8 = malformed key re-renders 400 and existing key re-renders 422, both publishing nothing; 10 = a test asserts the upload port was not called in either case.
+- Pass criteria:
+  - A test submits a malformed key and asserts a 400 response and that no publish or upload port was invoked
+  - A test where readSegmentVersion returns an existing pointer asserts a 422 response whose notice says the key is already in use
+  - The source calls segmentKeySchema.safeParse and does not import or re-declare a raw key regex
+- Failure examples:
+  - The key is validated only by the uploadSegment use case, so an invalid key surfaces as a raw CONFLICT or 502 rather than a 400 notice
+  - The existence check runs but the code still proceeds to upload, relying on the publisher's conflict, producing an opaque error page
+  - A key with trailing whitespace is accepted because the raw form value is passed without trimming and safeParse never sees the trimmed value the publisher uses
+
+**Upload failure reasons mapped as on the key-bearing POST** (`failure-status-mapping`, minScore 7)
+
+- Rule: Every uploadSegment failure reason must map to the same 400/422/502 status the existing key-bearing POST uses, with no unmapped fall-through. 8 = each reason has a test asserting its status; 10 = the mapping is shared with the existing POST rather than copy-pasted.
+- Pass criteria:
+  - A test exists per uploadSegment failure reason asserting the response status
+  - No failure path returns an unhandled 500 or a bare thrown error
+  - The same status for the same reason is observable on both /env/x/segments and /env/x/segments/<key>
+- Failure examples:
+  - A rarely hit reason such as a storage or port error falls through a switch default to 500 instead of 502
+  - The mapping is duplicated and one copy drifts, so the two upload URLs answer differently for the same CSV problem
+  - expectedCurrentVersion is passed as undefined rather than null, so the 'does not exist yet' path is never taken and every create fails as a conflict
+
+**32 MiB cap applied and members never echoed** (`body-cap-and-no-member-echo`, minScore 8)
+
+- Rule: readForm must be called with the same 32 MiB cap as the existing segment upload, and no response, draft or log may contain a CSV member value. 8 = the cap is explicit and no member text appears in any rendered output; 10 = a test feeds a CSV with a recognisable member value and asserts it appears nowhere in the response body.
+- Pass criteria:
+  - The readForm call for this branch passes the explicit 32 MiB limit, not the 1 MiB default
+  - A test uploads a CSV containing a distinctive member id and asserts that string is absent from the response body
+  - No console or logger call in the new branch takes the csv field or a parsed member as an argument
+- Failure examples:
+  - The cap is omitted, so a realistic member CSV is rejected as too large only in production
+  - The 400 notice for a malformed CSV quotes the offending line, echoing a member id back to the browser
+  - The submitted draft re-rendered on failure includes the csv field value so members round-trip into the HTML
+
+**Routing stays infrastructure, uses existing use case** (`infrastructure-layer-boundary`, minScore 7)
+
+- Rule: The branch must call the existing uploadSegment use case and ports rather than reimplementing publishing, and must not add domain or application logic to the route file. 8 = only routing, parsing and status mapping live in segment-routes.ts; 10 = no new exported helper duplicates something the application layer already offers.
+- Pass criteria:
+  - The new branch's publish goes through packages/dashboard/src/application/upload-segment.ts, not a direct store or port write
+  - segment-routes.ts contains no CSV parsing, segment-version construction or pointer-writing logic
+  - npm run lint passes with no import-boundary violation
+- Failure examples:
+  - The route parses the CSV itself to count members for the success notice, duplicating application logic
+  - The route writes the pointer directly via a port to avoid the conflict the use case would raise
+  - A new createSegment helper is added in infrastructure that mirrors uploadSegment with slightly different validation
+
+_Healer hint:_ Most likely miss is the existing-key check or the 32 MiB cap being skipped so conflicts surface as raw publisher errors — add the readSegmentVersion pre-check with a 422 notice and pass the explicit cap to readForm.
+
+</details>
+
+### Phase 3 — Add Create Segment form to Segment List Page
+
+Technical ID: `create-segment-form-view` · Segment Publishing · interface layer · small blast radius
+
+**Goal** — Render a Create Segment form on /env/<env>/segments that takes a Segment Key, its Member Attribute and a CSV file, and shows the published version number or the failure notice. The Segment List Page renders a working Create Segment form backed by its own registered stylesheet file, covered by colocated unit tests.
+
+**Why** — The page listing member sets currently shows only keys that some flag rule already mentions, so on a fresh environment it is empty and offers no way to create anything. This adds the missing entry point on the page operators actually land on.
+
+**Changes**
+
+- Give renderSegmentListPage a state argument carrying an optional notice and the submitted draft, copying the signature segment-page.ts already uses, so the POST branch can re-render with feedback and keep what was typed.
+- Render a form posting to /env/<env>/segments with a Segment Key text input, a Member Attribute input defaulting to 'userId' (the default segment-page.ts and rollout-form.ts already use), and a file input.
+- Mark the form with the same data-segment-upload / data-segment-file / hidden csv attribute triple the existing upload form uses, so the existing 24-line browser script picks it up with no new JavaScript.
+- On success show the published version number; on failure show the notice text. Never render, echo or log any member value.
+- State on the page that a segment which no flag rule references yet is not listed in the table, so the operator knows to note the key.
+- Add a small new styles/segment-create.css holding only this form's rules and register it in STYLE_FILES in stylesheet.ts — a file not registered there is silently ignored. Do not add rules to an existing stylesheet.
+- Extend the colocated segment-list-page.test.ts to cover every new render branch.
+
+**Files / areas**
+
+- `packages/dashboard/src/infrastructure/views/segment-list-page.ts`
+- `packages/dashboard/src/infrastructure/views/segment-list-page.test.ts`
+- `packages/dashboard/src/infrastructure/views/styles/segment-create.css`
+- `packages/dashboard/src/infrastructure/views/stylesheet.ts`
+
+**How to verify**
+
+- **Create form posts the right fields to the right URL** — A render test asserts the HTML contains a form with method post and action /env/<env>/segments for the environment under test
+- **Reuses the existing upload script attributes** — The rendered form contains data-segment-upload, a data-segment-file input and a hidden csv field
+- **Notice and typed draft survive a rejected submit** — A render test with a success state asserts the published version number appears
+- **New stylesheet exists and is registered** — packages/dashboard/src/infrastructure/views/styles/segment-create.css exists
+- **No member data rendered; unlisted-key note present** — A render test asserts the page contains wording that a segment not referenced by any flag rule is not listed
+
+**Done when** — The Segment List Page renders a working Create Segment form backed by its own registered stylesheet file, covered by colocated unit tests. Every check under *How to verify* passes its bar.
+
+**Depends on** — Add Create Segment POST branch to segment routes
+
+<details><summary>Reference — full rubric</summary>
+
+**Create form posts the right fields to the right URL** (`form-shape-and-target`, minScore 7)
+
+- Rule: The rendered page must contain a form posting to /env/<env>/segments with inputs named key, memberAttribute (defaulting to userId) and a file input. 8 = all three present with the correct action and method in a render test; 10 = the environment value in the action is taken from the page state, asserted for a non-trivial environment name.
+- Pass criteria:
+  - A render test asserts the HTML contains a form with method post and action /env/<env>/segments for the environment under test
+  - The rendered form has inputs named key, memberAttribute and a file input
+  - The memberAttribute input's default value is userId
+- Failure examples:
+  - The action is hard-coded to a sample environment or omits it, so the form posts to the wrong environment
+  - The file input is present but the field name does not match what the route reads, so uploads always arrive empty
+  - memberAttribute is rendered as a placeholder rather than a value, so an untouched form submits an empty attribute
+
+**Reuses the existing upload script attributes** (`browser-script-contract`, minScore 7)
+
+- Rule: The form must carry the same data-segment-upload / data-segment-file / hidden csv attribute triple the existing upload form uses, adding no new JavaScript. 8 = all three markers present and no new script file or inline script; 10 = a test asserts each marker by name so a rename breaks the test.
+- Pass criteria:
+  - The rendered form contains data-segment-upload, a data-segment-file input and a hidden csv field
+  - No new .js file is added and no inline script element appears in this view's output
+  - A render test asserts the presence of each of the three attributes
+- Failure examples:
+  - Only data-segment-upload is added and the hidden csv field is omitted, so the browser script reads the file but has nowhere to put it
+  - A slightly different attribute spelling is invented, so the existing 24-line script ignores the form and the page silently does nothing
+  - A small inline script is added just for this form, duplicating the shared handler
+
+**Notice and typed draft survive a rejected submit** (`notice-and-draft-state`, minScore 7)
+
+- Rule: renderSegmentListPage must take a state argument like segment-page.ts and re-render both the failure notice and the previously typed key and attribute. 8 = tests cover success-with-version, failure-with-notice and empty state; 10 = the draft repopulates the inputs' value attributes, not just echoes text.
+- Pass criteria:
+  - A render test with a success state asserts the published version number appears
+  - A render test with a failure notice asserts the notice text appears
+  - A render test with a submitted draft asserts the key and memberAttribute inputs carry the typed values in their value attributes
+- Failure examples:
+  - The notice renders but the draft is dropped, so an operator retypes the key after every validation failure
+  - The draft is echoed into the page unescaped, so a key containing markup breaks the page
+  - Only the happy path is tested and the notice branch is never exercised, leaving a branch uncovered under the 100% gate
+
+**New stylesheet exists and is registered** (`stylesheet-registered`, minScore 7)
+
+- Rule: segment-create.css must be a new file holding only this form's rules and must be listed in STYLE_FILES, since an unregistered file is silently ignored. 8 = file added and registered with no rules appended to an existing stylesheet; 10 = a test or assertion ties the registration to the file so removal is caught.
+- Pass criteria:
+  - packages/dashboard/src/infrastructure/views/styles/segment-create.css exists
+  - STYLE_FILES in stylesheet.ts includes segment-create.css
+  - git diff shows no rules added to a pre-existing .css file in this phase
+- Failure examples:
+  - The CSS file is created but never added to STYLE_FILES, so the form renders unstyled with no error anywhere
+  - The rules are appended to the existing shared stylesheet instead, growing the file the phase said not to touch
+  - The file is registered under a mistyped name so the loader silently serves nothing
+
+**No member data rendered; unlisted-key note present** (`member-privacy-and-unlisted-note`, minScore 8)
+
+- Rule: The page must state that a segment no flag references is absent from the table, and must never render, echo or log a member value. 8 = the explanatory note is present and no member value can reach the HTML; 10 = a test asserts the note text and asserts a member-bearing draft is not echoed.
+- Pass criteria:
+  - A render test asserts the page contains wording that a segment not referenced by any flag rule is not listed
+  - The view never renders the csv field's contents or any parsed member value
+  - No logger call in this view takes form values
+- Failure examples:
+  - The draft re-render includes the csv hidden field's value, round-tripping member rows into the HTML
+  - A debug log of the submitted draft is left in, writing member data to the server log
+  - The note is only in a code comment, so the operator who created an unreferenced key thinks the upload failed
+
+_Healer hint:_ Most likely miss is the unregistered stylesheet or a draft re-render that carries the csv field — add segment-create.css to STYLE_FILES and exclude csv from the echoed draft.
+
+</details>
+
+### Phase 4 — Add attach and detach Segment flag edits
+
+Technical ID: `attach-detach-flag-edits` · Flag Targeting · domain layer · medium blast radius
+
+**Goal** — Extend the typed flag-edit union with attachSegment and detachSegment so a segment-membership rule can be appended to, or removed from, a flag's rules by the existing snapshot edit machinery. flag-edit.ts exposes attachSegment and detachSegment edits whose applied snapshots pass parseSnapshot, with unit tests at 100% branch coverage including multi-rule cases.
+
+**Why** — Pointing a flag at a member set currently means hand-editing raw rules JSON in a textarea. These two typed edits express 'members of this segment get the flag ON, or this value' and 'remove exactly this rule' as first-class changes to the stored environment document. A flag may carry several such rules at once, so attach always appends rather than replacing, and detach always addresses one rule by its index.
+
+**Changes**
+
+- Add an attachSegment kind carrying the Segment Key, the Member Attribute and, for a config-typed flag, the already-decoded value segment members receive (string-vs-JSON decoding happens at the route layer, not here). applyFlagEdit appends { when: { <memberAttribute>: { inSegment: <key> } }, enabled: true } or the value form to the END of the feature's rules array, leaving any rules already present — including other segment rules and their rollout percentages — untouched.
+- Add a detachSegment kind carrying a rule index that removes exactly that one rule, reusing the guard editRollout already implements (Array.isArray, Number.isInteger, bounds check, isObject) and returning the same INVALID_RULE_INDEX-style failure.
+- Validate the Segment Key with core's segmentKeySchema — flag-edit.ts is domain code and ESLint forbids it importing anything outside @featuresync/core.
+- Add a dedicated failure kind for attaching to a schemaVersion 1 snapshot with a clear reason, since core's contract rejects segment conditions there and older environments still exist; never upgrade the schemaVersion silently.
+- Map both kinds to touchedFields ['rules'], exactly as setRules and setRollout already do, so the existing replay check keeps working unchanged.
+- Cover every new branch in packages/dashboard/test/domain/flag-edit.test.ts using test/support/seed-snapshot.ts, including attaching a second segment rule to a flag that already has one with a rollout, and detaching the first of two segment rules.
+
+**Files / areas**
+
+- `packages/dashboard/src/domain/flag-edit.ts`
+- `packages/dashboard/test/domain/flag-edit.test.ts`
+
+**How to verify**
+
+- **attachSegment appends and preserves other rules** — A test seeds a flag with one segment rule carrying a rollout, applies attachSegment, and asserts the resulting rules length is 2 with the pre-existing rule deep-equal to before
+- **detachSegment removes exactly one rule under the existing guard** — A test detaching index 0 of a two-segment flag asserts the remaining rule equals the original second rule
+- **Dedicated failure for schemaVersion 1 snapshots** — A test applying attachSegment to a seeded schemaVersion 1 snapshot asserts a distinct failure kind, not the generic invalid-rule or parse failure
+- **Domain file imports only @featuresync/core** — Run: grep -n '^import' packages/dashboard/src/domain/flag-edit.ts — every module path is @featuresync/core or relative within domain
+- **touchedFields rules and result parses** — A test asserts touchedFields for attachSegment and for detachSegment equals ['rules']
+
+**Done when** — flag-edit.ts exposes attachSegment and detachSegment edits whose applied snapshots pass parseSnapshot, with unit tests at 100% branch coverage including multi-rule cases. Every check under *How to verify* passes its bar.
+
+**Depends on** — nothing — can start immediately
+
+<details><summary>Reference — full rubric</summary>
+
+**attachSegment appends and preserves other rules** (`append-preserves-existing-rules`, minScore 8)
+
+- Rule: applyFlagEdit must append the new segment rule to the END of rules, leaving every existing rule — including other segment rules and their rollout percentages — byte-identical. 8 = a test attaches a second segment to a flag that already has one with a rollout and asserts the first rule is unchanged and the new one is last; 10 = the test also asserts the original snapshot object was not mutated in place.
+- Pass criteria:
+  - A test seeds a flag with one segment rule carrying a rollout, applies attachSegment, and asserts the resulting rules length is 2 with the pre-existing rule deep-equal to before
+  - The new rule is at the last index, not index 0
+  - The input snapshot passed to applyFlagEdit is unchanged after the call
+- Failure examples:
+  - Attach replaces the rules array with a single rule, silently dropping an existing segment rule and its percentage
+  - Attach appends but mutates the shared rules array of the input snapshot, so the caller's pre-edit copy used by the replay check also changes
+  - The new rule is unshifted to the front, changing evaluation precedence for flags that already had rules
+
+**detachSegment removes exactly one rule under the existing guard** (`detach-index-guard`, minScore 8)
+
+- Rule: detachSegment must reuse editRollout's index guard (Array.isArray, Number.isInteger, bounds, isObject) and remove only the addressed rule, returning the same INVALID_RULE_INDEX-style failure otherwise. 8 = tests cover negative, non-integer, out-of-bounds and valid indices; 10 = a test detaches the FIRST of two segment rules and asserts the surviving rule is the second one intact.
+- Pass criteria:
+  - A test detaching index 0 of a two-segment flag asserts the remaining rule equals the original second rule
+  - Tests assert the INVALID_RULE_INDEX-style failure for index -1, 1.5 and an index equal to rules.length
+  - No new bespoke index-validation code is introduced; the existing guard is reused
+- Failure examples:
+  - The bounds check uses <= length, so detaching the index one past the end silently splices nothing and reports success
+  - Detach filters by segment key instead of index, removing both rules when the same key is attached twice at different percentages
+  - Number.isInteger is skipped, so a numeric string coerces and removes an unintended rule
+
+**Dedicated failure for schemaVersion 1 snapshots** (`schema-version-1-failure-kind`, minScore 7)
+
+- Rule: Attaching to a schemaVersion 1 snapshot must return its own named failure kind with a clear reason, never a silent upgrade and never a generic parse error. 8 = a test on a v1 snapshot asserts the dedicated failure kind; 10 = the test also asserts the returned snapshot is unchanged and still schemaVersion 1.
+- Pass criteria:
+  - A test applying attachSegment to a seeded schemaVersion 1 snapshot asserts a distinct failure kind, not the generic invalid-rule or parse failure
+  - The snapshot's schemaVersion after the failed attach is still 1
+  - No code path writes schemaVersion 2 onto an existing snapshot
+- Failure examples:
+  - The v1 case is allowed through and only fails later at parseSnapshot, giving the operator an opaque contract error
+  - The code bumps schemaVersion to 2 when it sees a segment condition, silently changing the environment's contract
+  - The failure is returned but shares a kind with malformed-key, so the application layer cannot word a specific message
+
+**Domain file imports only @featuresync/core** (`domain-purity`, minScore 8)
+
+- Rule: flag-edit.ts must validate the Segment Key with core's segmentKeySchema and import nothing outside @featuresync/core — no infrastructure, no dashboard application module, no HTTP or parsing concern. 8 = imports are core-only and lint passes; 10 = no string or JSON decoding and no request-shaped type appears in the new edit kinds.
+- Pass criteria:
+  - Run: grep -n '^import' packages/dashboard/src/domain/flag-edit.ts — every module path is @featuresync/core or relative within domain
+  - npm run lint passes with no import/no-restricted-paths error
+  - The attachSegment kind carries an already-decoded value; there is no JSON.parse in flag-edit.ts
+- Failure examples:
+  - A key regex is copied into flag-edit.ts because segmentKeySchema felt like overkill, drifting from core's rule
+  - The value is accepted as a raw string and JSON.parsed in the domain, dragging form-encoding concerns inward
+  - A message constant is imported from the application error-messages module to word the failure
+
+**touchedFields rules and result parses** (`touched-fields-and-parse`, minScore 7)
+
+- Rule: Both kinds must map to touchedFields ['rules'] exactly as setRules and setRollout do, and an attached snapshot must pass core's parseSnapshot. 8 = both asserted by tests; 10 = the parse assertion covers the config-value form as well as the boolean form.
+- Pass criteria:
+  - A test asserts touchedFields for attachSegment and for detachSegment equals ['rules']
+  - A test runs parseSnapshot over the snapshot produced by a successful attach and asserts success
+  - Both the enabled-true form and the config value form are parse-tested
+- Failure examples:
+  - touchedFields returns an extra field after the v2 work, breaking the existing replay check in a way only a concurrent edit reveals
+  - The config value form nests the value under the wrong key so parseSnapshot fails only for config flags, untested
+  - Only the boolean attach is parse-tested, so a malformed value rule ships
+
+_Healer hint:_ Most likely miss is attach replacing rather than appending (or mutating the input array) — assert on a flag that already has a segment rule with a rollout that both rules survive and the input snapshot is untouched.
+
+</details>
+
+### Phase 5 — Describe attach and detach edit outcomes
+
+Technical ID: `attach-detach-edit-outcomes` · Flag Targeting · application layer · small blast radius
+
+**Goal** — Teach the edit-feature use case to apply, describe and report failures for the two new segment edits so they publish through the existing check-and-replay path. editFeature applies, describes and reports failures for attachSegment and detachSegment, with unit tests covering each new arm.
+
+**Why** — Every flag change in this dashboard flows through one use case that applies the change, names it for the change log, and turns any rejection into an operator-facing message. The new edits are invisible until that use case knows about them.
+
+**Changes**
+
+- Add arms for attachSegment and detachSegment to the four exhaustive switches in edit-feature.ts: editFeature(), touchedFields(), describeEdit() and editFailure().
+- Encode each new failure's status: a malformed Segment Key, an out-of-range rule index and an undecodable config value are invalidInput (400 draft); a snapshot the contract rejects and a stale base version stay 422.
+- Add the matching message constants to error-messages.ts, including one for the schemaVersion 1 case worded so the operator knows the environment's snapshot must be at schemaVersion 2.
+- Make describeEdit name the Segment Key so the change log reads, for example, 'attached segment beta-testers'.
+- Keep the existing check-and-replay publish path untouched — these are new edit kinds, not a new publish path.
+- Extend packages/dashboard/test/application/edit-feature.test.ts to cover every new arm and failure mapping.
+
+**Files / areas**
+
+- `packages/dashboard/src/application/edit-feature.ts`
+- `packages/dashboard/src/application/error-messages.ts`
+- `packages/dashboard/test/application/edit-feature.test.ts`
+
+**How to verify**
+
+- **Arms added to every exhaustive switch** — Run: grep -n 'attachSegment\|detachSegment' packages/dashboard/src/application/edit-feature.ts — both appear at least four times each
+- **Failure statuses split correctly** — Tests assert 400/invalidInput for malformed key, bad rule index and undecodable value
+- **schemaVersion 1 message names the requirement** — A named constant in packages/dashboard/src/application/error-messages.ts mentions schemaVersion 2
+- **Change log names the Segment Key** — A test asserts describeEdit for attachSegment returns text containing the Segment Key
+- **Use case stays in the application layer** — Run: grep -n '^import' packages/dashboard/src/application/edit-feature.ts — no path under src/infrastructure
+
+**Done when** — editFeature applies, describes and reports failures for attachSegment and detachSegment, with unit tests covering each new arm. Every check under *How to verify* passes its bar.
+
+**Depends on** — Add attach and detach Segment flag edits
+
+<details><summary>Reference — full rubric</summary>
+
+**Arms added to every exhaustive switch** (`all-four-switches-covered`, minScore 7)
+
+- Rule: attachSegment and detachSegment must appear in all four switches — editFeature(), touchedFields(), describeEdit() and editFailure() — with no default-case fall-through hiding a missing arm. 8 = all four have both arms and tests exercise each; 10 = the switches remain exhaustive by type so a future kind fails to compile.
+- Pass criteria:
+  - Run: grep -n 'attachSegment\|detachSegment' packages/dashboard/src/application/edit-feature.ts — both appear at least four times each
+  - Tests call each of the four functions with an attachSegment edit and with a detachSegment edit
+  - tsc passes with the exhaustiveness check intact and no default arm added that swallows unknown kinds
+- Failure examples:
+  - describeEdit is updated but touchedFields is not, so the replay check compares the wrong fields and concurrent edits are wrongly accepted
+  - A default arm is added to silence the compiler, so the missing arm ships as a generic message
+  - editFailure handles attach but not detach, so an out-of-range index renders an unstyled 500
+
+**Failure statuses split correctly** (`status-mapping-400-vs-422`, minScore 7)
+
+- Rule: Malformed Segment Key, out-of-range rule index and undecodable config value must map to invalidInput (400 draft); contract rejection and stale base version must stay 422. 8 = each of the five has a test asserting its status; 10 = the 400 cases return a re-renderable draft, asserted.
+- Pass criteria:
+  - Tests assert 400/invalidInput for malformed key, bad rule index and undecodable value
+  - Tests assert 422 for a contract-rejected snapshot and for a stale base version
+  - The 400 results carry the draft used to re-render the form, asserted in at least one test
+- Failure examples:
+  - The schemaVersion 1 rejection is mapped to 400 because it looks like bad input, so the operator sees a field error instead of an environment-level message
+  - All new failures are folded into the existing generic 422, losing the draft and wiping the typed form
+  - The stale-base-version path is not re-tested after the new arms, and a lost update is reported as 400 and retried blindly
+
+**schemaVersion 1 message names the requirement** (`schema-version-message`, minScore 7)
+
+- Rule: error-messages.ts must gain a constant for the schemaVersion 1 case worded so the operator learns the environment's snapshot must be at schemaVersion 2. 8 = the constant exists, is used, and names schemaVersion 2; 10 = a test asserts the rendered message text, not just the constant's existence.
+- Pass criteria:
+  - A named constant in packages/dashboard/src/application/error-messages.ts mentions schemaVersion 2
+  - editFailure returns that constant for the schemaVersion 1 failure kind, asserted in a test
+  - The message does not expose a stack trace, raw contract error or internal kind name
+- Failure examples:
+  - The message says 'invalid snapshot' with no mention of schemaVersion, leaving the operator with no next action
+  - The raw core validation error is passed through as the message, exposing internal path strings
+  - The constant is added but editFailure still returns the generic invalid-snapshot message for that kind
+
+**Change log names the Segment Key** (`describe-edit-names-key`, minScore 7)
+
+- Rule: describeEdit must produce a human line naming the Segment Key, for example 'attached segment beta-testers'. 8 = a test asserts the key appears in the description for attach; 10 = detach is also described identifiably rather than a bare 'edited rules'.
+- Pass criteria:
+  - A test asserts describeEdit for attachSegment returns text containing the Segment Key
+  - A test asserts describeEdit for detachSegment returns text distinguishing it from a generic rules edit
+  - No member attribute value or member identifier appears in the description
+- Failure examples:
+  - Both kinds describe as 'updated rules', so the change log cannot tell an attach from a hand-edited rules blob
+  - The description interpolates the whole edit object, dumping the config value and attribute into the log
+  - Detach is described by index only, leaving the log meaningless once indices shift
+
+**Use case stays in the application layer** (`application-layer-purity`, minScore 8)
+
+- Rule: edit-feature.ts must delegate rule construction to the domain's flag-edit and must not import infrastructure or re-implement the publish path. 8 = no infrastructure import and the check-and-replay path is untouched; 10 = no rule-shape literal appears in the application file at all.
+- Pass criteria:
+  - Run: grep -n '^import' packages/dashboard/src/application/edit-feature.ts — no path under src/infrastructure
+  - git diff shows the existing check-and-replay publish code unchanged
+  - No inSegment rule literal is constructed inside edit-feature.ts
+- Failure examples:
+  - The use case builds the segment rule itself to save a hop, duplicating the domain's append logic where the domain tests do not cover it
+  - A view helper or HTTP status constant is imported from infrastructure to word the failure
+  - A parallel publish branch is added for segment edits, bypassing the replay check
+
+_Healer hint:_ Most likely miss is one of the four switches (usually touchedFields) left without the new arms behind a default case — add both arms to all four and keep the exhaustiveness check.
+
+</details>
+
+### Phase 6 — Parse attach and detach Segment form submissions
+
+Technical ID: `attach-detach-edit-parsing` · Flag Targeting · infrastructure layer · medium blast radius
+
+**Goal** — Let the flag edit POST route turn an Attach or Detach Segment submission into the corresponding typed flag edit, accepting a plain typed value for config flags. parseFeatureEdit produces attachSegment and detachSegment edits from form submissions, with lenient config-value decoding covered branch-by-branch in colocated tests.
+
+**Why** — All per-flag changes arrive as one form POST whose 'field' value selects which change was requested, so without new arms there the new forms are rejected as an unknown field. For a config-typed flag the operator should be able to type 'dark', 42 or true directly instead of being forced to write raw JSON.
+
+**Changes**
+
+- Add attachSegment and detachSegment cases to parseFeatureEdit, alongside the existing setRollout, removeRollout, enabled, default, rules and delete cases.
+- For attach, read the Segment Key and Member Attribute, and for a config-typed flag decode the value field leniently: parse it as JSON only when it obviously is JSON (the trimmed text starts with a brace, a bracket or a quote, or is exactly true, false, null, or a valid number); otherwise take the text as a plain string. A value that looks like JSON but does not parse returns an invalidInput failure (400 draft), following the existing INVALID_DEFAULT_JSON precedent.
+- For detach, read the hidden rule index and reject anything that is not a plain non-negative integer.
+- Keep the existing base version parsing, and add whatever optional draft fields editDraftOf needs so a rejected submission re-renders with what was typed.
+- Update the FIELD_MESSAGE text that lists accepted fields, and its assertion in http-server.test.ts.
+- Add colocated tests for every new branch, including each lenient-decode shape (plain word, number, true/false, quoted string, object, array) and the malformed-JSON 400.
+
+**Files / areas**
+
+- `packages/dashboard/src/infrastructure/http-server.ts`
+- `packages/dashboard/src/infrastructure/http-server.test.ts`
+
+**How to verify**
+
+- **Config value decoded leniently, branch by branch** — Tests assert the typed value dark becomes the string dark, 42 becomes the number 42, true becomes the boolean true
+- **JSON-looking but unparseable value is a 400 draft** — A test submitting a truncated object literal as the value asserts an invalidInput 400 outcome
+- **Detach index must be a plain non-negative integer** — Tests assert rejection for an empty index, a non-numeric index and a negative index
+- **Accepted-field list updated, existing cases intact** — FIELD_MESSAGE text in http-server.ts includes attachSegment and detachSegment
+- **Decoding lives here, not in domain or application** — No JSON.parse for the attach value appears in packages/dashboard/src/domain or src/application
+
+**Done when** — parseFeatureEdit produces attachSegment and detachSegment edits from form submissions, with lenient config-value decoding covered branch-by-branch in colocated tests. Every check under *How to verify* passes its bar.
+
+**Depends on** — Describe attach and detach edit outcomes
+
+<details><summary>Reference — full rubric</summary>
+
+**Config value decoded leniently, branch by branch** (`lenient-value-decoding`, minScore 8)
+
+- Rule: For a config-typed flag the value field must be taken as a plain string unless it obviously is JSON (trimmed text starting with a brace, a bracket or a quote, or exactly true, false, null or a valid number), in which case it is parsed. 8 = a test per shape — plain word, number, true, false, null, quoted string, object, array; 10 = boundary shapes such as '007', '1e3' and a padded value are pinned too.
+- Pass criteria:
+  - Tests assert the typed value dark becomes the string dark, 42 becomes the number 42, true becomes the boolean true
+  - Tests assert a quoted string, an object literal and an array literal are parsed as JSON
+  - A test asserts a value with leading or trailing whitespace is handled the same as its trimmed form
+- Failure examples:
+  - A version string like 1.2.3 or an id like 007 is treated as a number attempt and either mangled or rejected as malformed JSON
+  - JSON.parse is attempted on everything inside a try/catch, so the plain word null silently becomes something other than a string
+  - The shape check looks at the raw string rather than the trimmed one, so a padded object literal is stored as a string
+
+**JSON-looking but unparseable value is a 400 draft** (`malformed-json-400`, minScore 7)
+
+- Rule: A value that looks like JSON but fails to parse must return invalidInput (400 draft) following the INVALID_DEFAULT_JSON precedent, never a thrown error and never a fallback to the raw string. 8 = a test asserts the 400 and the message; 10 = the test asserts the rejected submission's draft is returned so the form re-renders with what was typed.
+- Pass criteria:
+  - A test submitting a truncated object literal as the value asserts an invalidInput 400 outcome
+  - The response is not a 500 and no exception escapes parseFeatureEdit
+  - The returned failure carries the draft fields needed to re-render the form
+- Failure examples:
+  - The parse failure is swallowed and the broken text is stored as a plain string, silently publishing garbage config
+  - The error surfaces as an unhandled throw and the operator gets a blank 500 page losing the whole form
+  - A 400 is returned but with no draft, so the operator retypes the key, attribute and value
+
+**Detach index must be a plain non-negative integer** (`detach-index-parsing`, minScore 8)
+
+- Rule: The hidden rule index must be rejected unless it is a plain non-negative integer string. 8 = tests cover empty, non-numeric, negative, non-integer and a valid 0; 10 = exotic-but-plausible inputs such as 01, 1e0, a padded 2 and +1 are pinned too.
+- Pass criteria:
+  - Tests assert rejection for an empty index, a non-numeric index and a negative index
+  - A test asserts index 0 is accepted and produces a detachSegment edit with index 0
+  - A test asserts a non-integer such as 1.5 is rejected
+- Failure examples:
+  - Number() is used without an integer check, so 1e0 or a padded value quietly becomes a valid index
+  - parseInt accepts 2abc as 2, detaching a rule from a tampered form
+  - Index 0 is rejected by a falsy check, so the first rule can never be detached
+
+**Accepted-field list updated, existing cases intact** (`field-message-and-existing-cases`, minScore 7)
+
+- Rule: FIELD_MESSAGE must list the new field values and its assertion updated, while every pre-existing edit case still parses unchanged. 8 = FIELD_MESSAGE and its test mention attachSegment and detachSegment and existing case tests pass untouched; 10 = the list is derived from the handled cases rather than a separately maintained string.
+- Pass criteria:
+  - FIELD_MESSAGE text in http-server.ts includes attachSegment and detachSegment
+  - The FIELD_MESSAGE assertion in http-server.test.ts is updated to match
+  - Existing tests for setRollout, removeRollout, enabled, default, rules and delete still pass with no edits to their expectations
+- Failure examples:
+  - The new cases are handled but FIELD_MESSAGE is not updated, so the 400 for an unknown field lies about what is accepted
+  - An existing case's expectations are edited to accommodate refactored parsing, masking a behaviour change
+  - Base version parsing is dropped on the new arms, so segment edits publish without the lost-update check
+
+**Decoding lives here, not in domain or application** (`infrastructure-boundary`, minScore 7)
+
+- Rule: String-versus-JSON decoding and form reading must stay in http-server.ts; the typed edit handed onward carries an already-decoded value and no request objects. 8 = no decoding helper is added to domain or application and the edit object contains no raw form text; 10 = the decode helper is a pure local function testable without a request.
+- Pass criteria:
+  - No JSON.parse for the attach value appears in packages/dashboard/src/domain or src/application
+  - The attachSegment edit constructed here carries a decoded value, not the raw string plus a flag
+  - npm run lint passes with no import-boundary error
+- Failure examples:
+  - The raw string and an isConfig hint are passed into the domain to decode there, pushing HTTP concerns inward
+  - A shared decode utility is placed in application and imported by both layers, blurring where the 400 originates
+  - The request object is threaded into the edit so the application layer reads form fields directly
+
+_Healer hint:_ Most likely miss is a lenient-decode boundary — a version string, a leading-zero id, or whitespace — so add explicit tests for 1.2.3, 007 and padded values and decide the trim before the JSON-shape check.
+
+</details>
+
+### Phase 7 — Add Attach form and attached segment list
+
+Technical ID: `attach-detach-form-view` · Flag Targeting · interface layer · medium blast radius
+
+**Goal** — Render, for each flag, an Attach Segment form plus a list of every segment rule already attached, each line showing its Segment Key, its current rollout percentage and its own Detach control. The environment page shows, per flag, an Attach Segment form and every attached segment rule with its percentage and its own Detach control, covered by colocated tests including a two-segment flag.
+
+**Why** — This is the visible half of the feature: without it an operator still hand-edits raw rules JSON. A flag can carry several segment rules at once, each with its own percentage, so the page must show them all at once — 'segment X at 25%, segment Y at 100%' — and let the operator act on each one independently.
+
+**Changes**
+
+- Create segment-attach-form.ts rendering, per flag, one Attach Segment form: a Segment Key input listing the keys the current snapshot already references (via the existing list-referenced-segments use case) while still accepting a typed key, a Member Attribute input defaulting to 'userId', and, for a config-typed flag, a free-text value field labelled to say a plain word, number or true/false is fine. It posts to the flag's existing edit action with field=attachSegment and the hidden base version input.
+- In the same view, render one line per rule whose when contains an inSegment condition, reusing rollout-form.ts's existing segmentKeysOf helper: show the Segment Key, the rule's current rollout percentage (100% when the rule has no rollout), and a Detach control that is its own small form with field=detachSegment and the hidden index of that rule.
+- Place this list inside the existing per-rule rollout block in rollout-form.ts rather than duplicating it: the rollout block already renders one form per rule with that rule's index, so each rule's row ends up carrying its own percentage input AND its own Detach button, addressed by the same index. Do not add any new percentage input and do not change setRollout or removeRollout.
+- Call the new Attach form from environment-page.ts beside the existing rollout controls.
+- Show the notice or re-rendered draft the edit route returns, and never render any segment member value.
+- Add styles/segment-attach.css as a small new feature stylesheet holding only these rules and register it in STYLE_FILES; do not grow an existing CSS file.
+- Add colocated unit tests for every render branch: flag with no segment rules, flag with two segment rules at different percentages, boolean versus config flag, and the notice and draft states.
+
+**Files / areas**
+
+- `packages/dashboard/src/infrastructure/views/segment-attach-form.ts`
+- `packages/dashboard/src/infrastructure/views/segment-attach-form.test.ts`
+- `packages/dashboard/src/infrastructure/views/rollout-form.ts`
+- `packages/dashboard/src/infrastructure/views/environment-page.ts`
+- `packages/dashboard/src/infrastructure/views/styles/segment-attach.css`
+- `packages/dashboard/src/infrastructure/views/stylesheet.ts`
+
+**How to verify**
+
+- **Every attached segment shown with its own percentage and Detach** — A render test with two segment rules at, say, 25% and 100% asserts both keys and both percentages appear
+- **Attach form posts the right field and base version** — The rendered form contains an input or hidden field with value attachSegment for the edit field
+- **Config flags get a free-text value field, boolean flags do not** — A render test for a config-typed flag asserts a value input is present and its label mentions plain text, number or true/false
+- **Detach rides the existing per-rule rollout block** — git diff shows no new percentage input element added; the existing rollout input is reused
+- **Own registered stylesheet; no member value ever rendered** — packages/dashboard/src/infrastructure/views/styles/segment-attach.css exists and appears in STYLE_FILES
+- **View stays a view** — Run: grep -n '^import' on segment-attach-form.ts — no store, port, publisher or domain edit-application import
+
+**Done when** — The environment page shows, per flag, an Attach Segment form and every attached segment rule with its percentage and its own Detach control, covered by colocated tests including a two-segment flag. Every check under *How to verify* passes its bar.
+
+**Depends on** — Parse attach and detach Segment form submissions
+
+<details><summary>Reference — full rubric</summary>
+
+**Every attached segment shown with its own percentage and Detach** (`multi-segment-rows`, minScore 8)
+
+- Rule: For a flag with several segment rules, the view must render one row per rule showing its Segment Key, its rollout percentage and its own Detach control addressed by that rule's index. 8 = a two-segment fixture at different percentages renders both rows with correct keys, percentages and distinct indices; 10 = a three-rule fixture where a non-segment rule sits between them still yields correct indices.
+- Pass criteria:
+  - A render test with two segment rules at, say, 25% and 100% asserts both keys and both percentages appear
+  - Each row's Detach form carries a hidden index matching that rule's position in the rules array
+  - A rule with no rollout renders as 100%
+- Failure examples:
+  - Rows are indexed by their position among segment rules rather than in the full rules array, so detaching removes the wrong rule when a non-segment rule precedes them
+  - Only the first segment rule is rendered because the helper returns a single key rather than a list
+  - A missing rollout renders as 0% or blank, telling the operator the segment is off when it is fully on
+
+**Attach form posts the right field and base version** (`attach-form-contract`, minScore 8)
+
+- Rule: The Attach form must post to the flag's existing edit action with field attachSegment, a hidden base version input, a Segment Key input that suggests referenced keys while still accepting a typed key, and a memberAttribute defaulting to userId. 8 = all asserted in a render test; 10 = the suggestion list is asserted to come from list-referenced-segments output rather than hard-coded.
+- Pass criteria:
+  - The rendered form contains an input or hidden field with value attachSegment for the edit field
+  - A hidden base version input is present with the current snapshot version
+  - The Segment Key input offers the referenced keys (for example a datalist) and is not a closed select that blocks a new key
+- Failure examples:
+  - A closed select of referenced keys is rendered, so a segment just created but not yet referenced cannot be attached at all — the exact fresh-environment case
+  - The base version input is omitted, so the lost-update check silently never fires for attaches
+  - The form posts to a new bespoke URL instead of the flag's existing edit action, bypassing the shared parsing
+
+**Config flags get a free-text value field, boolean flags do not** (`config-value-field`, minScore 7)
+
+- Rule: For a config-typed flag the form must show a free-text value field labelled to say a plain word, number or true/false is acceptable; a boolean flag must not show it. 8 = both branches tested; 10 = the label text explicitly tells the operator raw JSON is not required.
+- Pass criteria:
+  - A render test for a config-typed flag asserts a value input is present and its label mentions plain text, number or true/false
+  - A render test for a boolean flag asserts no value input is rendered
+  - The label does not instruct the operator to enter JSON
+- Failure examples:
+  - The value field renders for every flag type, so attaching to a boolean flag submits a stray value the parser then has to ignore
+  - The label says 'JSON value', pushing the operator to quote strings and defeating the lenient decode
+  - The config branch is only tested for presence, so the boolean branch is uncovered under the 100% gate
+
+**Detach rides the existing per-rule rollout block** (`reuse-rollout-block`, minScore 7)
+
+- Rule: The per-rule rows must be placed inside rollout-form.ts's existing per-rule block reusing segmentKeysOf, adding no second percentage input and changing neither setRollout nor removeRollout. 8 = diff shows reuse with no new percentage control; 10 = the row's percentage input and Detach button demonstrably share one rule index in a test.
+- Pass criteria:
+  - git diff shows no new percentage input element added; the existing rollout input is reused
+  - setRollout and removeRollout handling in rollout-form.ts is unchanged
+  - A render test asserts the percentage form and the Detach form on the same row carry the same rule index
+- Failure examples:
+  - A parallel list of segment rows is rendered beside the rollout block, giving each rule two percentage inputs that can disagree
+  - segmentKeysOf is reimplemented locally and drifts on rules whose when has several conditions
+  - The Detach button is rendered inside the rollout form element, so clicking it submits the percentage change too
+
+**Own registered stylesheet; no member value ever rendered** (`stylesheet-and-no-member-data`, minScore 8)
+
+- Rule: styles/segment-attach.css must be new, scoped to this feature and registered in STYLE_FILES, and no segment member value may appear in the HTML, the draft or any log. 8 = file registered, no existing CSS grown, no member data path into the view; 10 = a test asserts the view never receives or renders member rows even when the notice concerns a CSV.
+- Pass criteria:
+  - packages/dashboard/src/infrastructure/views/styles/segment-attach.css exists and appears in STYLE_FILES
+  - git diff shows no rules appended to a pre-existing stylesheet in this phase
+  - The view's inputs contain segment keys and percentages only — no member list, member count sample or member id — and no logger call takes them
+- Failure examples:
+  - The stylesheet is added but not registered, so the attached-segment list renders unstyled and unreadable with no error
+  - The attached list shows a members preview pulled from a segment version, leaking personal data into HTML
+  - A notice echoes the raw rule JSON, which for some snapshots embeds member values
+
+**View stays a view** (`interface-layer-boundary`, minScore 7)
+
+- Rule: The view must render from data handed to it and call only the existing list-referenced-segments use case; it must not read stores, apply edits or construct rules. 8 = imports stay within views plus that use case and no snapshot mutation happens in the view; 10 = the view is a pure function of its props, testable with no port stubs.
+- Pass criteria:
+  - Run: grep -n '^import' on segment-attach-form.ts — no store, port, publisher or domain edit-application import
+  - No call to applyFlagEdit or a snapshot write appears in the view
+  - npm run lint passes with no import-boundary error
+- Failure examples:
+  - The view calls the segment read port itself to check a key exists before rendering, coupling rendering to I/O
+  - The view computes the post-attach rules array to preview it, duplicating domain logic that can drift
+  - The view imports an HTTP status constant and decides the response code
+
+_Healer hint:_ Most likely miss is Detach indices computed over the filtered segment rules instead of the full rules array — derive each row's index from the rules array position and test with a non-segment rule sitting first.
+
+</details>
+
+## Discovery findings
+
+| Area | Finding | File | Implication |
+|---|---|---|---|
+| Segment memberAttribute availability | memberAttribute is part of the published segment document (core segmentContract: schemaVersion, key, version, memberAttribute, members) stored at <env>/segments/<key>/<version>.json, but no port can read it: the only read port is readSegmentVersion(environment, key) -> number/null, and createS3SegmentVersionReader reads ONLY current.json, never a version object. publishSegment returns a SegmentPointer with no memberAttribute. | `packages/aws/src/infrastructure/s3-segment-version-reader.ts` | The attach rule's condition attribute cannot be derived today. Either the attach form asks the operator for the Member Attribute (default 'userId', as segment-page.ts and rollout-form.ts already do), or a new aws port that GETs the version object is planned — which would download every member (personal data). Recommend asking on the form. |
+| Segment routing shape | matchSegmentRoute handles segments[2]==='segments' with length 3 (GET list page only) or 4 (GET/POST for one key); http-server rejects longer paths; method mismatch yields 405 with Allow. | `packages/dashboard/src/infrastructure/segment-routes.ts` | A Create Segment form on /env/<env>/segments cannot POST to /env/<env>/segments/<key> with plain HTML because the key is path-borne. matchSegmentRoute must gain a POST branch at length 3 that reads key as a form field (keeps it JS-free); rewriting the action client-side would add untestable app.js logic instead. |
+| Segment key validation export | core exports segmentKeySchema and SEGMENT_SCHEMA_VERSION but NOT SEGMENT_KEY_PATTERN (module-level const in domain/segment-contract.ts). FEATURE_KEY_PATTERN is exported and is what flag-edit.ts uses. | `packages/core/src/index.ts` | Validating a typed Segment Key needs either segmentKeySchema.safeParse or a small core export addition; the plan must pick one explicitly. |
+| schemaVersion 1 vs inSegment | snapshotContract.superRefine rejects any rule with rollout or an inSegment condition on schemaVersion 1 with 'Segment conditions and rollouts need schemaVersion 2' at path features.<key>.rules.<i>. The environment page's first-version publish template still prefills schemaVersion 1. | `packages/core/src/domain/snapshot-contract.ts` | Attaching to a v1 snapshot surfaces as INVALID_SNAPSHOT -> 422 with a readable issue line. A dedicated pre-check failure kind in flag-edit would be a small testable improvement; fresh environments default to v1, so this path is reachable in normal use. |
+| FlagEdit contract | FlagEdit is a 7-kind union; applyFlagEdit mutates the raw features map then validates with parseSnapshot; touchedFields maps setRules/setRollout/removeRollout to ['rules']; canReplayEdit compares JSON.stringify per touched field. | `packages/dashboard/src/domain/flag-edit.ts` | Adding attachSegment/detachSegment kinds requires exhaustive-switch updates in exactly four places: editFeature(), touchedFields(), describeEdit() and editFailure() in application/edit-feature.ts, plus a message constant in application/error-messages.ts. New failure kinds must choose invalidInput true (400) or not (422). |
+| Rule shape for attach | A rule is { when, rollout?, enabled } or { when, rollout?, value }. Condition is Record<attribute, scalar/operatorExpression>, the operator expression being a strict object refined to exactly one key including inSegment. referencedSegmentKeys walks features->rules->when values checking inSegment !== undefined. | `packages/core/src/domain/rule.ts` | Attach is a pure array append on feature.rules inside applyFlagEdit; detach is a removal by index with the same INVALID_RULE_INDEX guard editRollout already implements (Array.isArray + Number.isInteger + bounds + isObject), which is copy-ready. Config attach needs JSON.parse of a typed value, with INVALID_DEFAULT_JSON as the closest precedent. |
+| Where attached rules are already surfaced | rollout-form.ts already has segmentKeysOf(rule) and renders a 'Segments <code>key</code>' line per rule inside the collapsed Rollout block; each rule renders its own form POSTing to the flag's action with a hidden ruleIndex. | `packages/dashboard/src/infrastructure/views/rollout-form.ts` | A per-rule Detach control fits that one-form-per-rule pattern exactly (same action, same baseVersion input, field=detachSegment plus hidden ruleIndex). Repo convention is one view file per form with a colocated *.test.ts, so a new segment-attach-form.ts is the fitting home. |
+| Edit POST routing and parse | All flag edits go through editRoute(environment, parse, draftState); writeStatus is 200 success / 400 when invalidInput / 422 otherwise. parseFeatureEdit switches on fields.get('field') with cases setRollout/removeRollout/enabled/default/rules/delete and a default FIELD_MESSAGE failure. parseBaseVersion requires /^[1-9]\d{0,8}$/. | `packages/dashboard/src/infrastructure/http-server.ts` | Attach/Detach need two new case arms in parseFeatureEdit plus optional EditDraft fields in editDraftOf; the FIELD_MESSAGE text and its assertion in http-server.test.ts must be updated. |
+| Upload path contract | uploadSegment(ports, env, {key, memberAttribute, csv, expectedCurrentVersion}) parses CSV via parseSegmentCsv then calls publishSegment. Failure reasons map 400 (EMPTY_FILE, MALFORMED_ROW, HEADER, TOO_MANY_MEMBERS, INVALID_SEGMENT), 422 (CONFLICT, VERSION_EXISTS), 502 (REQUEST_FAILED). expectedCurrentVersion null means 'does not exist yet' and is already implemented. The route re-renders the segment page. | `packages/dashboard/src/infrastructure/segment-routes.ts` | Create needs no new upload logic. But nothing checks that a typed key does not already exist: an operator reusing a key gets a publisher CONFLICT 422 rather than a friendly message, so the plan must decide whether create pre-checks with readSegmentVersion, and whether it re-renders the segment page (free) or the list page (new code). |
+| Body caps and browser CSV transport | readForm defaults to a 1 MiB cap; only the segment upload POST passes 32 MiB. app.js is 24 lines: it finds [data-segment-upload] forms with [data-segment-file], FileReader.readAsText into a hidden csv input, then submits. | `packages/dashboard/src/infrastructure/views/scripts/app.js` | A create form reusing the same data-segment-upload / data-segment-file / csv attribute triple needs ZERO new browser JS, because the handler is querySelectorAll-based. A client-side action rewrite would add untestable app.js logic — another reason to prefer the key-as-form-field POST route. |
+| View and style layout | One view file per page/form under src/infrastructure/views/; CSS lives in views/styles/*.css concatenated in a fixed order by stylesheet.ts (base, layout, forms, components, tables, rollout, segments, segment-list), content-hashed, no build step. Sizes range from components.css 439 lines down to segment-list.css 3 lines. | `packages/dashboard/src/infrastructure/views/stylesheet.ts` | New styling means a small new feature CSS file registered in STYLE_FILES; a file not registered there silently does nothing. Small per-feature files are the established precedent. |
+| Segments list page shape | renderSegmentListPage takes { environment, rows } only — no state parameter — where rows come from listReferencedSegments over browseEnvironment's contents.segmentKeys. segment-page.ts already accepts a state argument with notices. | `packages/dashboard/src/infrastructure/views/segment-list-page.ts` | The Create Segment form is a pure addition to this view plus a new POST branch, but the view needs a state parameter for notices/draft — copy segment-page.ts's signature. |
+| Ports available | DashboardPorts = { readCurrentVersion, fetchSnapshotText, openWriter, publishSegment, readSegmentVersion }, wired in aws-adapters.ts from five aws factories. | `packages/dashboard/src/infrastructure/aws-adapters.ts` | Confirming a typed Segment Key exists needs only readSegmentVersion — no new port and no bucket listing. Any sixth port would touch aws-adapters.ts, its colocated test, main.ts and the in-memory fakes used by tests and e2e. |
+| Testing conventions and coverage | domain/application tests live in packages/dashboard/test/{domain,application}/*.test.ts with test/support/seed-snapshot.ts; infrastructure and view tests are colocated in src/infrastructure. Root vitest coverage includes packages/*/src/**/*.ts at 100% lines/branches/functions/statements and excludes integration and e2e. | `vitest.config.ts` | app.js is outside the coverage glob (untestable but free) while every new .ts branch needs a unit test; new domain/application code goes under packages/dashboard/test/**, new view/route code gets a colocated src test. |
+| Layer boundary enforcement | eslint import-x/no-restricted-paths forbids domain -> application/infrastructure and application -> infrastructure across packages/*/src/**; the browser script dir has its own globals block. | `eslint.config.ts` | flag-edit.ts (domain) may import @featuresync/core only, so segment-key validation there must come from core. New browser globals in app.js must be added to that globals list or lint fails at --max-warnings=0. |
+
+## Out of scope
+
+- A general multi-condition targeting rule builder — The user explicitly scoped the attach form to 'members of this segment get the flag ON / this value'.
+- Percentage rollout controls inside the attach form — Rollout stays with the existing per-rule setRollout/removeRollout controls from horizon 17.
+- Listing all segments in the bucket, or any ListObjectsV2-based discovery — Binding decision (horizon 10) forbids bucket listing.
+- Viewing, editing, diffing or deleting segment members in the UI — Members are personal data that decisions horizon 18/19 keep off every page.
+- Deleting a Segment Key or its published versions — No delete path exists in the segment publisher and versions are immutable by design.
+- Changing the segment upload transport or the 32 MiB cap — Horizon 17 fixed the FileReader/urlencoded transport.
+- Fixing the ['rules'] touched-field granularity or the concurrent-replay 200+422 window — Both are open horizon-20 blockers, deliberately closed as a subject in horizon 20.
+- Cleaning up orphaned segment version objects from a lost pointer IfMatch race — A publisher-level concern in packages/aws affecting the CLI too; deserves its own horizon.
+- Auditing and pruning blockers.md — The brief's recommended lane, explicitly superseded by this user task.
+- A Playwright browser spec for the new forms on real LocalStack — The e2e suite still runs on the in-memory fake whose publishSegment throws; moving it is separately scoped.
+- SDK/core changes to segment evaluation, pointer polling or snapshot bundling — inSegment, referencedSegmentKeys and segment pointer polling already exist and need no change.
+- Automatically upgrading an existing schemaVersion 1 snapshot to 2 when a segment rule is attached — Only the new-environment template changes here. Upgrading a live snapshot in place is a data-changing decision nobody has made; attaching to an old environment fails loudly with a message naming the cause.
+- Confirming a typed Segment Key from the Attach form with a pointer read before publishing — The attach edit already fails loudly on a bad key and the referenced-key list covers the common case; the extra read blocks no other phase.
+- New percentage inputs inside the Attach Segment form — Rollout stays with the existing per-rule controls; this horizon only makes sure the segment list sits beside them so each rule's percentage and Detach are visible together.
+- Listing every Segment Key in the bucket for a true pick-from-a-list attach control — A binding horizon-10 decision forbids bucket listing, so no such list can exist.
+- A port that reads a published segment version object to derive its Member Attribute automatically — No port exposes it, and reading the version object would download every member, who are personal data kept off every page; the forms ask for the attribute instead.
+- Narrowing the ['rules'] touched-field granularity so two operators attaching different segments to one flag concurrently do not collide — A known open blocker inherited from horizons 17 and 20 and deliberately out of scope.
+- Making index-based detach robust against a concurrent edit that reorders rules — The existing rollout controls already identify rules by index; changing that identification scheme is its own horizon.
+- Viewing, editing or deleting segment members or published segment versions in the UI — Members are personal data kept off every page, and no delete path exists in the segment publisher.
+- A browser end-to-end spec for the new forms against real LocalStack — The end-to-end suite still runs against an in-memory fake whose segment publish throws; moving it is separately scoped.
+
+## Success criteria
+
+- With the dashboard running against an environment whose current snapshot is schemaVersion 2: (1) GET /env/<env>/segments renders a form that accepts a new Segment Key (validated with core's segmentKeySchema), a Member Attribute and a CSV file, and on submit publishes a Segment Version through the existing uploadSegment path and shows the resulting pointer version — with no flag rule referencing that key anywhere; (2) the environment page shows, per flag, an Attach Segment form offering a Segment Key (referenced keys pre-listed in a datalist, plus any typed key accepted, whose shape is validated with core's segmentKeySchema; existence is not pre-checked — a bad key fails loudly on publish) and, for a config-typed flag, the value segment members receive, whose submit appends a rule { when: { <memberAttribute>: { inSegment: <key> } }, enabled: true | value: <value> } through the existing edit-feature CAS/replay publish path; (3) each attached segment rule is listed with a Detach control that removes exactly that rule by index; (4) invalid input (bad key, unknown/unpublished segment, unparsable config value, stale base version) renders a 400/422 notice and publishes nothing; (5) every new branch in packages/dashboard/src has a unit test and the repo's 100% coverage, ESLint layer-boundary and typecheck gates stay green.
+- Change first version template to schemaVersion 2: The create-first-version form on the environment page prefills a schemaVersion 2 snapshot, asserted by a colocated unit test.
+- Add Create Segment POST branch to segment routes: matchSegmentRoute handles POST /env/<env>/segments by publishing a first segment version for a form-supplied Segment Key, with unit tests covering every new branch.
+- Add Create Segment form to Segment List Page: The Segment List Page renders a working Create Segment form backed by its own registered stylesheet file, covered by colocated unit tests.
+- Add attach and detach Segment flag edits: flag-edit.ts exposes attachSegment and detachSegment edits whose applied snapshots pass parseSnapshot, with unit tests at 100% branch coverage including multi-rule cases.
+- Describe attach and detach edit outcomes: editFeature applies, describes and reports failures for attachSegment and detachSegment, with unit tests covering each new arm.
+- Parse attach and detach Segment form submissions: parseFeatureEdit produces attachSegment and detachSegment edits from form submissions, with lenient config-value decoding covered branch-by-branch in colocated tests.
+- Add Attach form and attached segment list: The environment page shows, per flag, an Attach Segment form and every attached segment rule with its percentage and its own Detach control, covered by colocated tests including a two-segment flag.
+
+## Alignment preview
+
+Five concerns were raised before the plan was finalised: hand-typed member attributes, new environments starting at schema version 1, a created-but-unattached segment appearing nowhere, raw JSON still required for config values, and the phase count.
+
+The user redirected once (1 of 2 rounds used), adding three binding constraints: a flag must carry several attached sets each with its own rollout percentage; new environments start at schema version 2 (phase 1); and config values are accepted as typed (phase 6). The unattached-segment concern is answered by a note on the page in phase 3. The hand-typed member attribute is accepted as a known gap — deriving it would mean downloading every member, who are personal data.
+
+## Quality gate
+
+Full path, one gate iteration. 10 rubric dimensions scored; 0 blockers raised, so no verification call ran.
+
+- **Healed (1 major):** `success-coverage` — the success criterion required the attach form to resolve a typed segment key via `readSegmentVersion` and to validate against `SEGMENT_KEY_PATTERN`. The first is explicitly deferred and the second is not exported from core. Both clauses were reworded to the critic's own proposal, applied directly as a text substitution rather than with a healer call.
+- **Accepted debt (minor):** phase 7 is the heaviest phase (six files, a new view plus edits to two existing ones); it stays whole because it is one cohesive UI deliverable and the 7-phase ceiling leaves no room to split.
+- **Housekeeping:** the deferred list was de-duplicated (21 → 20 entries).
+- **Verdict:** passed after one healed major.
+
+## Cost
+
+7 Agent calls against a stated budget of 8–10: analyse, discovery, decompose, preview concerns, re-decompose (user redirect), invent rubrics, critic. No verification call, no healer call, no patch call.
+
+## Full analysis
+
+**Domain shape:** business — The work is about the flag-targeting domain — Segment Keys, membership Targeting Rules and snapshot edits validated by the domain contract — not about build or delivery machinery, even though the surface is a UI.
+
+**Ubiquitous language**
+
+| Term | Meaning |
+|---|---|
+| Segment Key | The 1-64 character identifier (SEGMENT_KEY_PATTERN) naming a member set; flags reference segments by key only. |
+| Segment Version | One immutable published upload of a segment's members, addressed by an integer version. |
+| Segment Pointer | The per-segment current.json naming the live Segment Version; readSegmentVersion returns its version or null when never published. |
+| Member Attribute | The evaluation-context attribute name a segment's members are matched against; it is the key used in a rule's when. |
+| Targeting Rule | One entry of a flag's rules array: a when condition plus enabled (boolean flag) or value (config flag), with optional rollout. |
+| Attach a Segment | Adding a Targeting Rule whose when uses the inSegment operator on the segment's Member Attribute; detaching removes that rule. |
+| Flag Edit | A single typed change applied to the raw stored snapshot by applyFlagEdit, validated with parseSnapshot and published under the CAS/replay path. |
+| Snapshot | The immutable versioned environment document holding all features and their rules; schemaVersion 2 is required for segment conditions. |
+
+**Assumptions**
+
+- 'Already-known segment' cannot mean 'everything in the bucket': decision horizon 10 forbids ListObjectsV2, so the attach form's known set is the keys referenced by the current snapshot (core's referencedSegmentKeys, already surfaced by list-referenced-segments) plus any key the operator types, whose existence is confirmed by a single readSegmentVersion pointer GET.
+- Attach/detach are new FlagEdit kinds in packages/dashboard/src/domain/flag-edit.ts (attachSegment / detachSegment) reusing applyFlagEdit + parseSnapshot validation and canReplayEdit, whose touchedFields map to ['rules'] exactly like setRules/setRollout — not a new publish path.
+- Segment upload keeps the horizon-17 transport: FileReader into a urlencoded csv field, 32 MiB cap on the segment POST route only; the new create form reuses that route with an empty expectedCurrentVersion meaning 'does not exist yet'.
+- Per decision horizon 11, flag-edit forms live on the environment page and POST there, re-rendering with a 200 notice or 422 draft rather than redirecting; the new Attach form follows that shape, while the Create Segment form lives on the Segment List Page and POSTs to the existing /env/<env>/segments/<key> route.
+- The attached rule's condition attribute is the segment's own memberAttribute, since evaluate() matches inSegment against the context attribute named in when.
+- Rules are appended to the end of the flag's rules array; rule ordering/reordering is not part of this horizon.
+- Segment members are personal data (decision horizon 19): no member value is ever rendered, logged or echoed into an error by any new view.
+
+**Risks**
+
+- schemaVersion gate: core's snapshot-contract rejects any inSegment condition on a schemaVersion 1 snapshot, so Attach against a v1 snapshot fails parse. The 'auto-upgrade to 2 vs fail loudly' question is an open blocker deferred from horizons 17 and 19 and is still unanswered — this horizon must pick an explicit behaviour (recommended: a clear, dedicated error message, not a silent upgrade) or it will surface as an opaque INVALID_SNAPSHOT.
+- No segment listing exists, so a segment created but not yet referenced is discoverable only by remembering its key; a true 'pick from a list of all segments' would conflict with the binding horizon-10 no-ListObjectsV2 decision.
+- Attach and Detach both map to touchedFields ['rules'], so two operators attaching different segments to the same flag concurrently produce one 422 — the known too-coarse granularity flagged as an open horizon-20 blocker; this horizon inherits it rather than fixing it.
+- The dashboard's 100% line/branch/function coverage gate applies to every new view and route branch, and integration/e2e contribute zero coverage.
+- Logic pushed into browser app.js (file picking, FileReader) is permanently outside the coverage include glob; growing it there is an open, unruled-on blocker.
+- Detach-by-rule-index is stale-prone: a rule index captured at render time can point at a different rule after a concurrent edit.
+- Config-flag attach requires a typed JSON value; free-text JSON re-introduces a small raw-JSON surface, and its parse errors must be rendered as a 400 draft rather than a 422.
+

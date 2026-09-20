@@ -24,8 +24,11 @@ const STAMPED_FIELDS: ReadonlySet<string> = new Set(['version', 'previousVersion
 const publishTemplate = (raw: Readonly<Record<string, unknown>>): string =>
   JSON.stringify(Object.fromEntries(Object.entries(raw).filter(([field]) => !STAMPED_FIELDS.has(field))), null, 2);
 
+/** New environments start on the newest schema so their first rules may already target segments. */
+const FIRST_VERSION_SCHEMA_VERSION = 2;
+
 const firstVersionTemplate = (environment: string): string =>
-  publishTemplate({ schemaVersion: 1, environment, createdBy: 'dashboard', reason: 'First version', features: {} });
+  publishTemplate({ schemaVersion: FIRST_VERSION_SCHEMA_VERSION, environment, createdBy: 'dashboard', reason: 'First version', features: {} });
 
 const prefill = (view: EnvironmentView): string => {
   if (view.status === 'empty') return firstVersionTemplate(view.environment);
@@ -67,7 +70,11 @@ const renderFlags = (view: PublishedView, state: EnvironmentPageState): string =
   const { current } = view;
   if (current.status !== 'available') return '';
   const { editDraft, createDraft } = state;
-  const context = { environment: view.environment, baseVersion: view.currentVersion };
+  const context = {
+    environment: view.environment,
+    baseVersion: view.currentVersion,
+    segmentKeys: current.contents.status === 'valid' ? current.contents.segmentKeys : [],
+  };
   const flags = renderSnapshotContents(current.contents, {
     ...context,
     ...(editDraft === undefined ? {} : { draft: editDraft }),

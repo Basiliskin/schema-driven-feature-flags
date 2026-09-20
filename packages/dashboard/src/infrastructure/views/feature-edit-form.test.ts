@@ -155,8 +155,8 @@ describe('renderSnapshotContents', () => {
     expect(rowOf(html, 'new-dashboard')).toContain('Default <code>true</code> · 0 rules');
     expect(rowOf(html, 'checkout-limits')).toContain('<span class="badge">config</span><span class="badge">Off</span>');
     expect(rowOf(html, 'checkout-limits')).toContain('· 1 rule</p>');
-    // Per feature: the edit form plus the delete-confirmation form, and one rollout form per rule.
-    expect(html.match(/<form /g)).toHaveLength(5);
+    // Per feature: the edit form, the attach form and the delete-confirmation form, plus one rollout form per rule.
+    expect(html.match(/<form /g)).toHaveLength(7);
   });
 
   it('shows the draft error only on the matching row', () => {

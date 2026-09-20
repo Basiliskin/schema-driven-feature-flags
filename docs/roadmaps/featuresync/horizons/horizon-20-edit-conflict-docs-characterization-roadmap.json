@@ -1,0 +1,428 @@
+{
+  "task": "Planning Horizon 20 of FeatureSync: make the dashboard's concurrent-edit behaviour, its documentation, and the project's open-problem list agree \u2014 document the field-granular replay rule, pin both branches of the Current Pointer read timing window with characterization tests, mark the tolerant integration assertion correct-by-design, and retire the stale horizon-14 blocker. No behavioural change to product code.",
+  "analysis": {
+    "objective": "Make the dashboard's concurrent-edit behaviour, its documentation and the project's open-problem list agree: document the field-granular Replay-On-Latest rule where it is decided, pin both branches of the Current Pointer read timing window with characterization tests, mark the tolerant race assertion correct-by-design, and retire the stale horizon-14 blocker \u2014 with no behavioural change to product code.",
+    "successDefinition": "The field-granular replay rule is recorded in decisions.md and matches canReplayEdit; both branches of the Current Pointer read timing window are pinned by passing unit tests in packages/dashboard/test/application/edit-feature.test.ts; the tolerant different-flags race assertion in packages/dashboard/integration/dashboard.localstack.test.ts carries a comment marking it correct-by-design and forbidding tightening; the horizon-14 blocker is retired with named, re-checkable evidence; and pnpm verify plus the dashboard LocalStack suite pass with no product-code behaviour change and no skipped tests.",
+    "assumptions": [
+      "The existing LocalStack integration harness (packages/dashboard/integration/dashboard.localstack.test.ts, vitest.integration.config.ts) and a working LOCALSTACK_AUTH_TOKEN are available locally, so the defect can be reproduced without building new infrastructure.",
+      "The suspected code surface is exactly two files - packages/dashboard/src/application/edit-feature.ts (editFeature/replayOnLatest) and packages/aws/src/infrastructure/s3-snapshot-publisher.ts (expectedCurrentVersion CAS) - with packages/dashboard/src/domain/flag-edit.ts (canReplayEdit) as the deciding predicate; no other package needs changing.",
+      "The horizon-16 decision that unrelated-feature edits auto-replay onto latest and only same-feature stale edits get 422 CONFLICT remains binding; the defect is a deviation from that rule, not a reason to re-open it.",
+      "The horizon-12 linear-history rule (every write, including rollback, lands at current+1) and horizon-11 'CONFLICT throws before any write' rule stay in force and constrain any fix.",
+      "LocalStack's S3 conditional-write behaviour (IfMatch/IfNoneMatch on the pointer) is faithful enough to real S3 that a characterization done against LocalStack is valid; if it is not, that itself is the characterization finding.",
+      "'Deterministic' means the concurrent test asserts a single fixed outcome (which request wins may be forced by sequencing or by a seam), not a set of acceptable statuses.",
+      "Coverage gate applies to packages/*/src/**/*.ts only; app.js browser code stays outside it (horizon-18 decision)."
+    ],
+    "risks": [
+      "CONFLICT WITH A BINDING DECISION: the horizon-16 decision deliberately makes a stale edit return 200 when the edited feature is unchanged since base, so part of what the horizon-14 blocker calls a '200 instead of 422' defect may be correct-by-decision behaviour plus a stale test expectation; the horizon must distinguish decision-conformant 200s from genuinely wrong ones and must not silently re-open the replay decision.",
+      "The concurrent case may be genuinely non-deterministic against LocalStack, so forcing a single asserted outcome could require a test seam that changes production code shape or produces a test that passes for the wrong reason.",
+      "Characterization may show the race is only reachable via the harness firing two same-base POSTs in parallel, which no single browser user can do - the correct outcome is then a documented note, which can feel like a failed horizon and invites fabricating a fix.",
+      "A fix inside replayOnLatest risks re-entering the replay path repeatedly (replay loses, reads latest, replays again) and could turn a bounded 200/422 into a livelock or an extra published version.",
+      "Moving conflict detection into the publisher's compare-and-set could break the CLI publish/rollback callers that pass no expectedCurrentVersion, and break the horizon-12 pointer-lag forward-probing path.",
+      "The 100% coverage gate can force the fix to add branches (e.g. a second conflict path) that are hard to exercise in unit tests, tempting coverage-driven rather than behaviour-driven test design.",
+      "LocalStack flakiness or auth-token absence could make reproduction inconclusive, leaving the horizon unable to decide which response is lying.",
+      "Fixing the snapshot CAS path may implicitly change the segment publisher's parallel expectedCurrentVersion behaviour (horizon-17 decision) if shared code is touched, silently widening blast radius."
+    ],
+    "outOfScope": [
+      "Orphaned segment-version object cleanup from a lost pointer IfMatch race - user-excluded; it is a storage-hygiene concern with its own blocker and does not affect which status code an edit returns.",
+      "Any new dashboard feature, page, or edit kind - this is a corrective horizon; adding surface area would dilute the regression proof.",
+      "Large-CSV upload safety, size limits, and the FileReader/32 MiB transport path - user-excluded; unrelated to edit-version concurrency.",
+      "Cross-browser or expanded Playwright browser matrix, and growing the browser suite generally - user-excluded; the browser is used here only to answer 'is this user-reachable', not as a new coverage surface.",
+      "The schemaVersion-1 auto-upgrade question for setRollout - user-excluded; a separate semantics decision with its own blocker.",
+      "The 100,000-member segment memory/latency question - user-excluded; a load question in the SDK, not a dashboard concurrency question.",
+      "LocalStack CI job runtime, Chromium install cost, and the retries:0 policy question raised by horizon 19 - CI-performance work, separate from the defect's semantics.",
+      "Re-opening the horizon-16 auto-replay decision itself (whether replay should exist at all) - binding; this horizon fixes conformance to it, not the policy.",
+      "Rollback, publish-from-pasted-JSON, and segment-upload conflict paths beyond what the same-base flag-edit race touches - each is a distinct write path and would multiply the blast radius.",
+      "Adding a CSRF token, changing the Origin/Host guard, or any other dashboard security hardening - unrelated to concurrency semantics."
+    ],
+    "domainShape": "business",
+    "domainShapeReason": "The objective is about the rules governing when one operator's edit legitimately overwrites another's - optimistic concurrency, version lineage, and conflict semantics over versioned snapshots - which are domain rules an operator would recognize, not build or CI machinery.",
+    "ubiquitousLanguage": [
+      {
+        "term": "Same-Base Edit",
+        "meaning": "A dashboard feature edit submitted against a specific base snapshot version, where another edit may have published since that base was read."
+      },
+      {
+        "term": "Edit Conflict",
+        "meaning": "The outcome in which a same-base edit is rejected because the fields it touches changed since its base, surfaced to the operator as 422 CONFLICT."
+      },
+      {
+        "term": "Replay-On-Latest",
+        "meaning": "The behaviour in edit-feature that re-applies a stale edit onto the latest snapshot and publishes again when the fields the edit touches are unchanged since base."
+      },
+      {
+        "term": "Expected Current Version",
+        "meaning": "The compare-and-set precondition passed to the S3 snapshot publisher, which must match the Current Pointer or the write throws CONFLICT before any PUT."
+      },
+      {
+        "term": "Current Pointer",
+        "meaning": "The per-environment current.json object naming the live snapshot version; its value after a race is the ground truth for which edit actually won."
+      },
+      {
+        "term": "Characterization",
+        "meaning": "The recorded, evidence-backed statement of which observed response (200 or 422) is incorrect and whether the wrong one is reachable through a real user path."
+      },
+      {
+        "term": "User-Reachable Path",
+        "meaning": "A sequence of actions a real operator can perform in the browser dashboard, as opposed to a request pattern only the integration harness can produce."
+      },
+      {
+        "term": "Regression Proof",
+        "meaning": "The deterministic LocalStack integration test that asserts the decided edit-conflict semantics and fails if the defect returns."
+      },
+      {
+        "term": "Flag Editing",
+        "meaning": "The bounded context covering how a dashboard operator changes a feature flag and how those changes are reconciled against concurrent changes."
+      }
+    ]
+  },
+  "discoveryFindings": [
+    {
+      "area": "Defect premise \u2014 the horizon-14 blocker is stale",
+      "finding": "The blocker line 'dashboard LocalStack edit-conflict tests (sequential + concurrent same-base edits) return 200 instead of 422' (blockers.md, 2026-09-19 | horizon 14) was already diagnosed AND acted on in horizon 16. discoveries.md records: 'LocalStack 200-vs-422 failure is replayOnLatest (c0c62ee) replaying different-feature edits, not horizon 12 -> fix tests, not publisher'. Commit 0b94dcf introduced the current same-flag/different-flag test split. The suite was run against the live LocalStack container 9 times in a row: 13 passed every time, zero flakes. The sequential and concurrent SAME-flag same-base tests already assert exactly 422 and exactly [200,422] and they pass.",
+      "filePath": "docs/roadmaps/featuresync/blockers.md",
+      "implication": "The task framing ('tests observe a 200 where a 422 was expected') is FALSE as of HEAD. Phase 1 must not be 'reproduce the 200-instead-of-422 failure' - it will not reproduce. Phase 1 should be 'confirm the horizon-14 blocker is already resolved by horizon 16 and retire that blocker line'. The live subject shrinks to the horizon-19 blockers: the 200+422 pair in the DIFFERENT-flag concurrent race. Plan for the 'documented downgrade' outcome as the likely, not the fallback, ending."
+    },
+    {
+      "area": "Which test actually hides an uncharacterized outcome",
+      "finding": "Only ONE test in packages/dashboard/integration/dashboard.localstack.test.ts uses a status-SET assertion, and it is the different-flags race: it('never loses a published version when two edits of different flags race on the same base') -> expect(statuses).toContain(200); expect(statuses.every(s => s===200 || s===422)).toBe(true); plus pointer.version === 1+succeeded, no snapshot above pointer, disabled.length === succeeded. By contrast the same-flag sequential test asserts status 422 + EDIT_CONFLICT(2) + no v3 + pointer v2; the same-flag concurrent test asserts sorted replies toEqual [200,422] + pointer v2 + no v3; and the different-flag SEQUENTIAL test asserts 200 + EDIT_REPLAYED(2) + pointer v3.",
+      "filePath": "packages/dashboard/integration/dashboard.localstack.test.ts",
+      "implication": "The determinism work item has exactly one target: the different-flags race test's every(s => s===200 || s===422) tolerance. Scope the regression-coverage phase to that single test, not a sweep. The same-flag tests are already deterministic and must be left alone."
+    },
+    {
+      "area": "Root cause of the 200+422 pair (traced, not guessed)",
+      "finding": "In the different-flags race both requests read the pointer at v1 and pass checkExpectedVersion. The winner PUTs snapshots/2.json (IfNoneMatch '*') then current.json (IfMatch etag-of-v1). The loser's snapshot PUT fails 412 -> S3PublishError('VERSION_EXISTS'). publishExpecting maps CONFLICT|VERSION_EXISTS -> {kind:'failure', conflict:{since:baseVersion}}, and editFeature calls replayOnLatest, which calls ports.readCurrentVersion. If the winner has ALREADY written the pointer, latest = v2, canReplayEdit(base v1, latest v2, edit) is true (the other flag's fields are untouched) -> replay publishes v3 -> 200/200, pointer v3. If the loser reads the pointer BEFORE the winner's pointer PUT lands, latest = v1, canReplayEdit(v1,v1) is trivially true, it replays on stale v1 text with expectedCurrentVersion=1 -> either CAS fails (CONFLICT) or resolveNextVersion finds snapshots/2.json present and not isLeftover -> VERSION_EXISTS -> second conflict -> replayOnLatest returns the failure -> 422.",
+      "filePath": "packages/dashboard/src/application/edit-feature.ts",
+      "implication": "NEITHER response is lying - this answers the horizon-19 blocker directly. The 200 is a genuinely published replay; the 422 is a genuinely unpublished edit, and the invariants hold in both branches (no lost version, no orphan snapshot, disabled.length === succeeded). The 'which of the two is incorrect' question is mis-posed; the correct characterization is 'a legitimate non-deterministic-but-safe pointer-read window, not a defect'. The decision phase should record that; the fix phase should either be dropped or scoped to making the loser retry its replay once (bounded), never to changing CAS semantics."
+    },
+    {
+      "area": "canReplayEdit - the exact predicate",
+      "finding": "packages/dashboard/src/domain/flag-edit.ts: canReplayEdit(baseText, latestText, edit): boolean parses features from both; false if either is unparseable; for kind==='create' returns !Object.hasOwn(before, edit.key); otherwise requires both before[key] and after[key] to be objects (a deleted flag -> false -> 422), then compares only touchedFields(edit): enabled->['enabled'], default->['type','default'], setRules|setRollout|removeRollout->['rules'], delete->whole-flag. Comparison is JSON.stringify equality.",
+      "filePath": "packages/dashboard/src/domain/flag-edit.ts",
+      "implication": "Field-granular, not feature-granular - this contradicts the task's ubiquitous-language entry 'Replay-On-Latest ... when the edited feature is unchanged since base'. The horizon-16 decision text ('only same-feature stale edits get 422') is also looser than the code: a same-feature edit to a DIFFERENT field replays to 200 by design. Any wording written into decisions.md this horizon must say 'the fields the edit touches', or it will contradict the code."
+    },
+    {
+      "area": "HTTP status mapping - no 302 exists on the edit path",
+      "finding": "packages/dashboard/src/infrastructure/http-server.ts: edits route via editRoute at POST /env/:env/features (create) and POST /env/:env/features/:key. expectedCurrentVersion arrives as form field baseVersion, parsed by parseBaseVersion with /^[1-9]\\d{0,8}$/; a missing/invalid value short-circuits and never reaches editFeature. Status comes from writeStatus = outcome.kind==='success' ? 200 : outcome.invalidInput===true ? 400 : 422. editFeature THROWS NOTHING - it returns a WriteOutcome discriminated union. Thrown HttpError only covers 400, 403, 404, 405, 500.",
+      "filePath": "packages/dashboard/src/infrastructure/http-server.ts",
+      "implication": "Drop any plan step about '302 mapping' or 'which thrown errors map to which status' for edits - that model of the code is wrong. A transport-layer fix means changing writeStatus or adding an outcome field; an application-layer fix means changing editFeature's returned WriteOutcome. Those are the only two levers."
+    },
+    {
+      "area": "Error modelling convention",
+      "finding": "No tagged-union error codes at the dashboard boundary. Infrastructure uses concrete Error subclasses with a literal name and a reason string union: S3PublishError (reason: INVALID_ENVIRONMENT|INVALID_POINTER|INVALID_SNAPSHOT|ENVIRONMENT_MISMATCH|VERSION_EXISTS|CONFLICT|INVALID_ROLLBACK_TARGET|VERSION_PROBE_LIMIT|REQUEST_FAILED). The dashboard matches these STRUCTURALLY, never with instanceof ('so this layer never loads the aws runtime just for an instanceof check' - publish-snapshot.ts publishReasonOf, error-messages.ts reasonOf). Reasons become operator prose via exhaustive Record<S3PublishErrorReason,string>. Application failures are data: WriteOutcome = {kind:'success'} | {kind:'failure', message, issues, invalidInput?, conflict?:{since:number}}, plus FlagEditFailure (9-member kind-tagged union) mapped by editFailure.",
+      "filePath": "packages/dashboard/src/application/publish-snapshot.ts",
+      "implication": "A fix must NOT add a new exception type at the dashboard layer. Any new conflict state is either a new S3PublishErrorReason string (the exhaustive Record makes typecheck enforce a new message entry) or a new optional field on the WriteOutcome failure branch, mirroring how invalidInput was added in horizon 17. Adding a reason also ripples into packages/dashboard/test/application/error-messages.test.ts."
+    },
+    {
+      "area": "S3 publisher CAS and conditional-write details",
+      "finding": "publish() = checkEnvironment -> checkBody (ENVIRONMENT_MISMATCH) -> readPointer -> checkExpectedVersion which throws S3PublishError('CONFLICT') when expected !== current?.pointer.version -> writeNextVersion = resolveNextVersion -> stampSnapshot -> checkSnapshot -> put(key, IfNoneMatch '*', 'VERSION_EXISTS') -> writePointer = put(current.json, etag===undefined ? IfNoneMatch '*' : IfMatch etag, 'CONFLICT') -> notify. isPreconditionFailed treats PreconditionFailed, ConditionalRequestConflict, HTTP 412 and HTTP 409 as a lost race. resolveNextVersion HeadObjects forward up to MAX_VERSION_PROBES=1000, skipping a present version only if isLeftover (LastModified < pointer LastModified), else VERSION_EXISTS; exhaustion throws VERSION_PROBE_LIMIT. HeadObject is used instead of ListObjectsV2 so the publisher needs no bucket-wide ListBucket. rollback() shares writeNextVersion and passes NO expectedCurrentVersion.",
+      "filePath": "packages/aws/src/infrastructure/s3-snapshot-publisher.ts",
+      "implication": "Confirms the task-analysis risk: moving conflict detection into the publisher would break rollback and the CLI, which call publish/rollback with no expectedCurrentVersion - checkExpectedVersion early-returns on undefined and that is load-bearing. It also confirms the pointer-write IfMatch failure leaves the snapshot body behind (the orphan-object blocker), so touching put/writeNextVersion widens blast radius into the out-of-scope orphan issue AND into s3-segment-publisher.ts. Strongly prefer the edit-feature layer if a fix is made at all."
+    },
+    {
+      "area": "Browser spec is NOT LocalStack-backed and has no true concurrency",
+      "finding": "packages/dashboard/e2e/concurrent-edits.spec.ts imports ./support/fixtures.js, which builds an InMemoryEnvironment class (in-process, no S3, no LocalStack) re-implementing the CAS rule by throwing Object.assign(new Error(), {name:'S3PublishError', reason:'CONFLICT'}). Only segment-upload-rollout.spec.ts uses ./support/localstack-fixtures.js. All five specs in concurrent-edits.spec.ts simulate the other writer with a synchronous env.publishAs('bob', ...) call BEFORE the user's action - strictly sequential. They cover: update banner + changes dialog; carries unsaved edits onto the latest version; saves an edit on top of a change to a different field without asking; offers a review when the edited flag was deleted meanwhile; and a pasted-draft merge flow.",
+      "filePath": "packages/dashboard/e2e/concurrent-edits.spec.ts",
+      "implication": "Decisive evidence for the 'is it user-reachable' question, available WITHOUT writing a new browser spec: the browser harness cannot even express the race - no true parallelism, no S3. A single browser user cannot produce two in-flight same-base POSTs; the pointer-read window requires two concurrent server requests. Plan the user-reachability phase as an argument plus code trace over this file and app.js's single-submit form, not as a new Playwright spec - and note the in-memory fake would have to be swapped for localstack-fixtures first, which is scope creep."
+    },
+    {
+      "area": "Test/coverage gating mechanics",
+      "finding": "Root vitest.config.ts builds one project per packages/ dir, each EXCLUDING integration/** and e2e/**; coverage is v8, include ['packages/*/src/**/*.ts'], thresholds all 100. Integration tests are NEVER counted toward coverage - packages/dashboard/vitest.integration.config.ts sets coverage.enabled false, include ['integration/**/*.localstack.test.ts'], testTimeout/hookTimeout 30000, and loads AWS_* from repo-root .env merged over process.env. Root scripts: verify = build -> typecheck -> lint -> test (vitest run --coverage); test:integration = build -> aws test:integration -> dashboard test:integration. There is NO root test:e2e; CI calls pnpm --filter @featuresync/dashboard test:e2e after playwright install --with-deps chromium, in the localstack job, retries 0. Layout quirk: unit tests live in packages/dashboard/test/** EXCEPT infrastructure ones, co-located in src/ (http-server.test.ts, segment-routes.test.ts, aws-adapters.test.ts, views/*.test.ts).",
+      "filePath": "vitest.config.ts",
+      "implication": "Any branch added to packages/*/src must be covered by a UNIT test - the LocalStack regression test contributes zero coverage. Budget a unit-test task alongside every product-code edit; place a new infrastructure test co-located in src/ but an application/domain test under test/. Also: 'landing the regression with the 100% gate intact' is only a constraint if product code changes; a test-only change to the tolerance assertion needs no coverage work at all."
+    },
+    {
+      "area": "Reproduction harness is live and cheap",
+      "finding": "The localstack-aws container is up and healthy, .env is present, and the dashboard integration suite runs in ~2.7s with no build step (vitest resolves workspace sources directly): cd packages/dashboard && npx vitest run --config vitest.integration.config.ts integration/dashboard.localstack.test.ts. 13 tests. Siblings: packages/dashboard/integration/dashboard-segments.localstack.test.ts, and packages/aws/integration/s3-snapshot-publisher.localstack.test.ts which already owns the low-level race cases (lets exactly one of two concurrent publishes win; rejects a repeated IfNoneMatch put and a stale IfMatch put with 412; refuses a publish built on a stale version and leaves the bucket untouched; skips past snapshots an old-style rollback left above the pointer).",
+      "filePath": "packages/dashboard/integration/dashboard.localstack.test.ts",
+      "implication": "Characterization is cheap and needs no new infrastructure - but because 9/9 runs passed with zero variation, a plain repeat-run loop will NOT observe the 200+422 branch. Plan characterization to force the window deliberately (a seam or a delayed readCurrentVersion in a test-local ports wrapper) rather than by repetition, and note CAS-level behaviour is already proven in the aws package so the dashboard test should not re-prove it."
+    }
+  ],
+  "requiredMaterials": [],
+  "phases": [
+    {
+      "id": "document-field-granular-replay-rule",
+      "order": 0,
+      "name": "Document the field-granular replay rule",
+      "goal": "State, in the code that decides it and in the project's decisions record, that a stale Same-Base Edit is auto-replayed onto the latest snapshot when the FIELDS THAT EDIT TOUCHES are unchanged since its base \u2014 not merely when 'the edited feature is unchanged'.",
+      "rationale": "When two operators edit the same environment, a later edit submitted against an older snapshot is sometimes re-applied automatically onto the newest snapshot instead of being rejected. The function that makes that call compares only the specific fields the edit writes, but the project's written rule says something looser ('the edited feature is unchanged'), which a reader would take to mean a same-feature edit always gets rejected. That mismatch is misleading and is the only wording correction this horizon owes.",
+      "filesAffected": [
+        "packages/dashboard/src/domain/flag-edit.ts",
+        "docs/roadmaps/featuresync/decisions.md"
+      ],
+      "changes": [
+        "Add a doc comment directly above canReplayEdit in packages/dashboard/src/domain/flag-edit.ts stating the rule it actually implements: replay is allowed when the fields this edit touches are byte-identical between the base snapshot text and the latest snapshot text \u2014 enabled -> ['enabled']; default -> ['type','default']; setRules/setRollout/removeRollout -> ['rules']; delete -> the whole flag; create -> the key must still be absent; and replay is refused when either snapshot text fails to parse or the flag was deleted meanwhile.",
+        "In that comment, give the consequence a reader needs: two edits to the SAME flag but DIFFERENT fields both succeed by design, and only an edit whose own touched fields moved gets the 422 Edit Conflict response.",
+        "Append one line to docs/roadmaps/featuresync/decisions.md recording the corrected one-sentence rule and stating that it supersedes the earlier, looser 'the edited feature is unchanged' wording; reference packages/dashboard/src/domain/flag-edit.ts as the authority.",
+        "Change no behaviour: canReplayEdit's implementation, its signature, and every caller stay exactly as they are."
+      ],
+      "boundedContext": "Flag Editing (dashboard)",
+      "layer": "domain",
+      "blastRadius": "small",
+      "inputs": [
+        "packages/dashboard/src/domain/flag-edit.ts (canReplayEdit and touchedFields)",
+        "docs/roadmaps/featuresync/decisions.md (existing horizon-16 replay decision line)"
+      ],
+      "expectedResult": "docs/roadmaps/featuresync/decisions.md carries a one-sentence field-granular Replay-On-Latest rule that matches canReplayEdit, with the matching doc comment in place above that function.",
+      "dependsOn": [],
+      "rubric": [
+        {
+          "id": "branch-coverage-of-doc-comment",
+          "label": "Doc comment covers every branch of canReplayEdit",
+          "ruleStatement": "The doc comment above canReplayEdit must describe every return path the function actually has, not just the happy path; 8 means all branches named and correct, 10 means each branch is also tied to the concrete condition in the code (parse failure, missing/non-object flag entry, create-key-absent) so a reader could reconstruct the function from the comment, minScore is: no documented branch is wrong and no early return is silently missing.",
+          "passCriteria": [
+            "Open packages/dashboard/src/domain/flag-edit.ts and read the comment directly above canReplayEdit.",
+            "The comment says replay is refused when either snapshot text fails to parse (JSON parse failure on base or latest).",
+            "The comment says replay is refused when the flag is missing or no longer an object in either snapshot (the deleted-meanwhile case).",
+            "The comment states the create case separately: replay is allowed only if the key is still absent in the latest snapshot.",
+            "The comment lists the touched-field sets exactly as touchedFields returns them: enabled -> ['enabled']; default -> ['type','default']; setRules/setRollout/removeRollout -> ['rules']; delete -> the whole flag entry.",
+            "The comment says the comparison is equality of the serialized (JSON.stringify) values of those fields between base and latest, not a deep semantic diff."
+          ],
+          "failureExamples": [
+            "The comment describes the field-comparison rule accurately but omits the two early returns (unparseable text, deleted flag), so a reader believes a deleted flag still replays \u2014 the classic happy-path-only write-up.",
+            "The comment lists 'default -> default' and drops 'type', matching the term but not the code's two-element field list.",
+            "The comment says 'compares the edited fields' without saying comparison is string equality of serialized values, leaving a reader to assume order-insensitive deep equality of rules arrays."
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "reader-consequence-stated",
+          "label": "Operator-visible consequence spelled out",
+          "ruleStatement": "The comment must translate the predicate into the outcome a reader cares about \u2014 which edits get 200 and which get the 422 Edit Conflict; 8 means both the same-flag/different-field success case and the touched-fields-moved conflict case are stated, 10 means the wording makes clear the 422 is returned by the caller rather than thrown from this function.",
+          "passCriteria": [
+            "The comment explicitly states that two edits to the SAME flag touching DIFFERENT fields both succeed by design.",
+            "The comment explicitly states that only an edit whose own touched fields changed since its base gets the 422 Edit Conflict response.",
+            "The comment does not claim canReplayEdit itself returns or throws an HTTP status; it says the false result leads the caller to the conflict outcome."
+          ],
+          "failureExamples": [
+            "The comment documents the predicate mechanics precisely but never mentions 422 or the same-flag/different-field success, so the reader still cannot tell what an operator sees.",
+            "The comment says 'returns 422 when replay is not possible', attributing a transport status to a domain function that returns a boolean."
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "decisions-line-supersedes-old-wording",
+          "label": "Decisions entry is one sentence, field-granular, and marked superseding",
+          "ruleStatement": "docs/roadmaps/featuresync/decisions.md must gain a single line that states the field-granular rule and explicitly retires the older 'the edited feature is unchanged' wording; 8 means the line is accurate and names the superseded text, 10 means it also cites packages/dashboard/src/domain/flag-edit.ts as the authority and is a genuine one-sentence entry in the file's existing format.",
+          "passCriteria": [
+            "decisions.md contains a new line whose rule wording is in terms of 'the fields the edit touches' (or equivalent), never 'the feature is unchanged'.",
+            "The same line states that it supersedes / corrects the earlier horizon-16 looser wording, quoting or naming that wording so a reader can match them.",
+            "The line references packages/dashboard/src/domain/flag-edit.ts as the authoritative implementation.",
+            "The new line follows the date/format convention of the surrounding entries in decisions.md.",
+            "The earlier horizon-16 line is left in place (not silently edited away), so the correction is traceable."
+          ],
+          "failureExamples": [
+            "A correct new rule line is appended but the older horizon-16 line is left standing with no cross-reference, so decisions.md now contains two contradictory rules and a reader picks whichever they hit first.",
+            "The old line is rewritten in place rather than superseded, erasing the record that the rule was ever described loosely.",
+            "The new line reads 'replay is allowed when the flag is unchanged', reproducing the exact imprecision the phase exists to fix."
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "domain-layer-purity",
+          "label": "Domain deliverable stays free of transport and infrastructure concerns",
+          "ruleStatement": "This is a domain-layer change, so the file must gain only a comment \u2014 no import, no dependency on application/infrastructure modules, and no HTTP/S3 vocabulary presented as this layer's own behaviour; 8 means no code change and no new import, 10 means the comment's few outward references (422, the publisher) are clearly framed as what CALLERS do with the boolean.",
+          "passCriteria": [
+            "git diff of packages/dashboard/src/domain/flag-edit.ts shows only added comment lines \u2014 no changed statements, no changed signature.",
+            "The import list at the top of flag-edit.ts is unchanged; nothing from src/application, src/infrastructure, or packages/aws is imported.",
+            "Any mention of 422, current.json, S3 or expected-current-version in the comment is phrased as downstream consequence, not as something this function does."
+          ],
+          "failureExamples": [
+            "While adding the comment the author 'tidies' canReplayEdit \u2014 extracting a helper or reordering the early returns \u2014 which is a behaviour-risking change this phase forbids.",
+            "The comment is technically fine but the author imports a status-code constant from the http layer to reference 422 symbolically, creating an inward dependency from domain onto infrastructure."
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "no-caller-or-signature-drift",
+          "label": "Signature and callers untouched",
+          "ruleStatement": "canReplayEdit's signature and every call site must be byte-identical to HEAD~ apart from the comment; 8 means the diff shows no other source file touched, 10 means the full repo verify (typecheck, lint, unit tests, 100% coverage gate) passes unchanged with no test edits needed.",
+          "passCriteria": [
+            "git diff --stat for this phase lists only packages/dashboard/src/domain/flag-edit.ts and docs/roadmaps/featuresync/decisions.md.",
+            "canReplayEdit's parameter list and return type are unchanged.",
+            "pnpm verify (or the repo's equivalent build/typecheck/lint/test) passes with no test file modified in this phase."
+          ],
+          "failureExamples": [
+            "An existing test's expectation or a snapshot is adjusted because the comment shifted line numbers in an error message or a coverage-ignore pragma was added.",
+            "A JSDoc @param rename is applied that changes the exported symbol's declared parameter names, rippling into a call site written with named-object destructuring."
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "The likeliest miss is a comment that documents only the field-comparison happy path \u2014 re-read canReplayEdit top to bottom and add one clause per early return (unparseable text, missing/non-object flag, create-key-absent) before touching anything else."
+    },
+    {
+      "id": "characterize-pointer-read-timing-window",
+      "order": 1,
+      "name": "Test both outcomes of the pointer-read window",
+      "goal": "Pin, with deliberate unit tests, the two safe outcomes that occur when a losing Same-Base Edit re-reads the Current Pointer after its write lost the race \u2014 a fresh read replays and publishes (success), a stale read replays onto stale text and conflicts (422) \u2014 mark the existing tolerant integration assertion as correct and deliberate, and retire the stale horizon-14 blocker on that evidence.",
+      "rationale": "When two edits to DIFFERENT flags are submitted against the same base snapshot, one write wins and the other is retried automatically against whatever the pointer says at that instant. If the pointer has already advanced, the retry succeeds; if it has not yet advanced, the retry fails and the operator sees a conflict. Both endings are safe \u2014 no published version is lost either way \u2014 but only one of them ever shows up in real runs, so it must be forced by a test rather than waited for. Without that, a future developer sees a test that accepts either status and assumes it is sloppy.",
+      "filesAffected": [
+        "packages/dashboard/test/application/edit-feature.test.ts",
+        "packages/dashboard/integration/dashboard.localstack.test.ts",
+        "packages/dashboard/src/application/edit-feature.ts",
+        "docs/roadmaps/featuresync/blockers.md",
+        "docs/roadmaps/featuresync/discoveries.md"
+      ],
+      "changes": [
+        "In packages/dashboard/test/application/edit-feature.test.ts, add a characterization group that drives editFeature with a hand-built, test-local ports object (editFeature already takes its ports as an argument, so no production seam is needed).",
+        "Force the FRESH-read branch: the first publish attempt fails as a lost race, and the test ports' readCurrentVersion then returns the ALREADY-ADVANCED pointer with the winner's snapshot text; assert editFeature returns a success outcome and that the replayed publish carried the advanced expected-current-version.",
+        "Force the STALE-read branch: same lost-race first attempt, but readCurrentVersion still returns the OLD pointer and the old snapshot text; assert editFeature returns the conflict failure outcome (the same shape the HTTP layer turns into 422) and that it does not loop or publish twice.",
+        "Add an explanatory comment above the tolerant assertion in the different-flags race test in packages/dashboard/integration/dashboard.localstack.test.ts naming the two branches, stating the invariants that hold in both (no published version lost, no snapshot above the pointer, disabled-flag count equals the number of successful requests), and stating explicitly that the assertion must NOT be tightened to 'both 200' because the outcome is genuinely timing-dependent and a strict assertion would flake under the repo's retries:0 policy.",
+        "Make no change to the behaviour of packages/dashboard/src/application/edit-feature.ts \u2014 it appears here only as the unit under test and must not gain a retry, a new outcome field, or a new error type.",
+        "As a named, non-optional step inside this phase (folded here because a project-memory edit is never a phase of its own): mark the 2026-09-19 horizon-14 blocker line in docs/roadmaps/featuresync/blockers.md resolved, naming the evidence \u2014 the tests themselves were corrected in horizon 16, and the dashboard LocalStack suite passes 13/13 on nine consecutive runs with no flakes.",
+        "As a further named step: record in docs/roadmaps/featuresync/discoveries.md that the 200+422 pair in the different-flags race is a pointer-read timing window rather than a lost-update defect, that both branches hold every invariant, that it is not reachable by a single operator in the browser, and that these characterization tests are where both branches are now pinned. Keep each entry to one fact in 240 characters or fewer."
+      ],
+      "boundedContext": "Flag Editing (dashboard)",
+      "layer": "application",
+      "blastRadius": "small",
+      "inputs": [
+        "packages/dashboard/src/application/edit-feature.ts (editFeature and replayOnLatest)",
+        "packages/dashboard/test/application/edit-feature.test.ts (existing unit-test patterns and fake ports)",
+        "packages/dashboard/integration/dashboard.localstack.test.ts (the different-flags race test)",
+        "The field-granular replay rule recorded in phase 0"
+      ],
+      "expectedResult": "packages/dashboard/test/application/edit-feature.test.ts contains passing characterization tests that pin both the fresh-read success outcome and the stale-read conflict outcome of the pointer-read timing window.",
+      "dependsOn": [
+        "document-field-granular-replay-rule"
+      ],
+      "compensation": "Restore the blocker line verbatim from git history if a later run of the dashboard LocalStack suite shows a genuine 200-instead-of-422 failure.",
+      "rubric": [
+        {
+          "id": "fresh-read-branch-forced",
+          "label": "Fresh-read success branch is genuinely forced",
+          "ruleStatement": "The fresh-read test must make the first publish lose the race and the subsequent readCurrentVersion return the ADVANCED pointer, and must assert something that only the replay path can produce; 8 means it asserts the success outcome plus the advanced expected-current-version on the second publish call, 10 means it would fail loudly (not merely differently) if replayOnLatest were deleted.",
+          "passCriteria": [
+            "In packages/dashboard/test/application/edit-feature.test.ts, a test builds a local ports object whose first publish call returns/raises the lost-race conflict and whose readCurrentVersion afterwards returns the winner's later version and snapshot text.",
+            "The test asserts editFeature's returned outcome has kind 'success'.",
+            "The test inspects the recorded second publish call and asserts its expectedCurrentVersion equals the advanced pointer version (not the original base version).",
+            "The test asserts the publish port was called exactly twice.",
+            "Deleting or short-circuiting the replay path in edit-feature.ts makes this test fail \u2014 verify by temporarily stubbing replayOnLatest to return the failure and re-running."
+          ],
+          "failureExamples": [
+            "The test asserts only that the outcome is a success, which a fake whose first publish quietly succeeded would also satisfy \u2014 it never proves the second, replayed publish happened at all.",
+            "The fake readCurrentVersion returns the advanced version number but the same old snapshot text, so canReplayEdit passes for the wrong reason and the test does not actually model the winner's write.",
+            "The test asserts publish was called twice but never checks the expectedCurrentVersion argument, so a replay that re-sent the stale base version would still pass."
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "stale-read-branch-forced",
+          "label": "Stale-read conflict branch is pinned, including the no-loop guarantee",
+          "ruleStatement": "The stale-read test must keep readCurrentVersion on the OLD pointer and old text and pin the conflict failure outcome AND the absence of further attempts; 8 means it asserts the failure outcome shape the HTTP layer maps to 422 and a publish call count of exactly two, 10 means it also asserts the failure carries the conflict.since base version rather than just kind 'failure'.",
+          "passCriteria": [
+            "A test drives editFeature with the same lost-race first publish but a readCurrentVersion that still returns the ORIGINAL pointer version and the ORIGINAL snapshot text.",
+            "The test asserts the returned outcome has kind 'failure' and is NOT invalidInput (so the http layer's writeStatus yields 422, not 400).",
+            "The test asserts the failure's conflict field carries the base version.",
+            "The test asserts the publish port was called exactly twice \u2014 no third attempt, no loop.",
+            "Both branch tests run green under the repo's unit runner with no retries configured and no timers or sleeps in the test body."
+          ],
+          "failureExamples": [
+            "The test asserts only kind === 'failure', which would also pass if the edit failed for a validation reason \u2014 it does not distinguish the 422 conflict from a 400.",
+            "The test relies on a real timer or a queued microtask ordering to make the read look stale, reintroducing exactly the nondeterminism the phase exists to remove.",
+            "The no-loop guarantee is checked by asserting 'publish was called' rather than a call count, so a future bounded retry would slip past this test."
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "non-tightening-comment",
+          "label": "Integration comment marks the tolerance as deliberate and forbids tightening",
+          "ruleStatement": "The comment above the tolerant assertion in the different-flags race test must name both branches, list the invariants that hold in both, and state in unmistakable terms that it must not be tightened to 'both 200'; 8 means all three elements are present, 10 means it also gives the reason a strict assertion would flake (retries:0) and points at the unit tests that pin the branches.",
+          "passCriteria": [
+            "packages/dashboard/integration/dashboard.localstack.test.ts has a comment immediately above the statuses assertion in the different-flags race test.",
+            "The comment names both outcomes: a fresh pointer read replays and returns 200; a stale pointer read conflicts and returns 422.",
+            "The comment lists the invariants that hold either way: no published version is lost, no snapshot sits above the pointer, and the disabled-flag count equals the number of successful requests.",
+            "The comment says explicitly that the assertion must NOT be narrowed to expect both requests to return 200.",
+            "The comment gives the reason (genuinely timing-dependent; the suite runs with retries: 0, so a strict assertion would flake) and names packages/dashboard/test/application/edit-feature.test.ts as where both branches are pinned."
+          ],
+          "failureExamples": [
+            "The comment explains the race accurately but never says 'do not tighten this', so the next reader treats the explanation as background and still replaces the tolerance with toEqual([200,200]).",
+            "The comment says 'this is flaky by nature', which reads as a defect admission and invites someone to 'fix the flake' rather than preserve the assertion.",
+            "The assertion itself is edited (or an eslint-disable added) while adding the comment, changing the integration test this phase was supposed to leave behaviourally intact."
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "product-code-unchanged",
+          "label": "No behavioural change to edit-feature and no layer leakage in the tests",
+          "ruleStatement": "edit-feature.ts must be byte-identical apart from at most comments, and the new tests must exercise it through its existing injected ports rather than reaching into infrastructure; 8 means no product-code diff and no aws/S3 client import in the test, 10 means the test-local ports are hand-built in the test file and no exported production seam was added for testability.",
+          "passCriteria": [
+            "git diff of packages/dashboard/src/application/edit-feature.ts shows no statement changes \u2014 no retry, no new WriteOutcome field, no new error type or reason.",
+            "No new export was added to edit-feature.ts or its neighbours solely to let the test observe internals.",
+            "The new tests construct their ports object inline and import nothing from packages/aws or src/infrastructure.",
+            "The lost-race first publish is simulated in the test's own fake port, not by talking to LocalStack or an S3 client.",
+            "Repo verify passes: typecheck, lint, unit tests, and the 100% coverage thresholds, with no coverage-ignore pragma added."
+          ],
+          "failureExamples": [
+            "To make the lost race easy to fake, the author exports an internal helper from edit-feature.ts and calls it directly, so the test no longer covers the real editFeature path it claims to characterize.",
+            "The test imports S3PublishError from packages/aws to build the lost-race error, pulling the aws runtime into a dashboard application test and contradicting the repo's structural-matching convention.",
+            "A harmless-looking field is added to the failure outcome 'just for the test to assert on', which is precisely the deferred change this horizon forbids."
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "blocker-retired-with-named-evidence",
+          "label": "Horizon-14 blocker retired against checkable evidence",
+          "ruleStatement": "The blockers.md entry must be marked resolved with evidence a reader can independently re-check, not an assertion of correctness; 8 means the entry names the horizon-16 test correction and the 13/13-on-nine-runs LocalStack result, 10 means it also names the command or commit a reader can re-run to confirm and leaves the original blocker text readable.",
+          "passCriteria": [
+            "The 2026-09-19 horizon-14 blocker line in docs/roadmaps/featuresync/blockers.md is marked resolved with a date.",
+            "The resolution names the horizon-16 fix (the tests were corrected, not the publisher) and references the commit or horizon that did it.",
+            "The resolution cites the concrete run evidence: the dashboard LocalStack suite passing 13/13 across nine consecutive runs with no flakes.",
+            "The original blocker wording remains present or quoted, so the history is not erased.",
+            "A reader can find, from the entry alone, which suite to run to re-verify."
+          ],
+          "failureExamples": [
+            "The entry is marked resolved with 'fixed in horizon 16' and no run evidence, so nobody can tell whether it was verified or assumed.",
+            "The blocker line is deleted rather than marked resolved, destroying the record that the 200-instead-of-422 framing was ever believed.",
+            "The entry claims the publisher was fixed, misattributing the resolution to product code when the actual fix was to the tests."
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "discovery-entry-accuracy-and-brevity",
+          "label": "Discovery entry is accurate, bounded, and one fact per line",
+          "ruleStatement": "The discoveries.md addition must record the timing-window characterization within the file's 240-character-per-entry discipline and must not overclaim; 8 means the facts are correct and within the limit, 10 means each of the four facts (timing window not lost-update, invariants hold both ways, not operator-reachable in the browser, pinned by the named unit tests) is its own entry.",
+          "passCriteria": [
+            "docs/roadmaps/featuresync/discoveries.md records that the 200+422 pair in the different-flags race is a pointer-read timing window, not a lost-update defect.",
+            "It records that every invariant holds in both branches.",
+            "It records that the race is not reachable by a single operator in the browser dashboard.",
+            "It names packages/dashboard/test/application/edit-feature.test.ts as where both branches are now pinned.",
+            "Each added entry is one fact and is 240 characters or fewer.",
+            "No entry claims the race was eliminated or that the behaviour was changed."
+          ],
+          "failureExamples": [
+            "A single 600-character paragraph captures all four facts at once, correct in content but breaking the file's one-fact/240-character convention that keeps it scannable.",
+            "The entry says 'the race is now fixed' rather than 'characterized', misreporting a documentation horizon as a behavioural one.",
+            "The browser-reachability claim is stated without noting it rests on the in-memory e2e fixtures having no true concurrency, so a later reader cannot tell how strong the claim is."
+          ],
+          "minScore": 7
+        }
+      ],
+      "healerHint": "The likeliest miss is a characterization test that would still pass with the replay path removed \u2014 assert the second publish's expectedCurrentVersion and an exact publish call count in both branches rather than just the outcome kind."
+    }
+  ],
+  "successCriteria": [
+    "The field-granular replay rule is recorded in decisions.md and matches canReplayEdit; both branches of the Current Pointer read timing window are pinned by passing unit tests in packages/dashboard/test/application/edit-feature.test.ts; the tolerant different-flags race assertion in packages/dashboard/integration/dashboard.localstack.test.ts carries a comment marking it correct-by-design and forbidding tightening; the horizon-14 blocker is retired with named, re-checkable evidence; and pnpm verify plus the dashboard LocalStack suite pass with no product-code behaviour change and no skipped tests.",
+    "Document the field-granular replay rule: docs/roadmaps/featuresync/decisions.md carries a one-sentence field-granular Replay-On-Latest rule that matches canReplayEdit, with the matching doc comment in place above that function.",
+    "Test both outcomes of the pointer-read window: packages/dashboard/test/application/edit-feature.test.ts contains passing characterization tests that pin both the fresh-read success outcome and the stale-read conflict outcome of the pointer-read timing window."
+  ],
+  "deferred": [
+    "Orphaned segment-version object cleanup from a lost pointer IfMatch race - user-excluded; it is a storage-hygiene concern with its own blocker and does not affect which status code an edit returns.",
+    "Any new dashboard feature, page, or edit kind - this is a corrective horizon; adding surface area would dilute the regression proof.",
+    "Large-CSV upload safety, size limits, and the FileReader/32 MiB transport path - user-excluded; unrelated to edit-version concurrency.",
+    "Cross-browser or expanded Playwright browser matrix, and growing the browser suite generally - user-excluded; the browser is used here only to answer 'is this user-reachable', not as a new coverage surface.",
+    "The schemaVersion-1 auto-upgrade question for setRollout - user-excluded; a separate semantics decision with its own blocker.",
+    "The 100,000-member segment memory/latency question - user-excluded; a load question in the SDK, not a dashboard concurrency question.",
+    "LocalStack CI job runtime, Chromium install cost, and the retries:0 policy question raised by horizon 19 - CI-performance work, separate from the defect's semantics.",
+    "Re-opening the horizon-16 auto-replay decision itself (whether replay should exist at all) - binding; this horizon fixes conformance to it, not the policy.",
+    "Rollback, publish-from-pasted-JSON, and segment-upload conflict paths beyond what the same-base flag-edit race touches - each is a distinct write path and would multiply the blast radius.",
+    "Adding a CSRF token, changing the Origin/Host guard, or any other dashboard security hardening - unrelated to concurrency semantics.",
+    "Add a bounded retry to replayOnLatest so the different-flags race deterministically ends 200+200 \u2014 fails YAGNI gate 1 (asked for): the user explicitly dropped it, and it would not even deliver determinism, since an immediate re-read can land as early as the first one.",
+    "Tighten the tolerant status assertion in the different-flags race test to 'both 200' \u2014 fails gate 1: the outcome is genuinely timing-dependent, so a strict assertion would flake in CI under the repo's retries:0 policy.",
+    "Add a new S3PublishError reason, FlagEditFailure kind, or WriteOutcome field to distinguish the stale-read conflict from an ordinary conflict \u2014 fails gate 3 (speculative abstraction): nothing consumes the distinction, and it would ripple into the exhaustive error-message record.",
+    "Add a Playwright spec, or swap the browser fixtures from the in-memory fake to LocalStack, to test whether the race is operator-reachable \u2014 fails gate 2 (needed now): discovery already settled reachability by code trace, and the fixture swap is a separate, larger piece of work.",
+    "Change the compare-and-set path in packages/aws/src/infrastructure/s3-snapshot-publisher.ts \u2014 fails gate 1: explicitly forbidden this horizon, and it would break the CLI publish/rollback callers that pass no expected-current-version.",
+    "Clean up orphaned snapshot objects left behind when the pointer write loses its conditional PUT \u2014 fails gate 2: a storage-hygiene concern with its own blocker, unrelated to which status an edit returns.",
+    "Coverage-repair work for the 100% gate \u2014 fails gate 2: no product-code branch is added this horizon, and adding unit tests cannot reduce coverage.",
+    "Re-open the horizon-16 auto-replay policy (whether Replay-On-Latest should exist at all) \u2014 fails gate 1: it is a binding decision; this horizon only corrects how it is described."
+  ]
+}

@@ -32,12 +32,33 @@ const renderRolloutBadge = (rollout: RolloutView | undefined): string =>
     ? '<span class="muted">No rollout</span>'
     : `<span class="badge badge-rollout">${escapeHtml(String(rollout.percentage))}% by ${escapeHtml(rollout.bucketBy)}</span>`;
 
-const renderSegmentKeys = (keys: readonly string[]): string =>
-  keys.length === 0
-    ? ''
-    : `<p class="rule-segments">Segments ${keys.map((key) => `<code>${escapeHtml(key)}</code>`).join(' ')}</p>`;
+/**
+ * The attached-segment row for one rule: its keys, the share of members the rule reaches (a rule with no
+ * rollout reaches all of them) and a Detach button. Detach is its own form so pressing it cannot also
+ * submit the rollout fields sitting beside it, and it carries the rule's index in the full rules array.
+ */
+const renderSegmentKeys = (
+  keys: readonly string[],
+  ruleIndex: number,
+  rollout: RolloutView | undefined,
+  action: string,
+  baseVersionInput: string,
+): string => {
+  if (keys.length === 0) return '';
+  const index = String(ruleIndex);
+  const percentage = String(rollout?.percentage ?? 100);
+  return `<ul class="rule-segments">
+<li class="rule-segment">Segments ${keys.map((key) => `<code>${escapeHtml(key)}</code>`).join(' ')}
+<span class="badge badge-segment">${escapeHtml(percentage)}% of members</span>
+<form method="post" action="${escapeHtml(action)}">${baseVersionInput}
+<input type="hidden" name="ruleIndex" value="${escapeHtml(index)}">
+<button type="submit" class="button-secondary" name="field" value="detachSegment">Detach</button>
+</form>
+</li>
+</ul>`;
+};
 
-const renderRuleRollout = (rule: unknown, ruleIndex: number): string => {
+const renderRuleRollout = (rule: unknown, ruleIndex: number, action: string, baseVersionInput: string): string => {
   const rollout = readRollout(rule);
   const index = String(ruleIndex);
   const remove =
@@ -46,7 +67,8 @@ const renderRuleRollout = (rule: unknown, ruleIndex: number): string => {
       : `<button type="submit" class="button-secondary" name="field" value="removeRollout">Remove</button>`;
   return `<li class="rule-rollout">
 <div class="rule-head"><span class="rule-label">Rule ${String(ruleIndex + 1)}</span>${renderRolloutBadge(rollout)}</div>
-${renderSegmentKeys(segmentKeysOf(rule))}
+${renderSegmentKeys(segmentKeysOf(rule), ruleIndex, rollout, action, baseVersionInput)}
+<form method="post" action="${escapeHtml(action)}">${baseVersionInput}
 <div class="form-row">
 <input type="hidden" name="ruleIndex" value="${escapeHtml(index)}">
 <label>Percentage <input type="number" name="percentage" min="0" max="100" step="0.01" value="${escapeHtml(String(rollout?.percentage ?? 0))}"></label>
@@ -54,28 +76,24 @@ ${renderSegmentKeys(segmentKeysOf(rule))}
 <label>Salt <input type="text" name="salt" value="${escapeHtml(rollout?.salt ?? '')}"></label>
 <button type="submit" name="field" value="setRollout">Save rollout</button>${remove}
 </div>
+</form>
 </li>`;
 };
 
 /**
- * One rollout control per rule. Each rule submits its own form so `ruleIndex` and the rollout fields
- * always travel together, whichever rule's button the operator pressed.
+ * One row per rule, each holding its own rollout form and, when the rule targets a segment, its own
+ * Detach form. Both carry that rule's index, so the two controls on a row always address the same rule.
  */
 export const renderRolloutForms = (flag: FlagDefinitionView, action: string, baseVersionInput: string): string => {
   if (flag.rules.length === 0) return '';
-  const forms = flag.rules
-    .map(
-      (rule, ruleIndex) =>
-        `<form method="post" action="${escapeHtml(action)}">${baseVersionInput}
-<ul class="rollout-list">
-${renderRuleRollout(rule, ruleIndex)}
-</ul>
-</form>`,
-    )
+  const rows = flag.rules
+    .map((rule, ruleIndex) => renderRuleRollout(rule, ruleIndex, action, baseVersionInput))
     .join('\n');
   return `<details class="rollouts"><summary>Rollout</summary>
 <div class="stack">
-${forms}
+<ul class="rollout-list">
+${rows}
+</ul>
 </div>
 </details>`;
 };

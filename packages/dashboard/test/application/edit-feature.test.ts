@@ -4,6 +4,7 @@ import { editFeature, type EditFeaturePorts } from '../../src/application/edit-f
 import {
   DEFAULT_NOT_EDITABLE_MESSAGE,
   EDIT_CONFLICT,
+  EDIT_REPLAYED,
   EDITED_SNAPSHOT_INVALID_MESSAGE,
   FEATURE_EXISTS_MESSAGE,
   FETCH_ERROR_MESSAGES,
@@ -12,7 +13,9 @@ import {
   INVALID_PERCENTAGE_MESSAGE,
   INVALID_RULE_INDEX_MESSAGE,
   INVALID_RULES_JSON_MESSAGE,
+  INVALID_SEGMENT_KEY_MESSAGE,
   NOTIFY_FAILED_WARNING,
+  SEGMENT_NEEDS_SCHEMA_VERSION_2_MESSAGE,
   PUBLISH_ERROR_MESSAGES,
   UNEXPECTED_ERROR_MESSAGE,
   UNKNOWN_FEATURE_MESSAGE,
@@ -79,12 +82,48 @@ const toggleDarkMode: FlagEdit = {
   enabled: true,
 };
 
+const segmentSnapshotText = JSON.stringify({
+  ...baseSnapshot,
+  schemaVersion: 2,
+  features: {
+    ...baseSnapshot.features,
+    'dark-mode': {
+      type: 'boolean',
+      enabled: false,
+      rules: [{ when: { userId: { inSegment: 'beta' } }, enabled: true }],
+    },
+  },
+});
+
 const rejectPublish =
   (reason: string): PublishBehaviour =>
   () =>
     Promise.reject(awsError('S3PublishError', reason));
 
 describe('editFeature', () => {
+  it.each<[FlagEdit, string, number]>([
+    [
+      { kind: 'attachSegment', key: 'dark-mode', segmentKey: 'vip', memberAttribute: 'userId' },
+      'Attach segment vip to dark-mode via dashboard',
+      2,
+    ],
+    [
+      { kind: 'detachSegment', key: 'dark-mode', ruleIndex: 0 },
+      'Detach dark-mode rule 0 via dashboard',
+      0,
+    ],
+  ])('publishes a segment edit with a reason naming what it changed', async (edit, reason, ruleCount) => {
+    const { ports, writer } = fakePorts({ fetch: () => Promise.resolve(segmentSnapshotText) });
+
+    const outcome = await editFeature(ports, 'production', 4, edit);
+
+    expect(outcome.kind).toBe('success');
+    const [, snapshot] = writer.publish.mock.calls[0] ?? [];
+    expect(snapshot).toMatchObject({ reason });
+    expect((snapshot as { features: { 'dark-mode': { rules: unknown[] } } }).features['dark-mode'].rules)
+      .toHaveLength(ruleCount);
+  });
+
   it('fetches the base version, publishes the edit with expectedCurrentVersion and never pre-reads the pointer', async () => {
     const { ports, writer, calls, fetchSnapshotText } = fakePorts();
 
@@ -213,6 +252,130 @@ describe('editFeature', () => {
 
       expect(outcome).toMatchObject({ kind: 'failure', conflict: { since: 4 } });
       expect(writer.publish).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('when someone published meanwhile and the edit attaches or detaches a segment', () => {
+    const attachVip: FlagEdit = { kind: 'attachSegment', key: 'dark-mode', segmentKey: 'vip', memberAttribute: 'userId' };
+    const segmentSnapshot = JSON.parse(segmentSnapshotText) as typeof baseSnapshot;
+    const segmentSnapshotWith = (darkMode: Record<string, unknown>) =>
+      JSON.stringify({ ...segmentSnapshot, features: { ...segmentSnapshot.features, 'dark-mode': darkMode } });
+
+    const racingPorts = (latest: string, alwaysConflict: boolean) => {
+      let published = 0;
+      const fake = fakePorts({
+        publish: () =>
+          alwaysConflict || ++published === 1
+            ? Promise.reject(awsError('S3PublishError', 'CONFLICT'))
+            : Promise.resolve(8),
+        pointer: () => Promise.resolve(7),
+      });
+      fake.ports.fetchSnapshotText = (_env, version) => Promise.resolve(version === 7 ? latest : segmentSnapshotText);
+      return fake;
+    };
+
+    it('replays the attach when only another flag moved', async () => {
+      const latest = segmentSnapshotWith(segmentSnapshot.features['dark-mode']).replace(
+        '"max":3',
+        '"max":9',
+      );
+      const { ports, writer } = racingPorts(latest, false);
+
+      const outcome = await editFeature(ports, 'production', 4, attachVip);
+
+      expect(outcome).toEqual({ kind: 'success', version: 8, message: `Published version 8 to production. ${EDIT_REPLAYED(7)}` });
+      const [, snapshot] = writer.publish.mock.calls[1] as [string, { features: { 'dark-mode': { rules: unknown[] } } }];
+      expect(snapshot.features['dark-mode'].rules).toEqual([
+        { when: { userId: { inSegment: 'beta' } }, enabled: true },
+        { when: { userId: { inSegment: 'vip' } }, enabled: true },
+      ]);
+    });
+
+    it.each<[string, FlagEdit]>([
+      ['attach', attachVip],
+      ['detach', { kind: 'detachSegment', key: 'dark-mode', ruleIndex: 0 }],
+    ])('leaves a %s conflict for review when the rules moved too', async (_, edit) => {
+      const latest = segmentSnapshotWith({ type: 'boolean', enabled: false, rules: [] });
+      const { ports, writer } = racingPorts(latest, true);
+
+      const outcome = await editFeature(ports, 'production', 4, edit);
+
+      expect(outcome).toMatchObject({ kind: 'failure', conflict: { since: 4 } });
+      expect(writer.publish).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // Characterization of the Current Pointer read timing window. When two edits of DIFFERENT flags are
+  // submitted against the same base, the loser re-reads the pointer and replays. Whether that read has
+  // already seen the winner's write decides the outcome, and both endings are safe. Real runs only ever
+  // show one of them, so each branch is forced here with a hand-built ports object instead of waited for.
+  describe('when an edit of another flag won the race and the loser re-reads the pointer', () => {
+    const WINNER_VERSION = 5;
+    const winnerText = JSON.stringify({
+      ...baseSnapshot,
+      version: WINNER_VERSION,
+      features: { ...baseSnapshot.features, 'checkout-limits': { type: 'config', enabled: false, default: { max: 3 } } },
+    });
+
+    /** `pointer` is what the re-read returns: the winner's version for a fresh read, the base for a stale one. */
+    const racedPorts = (pointer: number, textAt: (version: number) => string, secondPublish: () => Promise<number>) => {
+      const publish = vi.fn<SnapshotWriter['publish']>();
+      let attempts = 0;
+      publish.mockImplementation(() =>
+        ++attempts === 1 ? Promise.reject(awsError('S3PublishError', 'CONFLICT')) : secondPublish(),
+      );
+      const ports: EditFeaturePorts = {
+        fetchSnapshotText: (_environment, version) => Promise.resolve(textAt(version)),
+        readCurrentVersion: () => Promise.resolve(pointer),
+        openWriter: () => ({ publish, rollback: vi.fn<SnapshotWriter['rollback']>() }),
+      };
+      return { ports, publish };
+    };
+
+    it('publishes the replayed edit when the re-read already sees the winner', async () => {
+      const { ports, publish } = racedPorts(
+        WINNER_VERSION,
+        (version) => (version === WINNER_VERSION ? winnerText : JSON.stringify(baseSnapshot)),
+        () => Promise.resolve(6),
+      );
+
+      const outcome = await editFeature(ports, 'production', 4, toggleDarkMode);
+
+      expect(outcome).toEqual({
+        kind: 'success',
+        version: 6,
+        message: `Published version 6 to production. ${EDIT_REPLAYED(WINNER_VERSION)}`,
+      });
+      // The replay must carry the ADVANCED pointer, not the base: re-sending 4 would be a lost update.
+      const [, snapshot, options] = publish.mock.calls[1] as [string, { features: Record<string, unknown> }, unknown];
+      expect(options).toEqual({ expectedCurrentVersion: WINNER_VERSION });
+      expect(snapshot.features).toEqual({
+        'dark-mode': { type: 'boolean', enabled: true },
+        'checkout-limits': { type: 'config', enabled: false, default: { max: 3 } },
+      });
+      expect(publish).toHaveBeenCalledTimes(2);
+    });
+
+    it('reports a conflict against the operator\'s own base when the re-read is still stale', async () => {
+      const { ports, publish } = racedPorts(
+        4,
+        () => JSON.stringify(baseSnapshot),
+        () => Promise.reject(awsError('S3PublishError', 'CONFLICT')),
+      );
+
+      const outcome = await editFeature(ports, 'production', 4, toggleDarkMode);
+
+      // conflict.since names the version the operator edited, and the absent invalidInput is what makes
+      // the http layer answer 422 rather than the 400 a malformed request gets.
+      expect(outcome).toEqual({
+        kind: 'failure',
+        message: EDIT_CONFLICT(4),
+        issues: [],
+        conflict: { since: 4 },
+      });
+      expect(outcome.kind === 'failure' && outcome.invalidInput).toBeUndefined();
+      // Exactly two: the replay is attempted once and never loops, so a future bounded retry fails here.
+      expect(publish).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -415,6 +578,19 @@ describe('editFeature', () => {
         true,
       ],
       [
+        'an attach to a schemaVersion 1 snapshot',
+        { kind: 'attachSegment', key: 'dark-mode', segmentKey: 'beta', memberAttribute: 'userId' },
+        SEGMENT_NEEDS_SCHEMA_VERSION_2_MESSAGE('dark-mode'),
+        [],
+      ],
+      [
+        'a detach of a rule position that does not exist',
+        { kind: 'detachSegment', key: 'dark-mode', ruleIndex: 0 },
+        INVALID_RULE_INDEX_MESSAGE('dark-mode', 0),
+        [],
+        true,
+      ],
+      [
         'a rollout percentage outside 0-100',
         { kind: 'setRollout', key: 'dark-mode', ruleIndex: 0, percentage: 101, bucketBy: 'userId', salt: 's' },
         INVALID_PERCENTAGE_MESSAGE,
@@ -428,6 +604,40 @@ describe('editFeature', () => {
 
       // invalidInput marks a malformed request, which the dashboard answers with 400 instead of 422.
       expect(outcome).toEqual({ kind: 'failure', message, issues, ...(invalidInput === true ? { invalidInput } : {}) });
+      expect(writer.publish).not.toHaveBeenCalled();
+    });
+
+    it('a malformed Segment Key, as a malformed request', async () => {
+      const { ports, writer } = fakePorts({ fetch: () => Promise.resolve(segmentSnapshotText) });
+
+      const outcome = await editFeature(ports, 'production', 4, {
+        kind: 'attachSegment',
+        key: 'dark-mode',
+        segmentKey: 'not a key',
+        memberAttribute: 'userId',
+      });
+
+      expect(outcome).toEqual({
+        kind: 'failure',
+        message: INVALID_SEGMENT_KEY_MESSAGE('not a key'),
+        issues: [],
+        invalidInput: true,
+      });
+      expect(writer.publish).not.toHaveBeenCalled();
+    });
+
+    it('an attach whose Member Attribute leaves the snapshot invalid, as a contract rejection not bad input', async () => {
+      const { ports, writer } = fakePorts({ fetch: () => Promise.resolve(segmentSnapshotText) });
+
+      const outcome = await editFeature(ports, 'production', 4, {
+        kind: 'attachSegment',
+        key: 'dark-mode',
+        segmentKey: 'vip',
+        memberAttribute: '',
+      });
+
+      expect(outcome).toMatchObject({ kind: 'failure', message: EDITED_SNAPSHOT_INVALID_MESSAGE });
+      expect(outcome.kind === 'failure' && outcome.invalidInput).toBeUndefined();
       expect(writer.publish).not.toHaveBeenCalled();
     });
 

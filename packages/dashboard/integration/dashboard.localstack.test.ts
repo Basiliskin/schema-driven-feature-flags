@@ -252,6 +252,13 @@ describe('featuresync-dashboard against LocalStack', () => {
     const responses = await Promise.all([disableNewDashboard(1), disableCheckout(1)]);
     const statuses = responses.map(({ status }) => status);
 
+    // Do NOT narrow this to [200, 200]. The loser of the race re-reads the Current Pointer and replays:
+    // a fresh read already sees the winner and republishes (200), a stale read still sees the base, replays
+    // onto stale text and loses again (422). Which one happens is genuinely timing-dependent, and this suite
+    // runs with retries: 0, so a strict assertion would flake. Both endings hold every invariant asserted
+    // below — no published version is lost, no snapshot sits above the pointer, and the disabled-flag count
+    // equals the number of successful requests. Both branches are pinned deterministically in
+    // packages/dashboard/test/application/edit-feature.test.ts.
     expect(statuses).toContain(200);
     expect(statuses.every((status) => status === 200 || status === 422)).toBe(true);
     const succeeded = statuses.filter((status) => status === 200).length;
