@@ -22,6 +22,11 @@ export {
   type SegmentPublishOptions,
 } from './infrastructure/s3-segment-publisher.js';
 export {
+  createS3SegmentLister,
+  type S3SegmentLister,
+  type S3SegmentListerOptions,
+} from './infrastructure/s3-segment-lister.js';
+export {
   createS3SegmentVersionReader,
   type S3SegmentVersionReader,
   type S3SegmentVersionReaderOptions,

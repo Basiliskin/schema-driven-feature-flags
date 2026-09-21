@@ -5,6 +5,11 @@ import { compareWithCurrent } from '../application/compare-versions.js';
 import { applyDraftMerge, mergeDraft } from '../application/merge-draft.js';
 import type { MergeChoices, Side } from '../domain/snapshot-merge.js';
 import { editFeature, type EditFeaturePorts } from '../application/edit-feature.js';
+import {
+  listPublishedSegments,
+  type ListPublishedSegmentsPorts,
+  type PublishedSegmentsView,
+} from '../application/list-published-segments.js';
 import type { SegmentUploadPorts } from '../application/upload-segment.js';
 import { describeFailure } from '../application/error-messages.js';
 import type { FlagEdit, FlagType } from '../domain/flag-edit.js';
@@ -28,7 +33,7 @@ import { renderVersionPage } from './views/version-page.js';
 import { HttpError, MAX_BODY_BYTES, decodeSegment, readForm, send, type Route } from './http-primitives.js';
 import { matchSegmentRoute } from './segment-routes.js';
 
-export type DashboardPorts = EditFeaturePorts & SegmentUploadPorts;
+export type DashboardPorts = EditFeaturePorts & SegmentUploadPorts & ListPublishedSegmentsPorts;
 
 export interface DashboardServerOptions {
   readonly ports: DashboardPorts;
@@ -175,7 +180,35 @@ type EditParse = { readonly ok: true; readonly edit: FlagEdit } | { readonly ok:
 
 const okEdit = (edit: FlagEdit): EditParse => ({ ok: true, edit });
 
-const EDIT_PARSERS: Record<string, (key: string, fields: URLSearchParams) => EditParse> = {
+const UNLISTED_SEGMENT_MESSAGE =
+  'Choose a segment from the list — that one is not published in this environment.';
+const UNKNOWN_ATTRIBUTE_MESSAGE =
+  'That segment was published before its member attribute was recorded, so it cannot be attached. Upload it again to record the attribute.';
+const SEGMENTS_UNAVAILABLE_MESSAGE =
+  'The list of published segments could not be read, so no segment can be attached right now.';
+
+// The attribute always comes from the chosen segment's own pointer, so nothing the form submits can decide it.
+const parseAttach = (key: string, fields: URLSearchParams, segments: PublishedSegmentsView): EditParse => {
+  const value = decodeAttachValue(fields.get('value') ?? '');
+  if (!value.ok) return { ok: false, message: ATTACH_VALUE_MESSAGE };
+  if (segments.status === 'unavailable') return { ok: false, message: SEGMENTS_UNAVAILABLE_MESSAGE };
+  const segmentKey = fields.get('segmentKey') ?? '';
+  const chosen = segments.rows.find((row) => row.segmentKey === segmentKey);
+  if (chosen === undefined) return { ok: false, message: UNLISTED_SEGMENT_MESSAGE };
+  if (chosen.attribute.status === 'unknown') return { ok: false, message: UNKNOWN_ATTRIBUTE_MESSAGE };
+  return okEdit({
+    kind: 'attachSegment',
+    key,
+    segmentKey,
+    memberAttribute: chosen.attribute.memberAttribute,
+    value: value.value,
+  });
+};
+
+const EDIT_PARSERS: Record<
+  string,
+  (key: string, fields: URLSearchParams, segments: PublishedSegmentsView) => EditParse
+> = {
   setRollout: (key, fields) =>
     okEdit({
       kind: 'setRollout',
@@ -190,28 +223,18 @@ const EDIT_PARSERS: Record<string, (key: string, fields: URLSearchParams) => Edi
   default: (key, fields) => okEdit({ kind: 'default', key, defaultJson: fields.get('default') ?? '' }),
   rules: (key, fields) => okEdit({ kind: 'setRules', key, rulesJson: fields.get('rules') ?? '' }),
   delete: (key) => okEdit({ kind: 'delete', key }),
-  attachSegment: (key, fields) => {
-    const value = decodeAttachValue(fields.get('value') ?? '');
-    if (!value.ok) return { ok: false, message: ATTACH_VALUE_MESSAGE };
-    return okEdit({
-      kind: 'attachSegment',
-      key,
-      segmentKey: fields.get('segmentKey') ?? '',
-      memberAttribute: fields.get('memberAttribute') ?? '',
-      value: value.value,
-    });
-  },
+  attachSegment: parseAttach,
   detachSegment: (key, fields) => okEdit({ kind: 'detachSegment', key, ruleIndex: parseDetachIndex(fields.get('ruleIndex')) }),
 };
 
 const FIELD_MESSAGE = `Choose one of these actions: ${Object.keys(EDIT_PARSERS).join(', ')}.`;
 
-const parseEditForm = (key: string, fields: URLSearchParams): EditRequest => {
+const parseEditForm = (key: string, fields: URLSearchParams, segments: PublishedSegmentsView): EditRequest => {
   const baseVersion = parseBaseVersion(fields);
   if (baseVersion === undefined) return { ok: false, message: BASE_VERSION_MESSAGE };
   const parse = EDIT_PARSERS[fields.get('field') ?? ''];
   if (parse === undefined) return { ok: false, message: FIELD_MESSAGE };
-  const edit = parse(key, fields);
+  const edit = parse(key, fields, segments);
   return edit.ok ? { ok: true, baseVersion, edit: edit.edit } : { ok: false, message: edit.message, invalidInput: true };
 };
 
@@ -247,7 +270,6 @@ const editDraftOf = (key: string, fields: URLSearchParams, message: string, issu
   const defaultJson = fields.get('default');
   const rulesJson = fields.get('rules');
   const segmentKey = fields.get('segmentKey');
-  const memberAttribute = fields.get('memberAttribute');
   const segmentValue = fields.get('value');
   return {
     key,
@@ -255,7 +277,6 @@ const editDraftOf = (key: string, fields: URLSearchParams, message: string, issu
     ...(defaultJson === null ? {} : { defaultJson }),
     ...(rulesJson === null ? {} : { rulesJson }),
     ...(segmentKey === null ? {} : { segmentKey }),
-    ...(memberAttribute === null ? {} : { memberAttribute }),
     ...(segmentValue === null ? {} : { segmentValue }),
     message,
     issues,
@@ -273,13 +294,14 @@ function createDashboardRequestHandler(
 
   const editRoute = (
     environment: string,
-    parse: (fields: URLSearchParams) => EditRequest,
+    parse: (fields: URLSearchParams, segments: PublishedSegmentsView) => EditRequest,
     draftState: (fields: URLSearchParams, message: string, issues: readonly string[]) => EnvironmentPageState,
   ): Route => ({
     method: 'POST',
     handle: async (request, response) => {
       const fields = await readForm(request);
-      const parsed = parse(fields);
+      const segments = await listPublishedSegments(ports, environment);
+      const parsed = parse(fields, segments);
       const outcome: WriteOutcome = parsed.ok
         ? await editFeature(ports, environment, parsed.baseVersion, parsed.edit)
         : {
@@ -291,6 +313,7 @@ function createDashboardRequestHandler(
       const view = await browseEnvironment(ports, environment);
       const state = {
         notices: outcomeNotices(outcome),
+        publishedSegments: segments,
         ...(outcome.kind === 'failure' ? draftState(fields, outcome.message, outcome.issues) : {}),
         ...(parsed.ok && outcome.kind === 'failure' && outcome.conflict !== undefined
           ? { conflict: { since: outcome.conflict.since, key: parsed.edit.key } }
@@ -320,7 +343,9 @@ function createDashboardRequestHandler(
       return {
         method: 'GET',
         handle: async (_request, response) => {
-          send(response, 200, renderEnvironmentPage(await browseEnvironment(ports, environment)));
+          send(response, 200, renderEnvironmentPage(await browseEnvironment(ports, environment), {
+            publishedSegments: await listPublishedSegments(ports, environment),
+          }));
         },
       };
     }
@@ -388,6 +413,7 @@ function createDashboardRequestHandler(
           const view = await browseEnvironment(ports, environment);
           const state = {
             notices: outcomeNotices(outcome),
+            publishedSegments: await listPublishedSegments(ports, environment),
             ...(outcome.kind === 'failure' ? { draft } : {}),
             ...(outcome.kind === 'failure' && outcome.conflict !== undefined ? { conflict: outcome.conflict } : {}),
           };
@@ -402,7 +428,10 @@ function createDashboardRequestHandler(
           const version = parseVersion((await readForm(request)).get('version'));
           const outcome = await rollbackSnapshot(ports, environment, version);
           const view = await browseEnvironment(ports, environment);
-          send(response, writeStatus(outcome), renderEnvironmentPage(view, { notices: outcomeNotices(outcome) }));
+          send(response, writeStatus(outcome), renderEnvironmentPage(view, {
+            notices: outcomeNotices(outcome),
+            publishedSegments: await listPublishedSegments(ports, environment),
+          }));
         },
       };
     }
@@ -415,7 +444,7 @@ function createDashboardRequestHandler(
       const key = decodeSegment(segments[3] as string);
       return editRoute(
         environment,
-        (fields) => parseEditForm(key, fields),
+        (fields, segments) => parseEditForm(key, fields, segments),
         (fields, message, issues) => ({ editDraft: editDraftOf(key, fields, message, issues) }),
       );
     }

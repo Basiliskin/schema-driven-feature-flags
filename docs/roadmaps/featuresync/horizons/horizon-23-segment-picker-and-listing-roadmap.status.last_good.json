@@ -1,0 +1,110 @@
+{
+  "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-23-segment-picker-and-listing-roadmap.json",
+  "roadmapTask": "Make the FeatureSync dashboard's segment experience usable: show a Segment List of every published segment with its Member Attribute and the flags that use it, and let an operator attach a segment to a flag by choosing a published segment from a list instead of typing its Segment Key and Member Attribute as free text.",
+  "createdAt": "2026-09-20T18:13:56Z",
+  "updatedAt": "2026-09-21T00:00:00Z",
+  "roadmapRevision": 0,
+  "phases": [
+    {
+      "phaseId": "pointer-member-attribute",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-20T18:14:29Z",
+      "baseRef": "406291607d3f7981c6d8fd13a7f1d612de0559bc",
+      "baseDirty": true,
+      "notes": "Changed by this phase: packages/aws/src/domain/segment-pointer.ts, packages/aws/src/infrastructure/s3-segment-publisher.ts, packages/aws/test/domain/segment-pointer.test.ts, packages/aws/test/infrastructure/s3-segment-publisher.test.ts, packages/aws/integration/s3-segment-publisher.localstack.test.ts. SegmentPointer gains an optional memberAttribute (schemaVersion still 1); buildSegmentPointer takes it and the single publish call site passes segment.memberAttribute, so a published segment's current.json records the attribute while pre-existing pointers still parse with it undefined. s3-segment-publisher.test.ts is outside filesAffected but holds the roadmap's required publisher unit test; its storedPointer fixture keeps the pre-attribute shape so the legacy read path stays exercised. Compensation not needed and not invoked; if it were, it is a plain revert of these files — the field is optional and additive, so older pointers stay valid and the non-strict parser ignores the extra field on newer ones. Graded 9/9/9/9, all dimensions passing; no dimension scored 10, so no 10-to-9 calibration demotion applied.",
+      "unplannedFiles": [
+        "packages/aws/test/infrastructure/s3-segment-publisher.test.ts"
+      ],
+      "completedAt": "2026-09-20T18:23:24Z",
+      "gateRun": "pnpm verify: pass (exit 0 - build 5 packages, pnpm typecheck, eslint . --max-warnings=0, vitest run --coverage @ 100% thresholds); pnpm test:integration: pass (exit 0, LocalStack); new localstack assertion also run in isolation: pass",
+      "gradeResult": {
+        "phaseId": "pointer-member-attribute",
+        "dimensionScores": [
+          {
+            "dimensionId": "optional-field-legacy-parse",
+            "score": 9,
+            "pass": true,
+            "evidence": "memberAttribute declared z.string().min(1).optional() with no default; schemaVersion literal still 1; unit test parses a pre-attribute pointer and asserts memberAttribute is undefined, not a placeholder."
+          },
+          {
+            "dimensionId": "publisher-writes-attribute",
+            "score": 9,
+            "pass": true,
+            "evidence": "publish passes the in-scope segment.memberAttribute into buildSegmentPointer; unit test asserts the serialized PutObject body for current.json contains it; no call site outside the publisher changed."
+          },
+          {
+            "dimensionId": "localstack-roundtrip-assertion",
+            "score": 9,
+            "pass": true,
+            "evidence": "New assertion lives in the existing LocalStack suite, reads current.json back from S3 via GetObject, and checks a non-default attribute ('accountId') that only this publish could have written."
+          },
+          {
+            "dimensionId": "infrastructure-layer-respected",
+            "score": 9,
+            "pass": true,
+            "evidence": "segment-pointer.ts imports only core, zod and sibling domain files — no application, infrastructure or AWS SDK import; pnpm verify green including eslint --max-warnings=0 and 100% coverage thresholds, with the new optional branch covered by unit tests alone."
+          }
+        ],
+        "overallPass": true
+      }
+    },
+    {
+      "phaseId": "list-published-segments-usecase",
+      "status": "awaiting-verification",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-21T00:00:00Z",
+      "baseRef": "406291607d3f7981c6d8fd13a7f1d612de0559bc",
+      "baseDirty": true,
+      "notes": "Already dirty at start (not this phase): docs/roadmaps/featuresync/** and docs/userId.csv, plus packages/aws segment-pointer + s3-segment-publisher sources/tests from phase pointer-member-attribute. Changed by this phase (both new): packages/dashboard/src/application/list-published-segments.ts, packages/dashboard/test/application/list-published-segments.test.ts. What it does: declares the PublishedSegmentsPort (listPublishedSegments -> {status:listed,segments[]} | {status:unavailable}) and a listPublishedSegments use case whose row population comes from that port, annotating each row with attribute {known|unknown} and usage {used,flagKeys|unused} derived by scanning browseEnvironment flag rules for inSegment. Rows sorted by segmentKey, flagKeys deduped per flag and sorted by flag key. listReferencedSegments is left untouched and still serves the page until phase segment-list-page-columns switches over. Amended filesAffected (1 amendment; horizon total 1 of 3) — ports.ts does not exist anywhere in the repo. Note for verification: the application-layer-purity rubric names packages/dashboard/src/application/ports.ts in one passCriteria; the real declaration site is list-published-segments.ts, which is still application-layer, type-only and AWS-free. Also: do not run a bare `tsc -b` — it emits .js/.d.ts beside the sources and turns lint and coverage red; `pnpm verify` is the gate. Observed while implementing (not a grade): corepack pnpm verify exits 0 — build, typecheck, lint, 1434 tests, coverage 100% statements/branches/functions/lines. One unrelated pre-existing flake seen once in @featuresync/core file-snapshot-source.test.ts \"pushes a bundle when watching\" (a vi.waitFor timing test); it passed on re-run.",
+      "unplannedFiles": [],
+      "amendments": [
+        {
+          "at": "2026-09-21T00:00:00Z",
+          "by": "execute",
+          "reason": "filesAffected named packages/dashboard/src/application/ports.ts, which does not exist — no ports.ts exists in any package. Ports are declared in their own use-case module, and the new use case got its own module rather than being grafted into the differently-named listReferencedSegments file that phase segment-list-page-columns will retire.",
+          "grounding": "find packages -name ports.ts returns nothing; BrowsePorts is declared in browse-environment.ts and SegmentUploadPorts in upload-segment.ts.",
+          "before": {
+            "filesAffected": [
+              "packages/dashboard/src/application/list-referenced-segments.ts",
+              "packages/dashboard/src/application/ports.ts",
+              "packages/dashboard/test/application/list-referenced-segments.test.ts"
+            ]
+          },
+          "after": {
+            "filesAffected": [
+              "packages/dashboard/src/application/list-published-segments.ts",
+              "packages/dashboard/test/application/list-published-segments.test.ts"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "phaseId": "segment-prefix-lister",
+      "status": "not-started",
+      "attempts": 0,
+      "compensationInvoked": false
+    },
+    {
+      "phaseId": "segment-list-page-columns",
+      "status": "not-started",
+      "attempts": 0,
+      "compensationInvoked": false
+    },
+    {
+      "phaseId": "segment-picker-attach-form",
+      "status": "not-started",
+      "attempts": 0,
+      "compensationInvoked": false
+    },
+    {
+      "phaseId": "browser-proof-picker-and-list",
+      "status": "not-started",
+      "attempts": 0,
+      "compensationInvoked": false
+    }
+  ]
+}

@@ -49,6 +49,7 @@ const fakes = (overrides: Partial<DashboardPorts> = {}, writer: Partial<Snapshot
     ports: {
       readCurrentVersion: () => Promise.resolve(3),
       fetchSnapshotText: () => Promise.resolve(VALID),
+      listPublishedSegments: () => Promise.resolve({ status: 'listed', segments: [] }),
       publishSegment: () => Promise.reject(new Error('not used here')),
       readSegmentVersion: () => Promise.resolve(null),
       openWriter,
@@ -1405,8 +1406,19 @@ describe('attaching and detaching segments', () => {
     },
   });
 
+  const PUBLISHED = [
+    { segmentKey: 'beta-testers', version: 2, memberAttribute: 'userId' },
+    { segmentKey: 'legacy', version: 1 },
+  ] as const;
+
   const attachFakes = (writer: Partial<SnapshotWriter> = {}) =>
-    fakes({ fetchSnapshotText: () => Promise.resolve(ATTACH_SNAPSHOT) }, writer);
+    fakes(
+      {
+        fetchSnapshotText: () => Promise.resolve(ATTACH_SNAPSHOT),
+        listPublishedSegments: () => Promise.resolve({ status: 'listed', segments: PUBLISHED }),
+      },
+      writer,
+    );
 
   const publishedRules = (writer: Fakes['writer'], key: string): Record<string, unknown>[] => {
     const [, snapshot] = writer.publish.mock.calls[0] as [string, { features: Record<string, { rules: Record<string, unknown>[] }> }];
@@ -1417,7 +1429,6 @@ describe('attaching and detaching segments', () => {
     baseVersion: '3',
     field: 'attachSegment',
     segmentKey: 'beta-testers',
-    memberAttribute: 'userId',
   };
 
   it('appends a segment rule to a boolean flag, keeping the rules already there', async () => {
@@ -1463,28 +1474,74 @@ describe('attaching and detaching segments', () => {
     expect(writer.publish).not.toHaveBeenCalled();
   });
 
-  it('answers 400 for a segment key the core schema rejects', async () => {
+  it('takes the member attribute from the chosen segment, ignoring one submitted with the form', async () => {
     const { ports, writer } = attachFakes();
     const dashboard = await start(ports);
 
     const reply = await call(dashboard, 'POST', '/env/production/features/checkout', {
-      body: form({ ...ATTACH_FORM, segmentKey: '-nope' }),
+      body: form({ ...ATTACH_FORM, memberAttribute: 'spoofed' }),
+    });
+
+    expect(reply.status).toBe(200);
+    expect(publishedRules(writer, 'checkout')[1]).toEqual({
+      when: { userId: { inSegment: 'beta-testers' } },
+      enabled: true,
+    });
+  });
+
+  it.each([
+    ['a key that is not published', { segmentKey: '-nope' }],
+    ['an empty key', { segmentKey: '' }],
+    ['no key at all', {}],
+  ])('answers 400 for %s, publishes nothing and says to choose from the list', async (_, chosen) => {
+    const { ports, writer } = attachFakes();
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', '/env/production/features/checkout', {
+      body: form({ baseVersion: '3', field: 'attachSegment', ...chosen }),
     });
 
     expect(reply.status).toBe(400);
+    expect(reply.body).toContain('not published in this environment');
     expect(writer.publish).not.toHaveBeenCalled();
   });
 
-  it('answers 400 when the attach form carries neither a segment key nor a member attribute', async () => {
+  it('answers 400 and publishes nothing for a segment whose member attribute was never recorded', async () => {
     const { ports, writer } = attachFakes();
     const dashboard = await start(ports);
 
     const reply = await call(dashboard, 'POST', '/env/production/features/checkout', {
-      body: form({ baseVersion: '3', field: 'attachSegment' }),
+      body: form({ ...ATTACH_FORM, segmentKey: 'legacy' }),
     });
 
     expect(reply.status).toBe(400);
+    expect(reply.body).toContain('before its member attribute was recorded');
     expect(writer.publish).not.toHaveBeenCalled();
+  });
+
+  it('answers 400 and publishes nothing when the published segment list cannot be read', async () => {
+    const { ports, writer } = fakes({
+      fetchSnapshotText: () => Promise.resolve(ATTACH_SNAPSHOT),
+      listPublishedSegments: () => Promise.resolve({ status: 'unavailable' }),
+    });
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', '/env/production/features/checkout', { body: form(ATTACH_FORM) });
+
+    expect(reply.status).toBe(400);
+    expect(reply.body).toContain('could not be read');
+    expect(writer.publish).not.toHaveBeenCalled();
+  });
+
+  it('offers the published segments as a picker on the environment page', async () => {
+    const { ports } = attachFakes();
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'GET', '/env/production');
+
+    expect(reply.body).toContain('<select name="segmentKey" required>');
+    expect(reply.body).toContain('<option value="beta-testers">beta-testers · userId</option>');
+    expect(reply.body).toContain('<option value="legacy" disabled>legacy · attribute unknown</option>');
   });
 
   it('detaches the rule at index 0', async () => {
@@ -1527,7 +1584,7 @@ describe('attaching and detaching segments', () => {
     const dashboard = await start(ports);
 
     const reply = await call(dashboard, 'POST', '/env/production/features/checkout', {
-      body: form({ field: 'attachSegment', segmentKey: 'beta-testers', memberAttribute: 'userId' }),
+      body: form({ field: 'attachSegment', segmentKey: 'beta-testers' }),
     });
 
     expect(reply.status).toBe(422);

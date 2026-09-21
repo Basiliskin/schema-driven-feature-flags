@@ -90,6 +90,15 @@ describe('createS3SegmentPublisher against LocalStack', () => {
     });
   });
 
+  it('stores the published attribute in the pointer object, not a default', async () => {
+    await publisher().publish(ENVIRONMENT, { ...draft(['u-1']), memberAttribute: 'accountId' });
+
+    expect(parseSegmentPointer(await readJson(bucket, POINTER_KEY))).toMatchObject({
+      ok: true,
+      value: { memberAttribute: 'accountId' },
+    });
+  });
+
   it('refuses to overwrite an existing version with VERSION_EXISTS and leaves the pointer alone', async () => {
     await publisher().publish(ENVIRONMENT, draft(['u-1']));
     const squatted = `${ENVIRONMENT}/segments/beta/2.json`;

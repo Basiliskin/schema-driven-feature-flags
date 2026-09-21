@@ -7,6 +7,8 @@ import {
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
+import { parseSegmentPointer } from '@featuresync/aws';
+import { SEGMENT_SCHEMA_VERSION } from '@featuresync/core';
 import { test as base } from '@playwright/test';
 import type { RunningDashboard } from '../../src/infrastructure/http-server.js';
 import { EXIT_OK, main, nodeIo } from '../../src/main.js';
@@ -25,6 +27,9 @@ const requireLocalStackEndpoint = (): string => {
   return endpoint;
 };
 
+const putJson = (s3: S3Client, bucket: string, key: string, body: unknown): Promise<unknown> =>
+  s3.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: JSON.stringify(body), ContentType: 'application/json' }));
+
 const deleteEveryObject = async (s3: S3Client, bucket: string): Promise<void> => {
   let continuationToken: string | undefined;
   do {
@@ -39,10 +44,19 @@ const deleteEveryObject = async (s3: S3Client, bucket: string): Promise<void> =>
   } while (continuationToken !== undefined);
 };
 
+/** Publishes a segment at the key layout the S3 segment publisher uses, so the prefix lister finds it. */
+export type SeedSegment = (segment: {
+  readonly key: string;
+  readonly version: number;
+  readonly memberAttribute: string;
+  readonly members: readonly string[];
+}) => Promise<void>;
+
 interface LocalStackFixtures {
   readonly bucket: string;
   readonly environment: string;
   readonly dashboard: RunningDashboard;
+  readonly seedSegment: SeedSegment;
 }
 
 interface LocalStackWorkerFixtures {
@@ -73,12 +87,34 @@ export const test = base.extend<LocalStackFixtures, LocalStackWorkerFixtures>({
   environment: async ({}, use) => {
     await use(ENVIRONMENT);
   },
+  seedSegment: async ({ s3, bucket, environment }, use) => {
+    await use(async ({ key, version, memberAttribute, members }) => {
+      const objectKey = `${environment}/segments/${key}/${String(version)}.json`;
+      await putJson(s3, bucket, objectKey, {
+        schemaVersion: SEGMENT_SCHEMA_VERSION,
+        key,
+        version,
+        memberAttribute,
+        members,
+      });
+      // Parsed rather than trusted: a seed the real pointer schema rejects would let the spec pass
+      // against a shape no publisher can produce.
+      const pointer = parseSegmentPointer({
+        schemaVersion: 1,
+        environment,
+        segmentKey: key,
+        version,
+        objectKey,
+        memberAttribute,
+      });
+      if (!pointer.ok) throw new Error(`The seeded pointer for ${key} is not a valid Segment Pointer`);
+      await putJson(s3, bucket, `${environment}/segments/${key}/current.json`, pointer.value);
+    });
+  },
   dashboard: async ({ s3, bucket, environment }, use) => {
     const pointer = seedPointerFor(environment);
-    const put = (key: string, body: unknown) =>
-      s3.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: JSON.stringify(body), ContentType: 'application/json' }));
-    await put(pointer.snapshotKey, seedSnapshotFor(environment));
-    await put(`${environment}/current.json`, pointer);
+    await putJson(s3, bucket, pointer.snapshotKey, seedSnapshotFor(environment));
+    await putJson(s3, bucket, `${environment}/current.json`, pointer);
 
     let dashboard: RunningDashboard | undefined;
     // env is emptied so only the explicit --bucket applies, never a developer's FEATURESYNC_BUCKET.

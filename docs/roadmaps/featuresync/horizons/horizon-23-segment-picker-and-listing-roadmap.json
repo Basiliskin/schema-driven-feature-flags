@@ -1,0 +1,920 @@
+{
+  "task": "Make the FeatureSync dashboard's segment experience usable: show a Segment List of every published segment with its Member Attribute and the flags that use it, and let an operator attach a segment to a flag by choosing a published segment from a list instead of typing its Segment Key and Member Attribute as free text.",
+  "analysis": {
+    "objective": "Make the FeatureSync dashboard's segment experience usable end to end by giving the operator a Segment List that shows which flags use each segment, letting a segment be attached (with its rollout percentage) while a flag is being created as well as edited, and replacing the free-text Segment Key and Member Attribute inputs with a picker over published segments whose Member Attribute is read back from storage rather than typed.",
+    "successDefinition": "Done means, on a LocalStack-backed dashboard: (1) GET /env/<env>/segments lists every published segment in the environment \u2014 including segments no flag references yet \u2014 each row showing its Current Pointer version, its stored Member Attribute, and the flag keys whose rules reference it (or an explicit 'unused' state), with the population sourced from a ListObjectsV2 prefix listing of <env>/segments/ under the deploy role's existing prefix-scoped s3:ListBucket grant; (2) the Attach-a-segment form offers a chooser over that published-segment list, the operator never types a Segment Key or Member Attribute, and the Member Attribute used in the emitted rule is the one recorded at publish time, so a typo cannot produce a nobody-matching rule; (3) the Segment Pointer persists memberAttribute and a dashboard port exposes it, with pointers written before this horizon still parsing and rendering as an explicit unknown-attribute state; (4) all of it is covered by unit tests holding 100% line/branch/function/statement coverage on packages/*/src, ESLint layer rules and typecheck green, plus a LocalStack integration proof and a Playwright browser spec inside the existing localstack CI job for the Segment List and the picker-based attach; (5) blockers.md/decisions.md/discoveries.md/state.md are updated, including the explicit supersession of the horizon-21 'Member Attribute is typed by the operator' decision and of the horizon-10 'dashboard never calls ListObjectsV2' decision. Creating a flag with segments already attached is NOT part of this horizon's bar \u2014 it is deferred to horizon 24.",
+    "assumptions": [
+      "Horizon 22 (orphaned S3 object cleanup) is set aside and none of its planned phases are executed here; its roadmap files stay on disk as a superseded plan.",
+      "The user's scoping answer overrides the horizon-21 decision that the Member Attribute is typed: the segment pointer's stored shape may gain memberAttribute (and, if needed, a small per-environment segment index object), and that change is accepted.",
+      "The horizon-10 decision that the dashboard never calls ListObjectsV2 is deliberately superseded for the dashboard only: the user chose at the alignment preview to list the <env>/segments/ prefix directly rather than maintain an index object. The deploy role already grants prefix-scoped s3:ListBucket, so no IAM or template change follows, and the SDK reader's permissions are unchanged.",
+      "Segment pointers are written by both the CLI and the dashboard publishers, so any new stored field must be written by both and read defensively \u2014 a pointer published before this horizon lacks memberAttribute and must render as a known 'unknown attribute' state rather than crashing the page.",
+      "'Which flags use each segment' is derived from the current snapshot's rules (the same source as core's referencedSegmentKeys), reported per flag key, for the current pointer version only \u2014 not historical versions.",
+      "The picker is plain server-rendered HTML (select/datalist) consistent with the no-framework dashboard; app.js gains no new uncovered logic beyond what already exists.",
+      "schemaVersion 2 is the baseline for any snapshot carrying segment rules; schemaVersion 1 snapshots keep failing loudly rather than auto-upgrading.",
+      "The create-flag-with-segments path reuses the existing FlagEdit/applyFlagEdit/edit-feature CAS and field-granular replay machinery rather than introducing a second write path."
+    ],
+    "risks": [
+      "DECISION CONFLICT: the horizon-21 decision states the Member Attribute is typed by the operator because no port exposes a published segment's memberAttribute; the user's scoping answer requires storing and reading it back. The decision must be explicitly superseded with a recorded rationale, not silently ignored, and every consumer of SegmentPointer (CLI upload, dashboard upload, segment version reader) must move together.",
+      "The horizon-10 no-ListObjectsV2 rule makes 'list all published segments, including unreferenced ones' genuinely hard: a new stored index introduces its own write-ordering, CAS and staleness problems (an index that disagrees with reality is worse than no index), and it also touches IAM/deploy assumptions.",
+      "Changing the SegmentPointer shape risks breaking backward compatibility for pointers already published by the CLI, and for the SDK's segment-pointer polling in @featuresync/core and @featuresync/aws.",
+      "Creating a flag with segment rules in one step widens the create edit's blast radius across the two exhaustive switches in edit-feature.ts (FlagEdit and FlagEditFailure) and the EDIT_PARSERS record; missing one branch breaks typecheck or silently yields a 400 with an undefined message.",
+      "100% coverage on packages/*/src for several new branches (unknown-attribute row, unavailable pointer read, empty segment list, index write failure) is where these horizons historically burn time; integration and e2e contribute zero coverage.",
+      "Attach/detach is indexed by rule position, so a create-with-multiple-segments flow plus reordering can make rule indices ambiguous \u2014 an existing open blocker that this horizon makes more reachable.",
+      "Scope is three user-visible features plus a storage-format change in one horizon; it is large enough that a phase may need deferral, and a half-landed storage change (written but not read, or read but not written) leaves the dashboard worse than today.",
+      "The Playwright browser proof and the CI step must land together per the horizon-18 decision, so the browser work cannot be deferred to a later horizon without leaving the proof unexercised."
+    ],
+    "outOfScope": [
+      "Horizon 22's orphaned S3 object cleanup (delete-on-CONFLICT, lifecycle rule, IAM s3:DeleteObject) \u2014 explicitly superseded by the user for this horizon.",
+      "Editing or re-uploading a segment's member CSV from the segment list page \u2014 this horizon makes segments visible and selectable, it does not change the upload flow that already works.",
+      "Deleting or archiving a published segment, or garbage-collecting unreferenced segments \u2014 no delete contract exists and it would re-open the cleanup work just set aside.",
+      "Member count, createdAt or any other segment metadata beyond memberAttribute and pointer version \u2014 the horizon-18 decision limited the list to what the pointer carries, and each extra field is another stored-format change.",
+      "Per-SDK segment-version telemetry ('which version is each app actually using') \u2014 ruled out by the horizon-17 decision; no telemetry channel exists.",
+      "Changing the rollout bucketing algorithm, the percentage semantics, or the hash/salt contract \u2014 only the place the percentage is entered moves.",
+      "Re-opening concurrent-edit semantics: the field-granular replay rule, the tolerant 200+422 integration assertion, and the rejected bounded retry stay exactly as horizon 20 left them.",
+      "Auto-upgrading schemaVersion 1 snapshots to 2 \u2014 a standing deferred question, not needed to ship the picker or the create-with-segment flow.",
+      "Migrating the remaining in-memory Playwright specs onto LocalStack fixtures \u2014 only the new specs for this horizon's surface need the LocalStack fixture.",
+      "A general blockers.md backlog audit \u2014 this horizon retires only the horizon-21 entries it actually resolves.",
+      "Segment change notifications via SNS on upload \u2014 the notification contract is snapshot-only by the horizon-13 decision.",
+      "Authentication, multi-user attribution or an audit log for who attached which segment \u2014 the dashboard remains a single-operator localhost tool."
+    ],
+    "domainShape": "business",
+    "domainShapeReason": "The objective is about feature-flag domain concepts an operator would name \u2014 segments, member attributes, flag rules, attachment and rollout percentage \u2014 and the work changes what is stored and how rules are formed, not merely how a page looks.",
+    "ubiquitousLanguage": [
+      {
+        "term": "Segment",
+        "meaning": "A named, versioned set of member values uploaded as CSV and published to S3 under <env>/segments/<key>/, referenced by flag rules via its Segment Key."
+      },
+      {
+        "term": "Segment Key",
+        "meaning": "The stable identifier a flag rule uses to reference a segment; validated with core's segmentKeySchema and, after this horizon, chosen from a list rather than typed."
+      },
+      {
+        "term": "Member Attribute",
+        "meaning": "The evaluation-context attribute name a segment's members are matched on; recorded when the segment is published and read back by the dashboard so the operator never types it."
+      },
+      {
+        "term": "Segment Pointer",
+        "meaning": "The current.json record for one segment ({schemaVersion, environment, segmentKey, version, objectKey}), extended this horizon to carry the Member Attribute."
+      },
+      {
+        "term": "Published Segment",
+        "meaning": "A segment that has a Segment Pointer in the environment \u2014 the population the picker and the Segment List draw from, whether or not any flag references it."
+      },
+      {
+        "term": "Segment List",
+        "meaning": "The dashboard page at /env/<env>/segments showing every published segment with its pointer version, Member Attribute and the flag keys that reference it."
+      },
+      {
+        "term": "Attach",
+        "meaning": "Adding a segment-membership rule for a chosen published segment to a flag, as an appended rule carrying its own rollout percentage; Detach removes one by rule index."
+      },
+      {
+        "term": "Rollout Percentage",
+        "meaning": "The 0-100 (max two decimals) share of a rule's matching members that receive the rule's outcome, set per attached segment via the setRollout/removeRollout flag edits."
+      },
+      {
+        "term": "Segment Publishing",
+        "meaning": "The part of the system that writes a segment's members, pointer and version objects to S3."
+      },
+      {
+        "term": "Segment Catalog",
+        "meaning": "The part of the dashboard that discovers and presents which segments exist in an environment."
+      },
+      {
+        "term": "Flag Editing",
+        "meaning": "The part of the dashboard that changes a flag in the current snapshot and republishes it."
+      }
+    ]
+  },
+  "discoveryFindings": [
+    {
+      "area": "SegmentPointer shape",
+      "finding": "SegmentPointer is {schemaVersion:1, environment, segmentKey, version, objectKey}, parsed by a zod z.object (NOT strictObject) with a .refine tying objectKey to <env>/segments/<key>/<version>.json. schemaVersion is POINTER_SCHEMA_VERSION = 1, imported from current-pointer.ts and SHARED with the snapshot CurrentPointer schema.",
+      "filePath": "packages/aws/src/domain/segment-pointer.ts",
+      "implication": "An OPTIONAL memberAttribute is backward compatible for reads. Bumping POINTER_SCHEMA_VERSION is NOT an option without breaking the snapshot CurrentPointer, since the literal is shared \u2014 the field must be optional at version 1."
+    },
+    {
+      "area": "SegmentPointer producers",
+      "finding": "buildSegmentPointer(environment, segmentKey, version) is the single constructor and takes no attribute; it is called only from createS3SegmentPublisher.publish, which already HAS segment.memberAttribute in scope (it writes it into the version object via parseSegment) and then discards it when building the pointer.",
+      "filePath": "packages/aws/src/infrastructure/s3-segment-publisher.ts",
+      "implication": "Exactly one write site; memberAttribute is already known at publish time and simply dropped. Adding it is a one-line change in publish plus a signature change on buildSegmentPointer \u2014 no new plumbing from CLI or dashboard."
+    },
+    {
+      "area": "Segment version reader port",
+      "finding": "S3SegmentVersionReader.readVersion(env,key): Promise<number|null> parses the full pointer and returns ONLY pointer.value.version. null means never published; every other failure throws S3SegmentPublishError. The dashboard port is readSegmentVersion on SegmentUploadPorts, wired in aws-adapters.ts.",
+      "filePath": "packages/aws/src/infrastructure/s3-segment-version-reader.ts",
+      "implication": "Exposing memberAttribute means widening this port's return type (e.g. {version, memberAttribute?}|null) and updating 3 call sites: list-referenced-segments.readRow, segment-routes POST precheck/reload, aws-adapters. The 'unknown attribute' state falls out of the optional field."
+    },
+    {
+      "area": "CSV upload path (dashboard)",
+      "finding": "POST /env/<env>/segments reads form fields key + memberAttribute + csv, builds SegmentUploadRequest, uploadSegment calls parseSegmentCsv({key,version:1,memberAttribute}) then ports.publishSegment({key,memberAttribute,members,expectedCurrentVersion}). aws-adapters forwards memberAttribute to the publisher.",
+      "filePath": "packages/dashboard/src/application/upload-segment.ts",
+      "implication": "memberAttribute already flows end to end to the publisher; nothing new must be collected from the operator. Only the pointer write and the read-back are missing."
+    },
+    {
+      "area": "CSV upload path (CLI)",
+      "finding": "CLI 'featuresync segment upload --env --key --file [--attribute]' defaults to DEFAULT_MEMBER_ATTRIBUTE and calls the same publisher.publish(env,{key,memberAttribute,members}).",
+      "filePath": "packages/cli/src/main.ts",
+      "implication": "Both entry points share one publish() call, so storing memberAttribute on the pointer is written by CLI and dashboard automatically with no CLI change \u2014 there is ONE publisher to update, not two."
+    },
+    {
+      "area": "Segment list page (existing)",
+      "finding": "renderSegmentListPage already exists and renders a 2-column table (Segment / Current pointer) over SegmentListRow ('published' with version | 'not-published' | 'unavailable'), plus a 'Create a segment' form with free-text Segment Key and Member attribute (default 'userId'). Its copy says 'Every Segment Key the current snapshot's rules reference'.",
+      "filePath": "packages/dashboard/src/infrastructure/views/segment-list-page.ts",
+      "implication": "The page is a modification, not a new build: add a Member Attribute column and a 'Used by flags' column and change the row source. The existing not-published/unavailable states and the empty-list copy must be revisited."
+    },
+    {
+      "area": "listReferencedSegments",
+      "finding": "listReferencedSegments calls browseEnvironment, takes current.contents.segmentKeys (= [...referencedSegmentKeys(snapshot)].sort() from core), then does one readSegmentVersion per key with try/catch per key.",
+      "filePath": "packages/dashboard/src/application/list-referenced-segments.ts",
+      "implication": "The list is derived purely from the current snapshot's rules. An UNREFERENCED published segment is UNDISCOVERABLE today \u2014 no listing, no index, no way to enumerate keys. Requirement (1) cannot be met without a new stored per-environment index object."
+    },
+    {
+      "area": "referencedSegmentKeys in core",
+      "finding": "referencedSegmentKeys(snapshot): ReadonlySet<string> iterates features -> rules -> Object.values(rule.when) and collects expected.inSegment. It returns keys only \u2014 it does NOT report which flag key referenced them.",
+      "filePath": "packages/core/src/domain/snapshot.ts",
+      "implication": "'Which flags use this segment' needs either a new core function or derivation in the dashboard application layer from browseEnvironment's already-available flags[].rules. The dashboard already has the raw rules, so no core change is strictly required."
+    },
+    {
+      "area": "No index/registry exists",
+      "finding": "Nothing in packages/ writes any index/registry/manifest object; grep for index.json/registry in packages/*.ts returns nothing. ListObjectsV2Command appears ONLY in the Playwright fixture's bucket-cleanup helper, never in src.",
+      "filePath": "packages/dashboard/e2e/support/localstack-fixtures.ts",
+      "implication": "A per-environment segment index object is genuinely new storage. It must be written in the same publish() that writes the pointer, with its own CAS/staleness handling \u2014 a distinct phase."
+    },
+    {
+      "area": "IAM already permits a new object",
+      "finding": "The CloudFormation publisher policy grants s3:GetObject+s3:PutObject on ${SnapshotBucket.Arn}/${Environment}/* (Sid ReadWriteEnvironmentKeys) and prefix-scoped s3:ListBucket (Sid ListEnvironmentKeys).",
+      "filePath": "packages/deploy/template/featuresync-stack.json",
+      "implication": "A new <env>/segments/index.json needs NO IAM or template change. The publisher role already has ListBucket, so the no-ListObjectsV2 rule is a code decision, not an IAM limitation \u2014 the roadmap should say so rather than over-justifying it."
+    },
+    {
+      "area": "Attach form markup",
+      "finding": "renderSegmentAttachForm renders a <details> with a free-text segmentKey input backed by an optional <datalist> of already-referenced keys, a free-text memberAttribute input defaulting to 'userId', an optional value input for config flags, and a submit button name=field value=attachSegment. It takes AttachContext {action, baseVersionInput, segmentKeys, draft?}.",
+      "filePath": "packages/dashboard/src/infrastructure/views/segment-attach-form.ts",
+      "implication": "Replacing with a <select> means AttachContext.segmentKeys becomes a richer list (key + memberAttribute), the memberAttribute input is dropped or derived server-side, and AttachDraft.memberAttribute becomes obsolete \u2014 rippling into EditDraft and editDraftOf in http-server.ts."
+    },
+    {
+      "area": "Attach form data source",
+      "finding": "segmentKeys reaches the attach form via feature-edit-form.ts EditContext.segmentKeys, set in environment-page.ts from current.contents.segmentKeys (referenced keys only). The environment page does NOT currently call readSegmentVersion at all.",
+      "filePath": "packages/dashboard/src/infrastructure/views/environment-page.ts",
+      "implication": "Feeding the picker published segments requires the environment page route to gain a new async read (the index) before rendering \u2014 a route-level change in http-server.ts, not just a view change."
+    },
+    {
+      "area": "POST route + EDIT_PARSERS",
+      "finding": "EDIT_PARSERS is a Record<string,(key,fields)=>EditParse> with keys setRollout, removeRollout, enabled, default, rules, delete, attachSegment, detachSegment. attachSegment reads fields.segmentKey and fields.memberAttribute (defaulting to '') and decodes value via decodeAttachValue. FIELD_MESSAGE is derived from Object.keys(EDIT_PARSERS).",
+      "filePath": "packages/dashboard/src/infrastructure/http-server.ts",
+      "implication": "Adding parsers is additive, but FIELD_MESSAGE text changes automatically and any test asserting that exact message string will break."
+    },
+    {
+      "area": "FlagEdit kinds and switches",
+      "finding": "FlagEdit is a 9-member union (enabled, default, create, delete, setRules, setRollout, removeRollout, attachSegment, detachSegment). Three exhaustive switches must stay aligned: describeEdit and editFailure in edit-feature.ts, and touchedFields in flag-edit.ts. FlagEditFailure has 11 kinds, each mapped in editFailure.",
+      "filePath": "packages/dashboard/src/application/edit-feature.ts",
+      "implication": "Any new edit kind requires edits in exactly 3 switches + EDIT_PARSERS + any new failure kind + a message constant in error-messages.ts. Missing one is a typecheck error, not a silent bug."
+    },
+    {
+      "area": "applyFlagEdit / attachSegment",
+      "finding": "attachSegment builds when = {[memberAttribute]:{inSegment:segmentKey}} and appends {when,enabled:true} or {when,value} \u2014 it appends NO rollout. applyFlagEdit rejects attachSegment when the base snapshot has schemaVersion===1 with SEGMENT_NEEDS_SCHEMA_VERSION_2. Rollout is set separately via setRollout by ruleIndex.",
+      "filePath": "packages/dashboard/src/domain/flag-edit.ts",
+      "implication": "'Attach with a rollout percentage' is currently two round trips. Either attachSegment gains an optional rollout, or the create path composes rules directly. The schemaVersion-1 guard is keyed on edit.kind==='attachSegment' only, so a create-with-segments path must be added to that guard or it bypasses it."
+    },
+    {
+      "area": "Rule / rollout zod shape",
+      "finding": "rolloutSchema = z.strictObject({percentage: number 0..100 with at-most-two-decimals refine, bucketBy: string min1, salt: string min1}); rules are booleanRuleSchema = strictObject({when, rollout?, enabled}) and configRuleSchema = strictObject({when, rollout?, value}). The segment reference lives inside when as {<attribute>:{inSegment:<segmentKey>}} via operatorExpressionSchema, a strictObject refined to exactly ONE operator key.",
+      "filePath": "packages/core/src/domain/rule.ts",
+      "implication": "There is no segmentKey/attribute field on a rule \u2014 a segment rule is structural. bucketBy and salt are REQUIRED whenever a rollout is present, so a create-with-segments form asking only for a percentage must supply defaults (the rollout form defaults bucketBy='userId', salt='')."
+    },
+    {
+      "area": "Create-flag flow",
+      "finding": "renderNewFlagForm posts key/type/enabled/default to POST /env/<env>/features. parseCreateForm builds {kind:'create',key,type,enabled[,defaultJson]}. createFeature emits {type:'boolean',enabled} or {type:'config',enabled,default} \u2014 NO rules key at all. createDraftOf echoes only those 4 fields.",
+      "filePath": "packages/dashboard/src/infrastructure/views/new-flag-form.ts",
+      "implication": "Creating with segments means repeated form controls (segmentKey[]/percentage[]), a widened create FlagEdit, createFeature emitting a rules array, an extended CreateDraft for echo-back, and the schemaVersion-2 guard extended. This is the largest of the three features."
+    },
+    {
+      "area": "Replay / CAS",
+      "finding": "canReplayEdit special-cases create (replays iff the key was absent in the BASE snapshot; deliberately not checked against latest) and maps every rule-touching kind to touched fields ['rules'] via touchedFields, an exhaustive switch over Exclude<FlagEdit,{kind:'create'}>.",
+      "filePath": "packages/dashboard/src/domain/flag-edit.ts",
+      "implication": "If create-with-segments stays kind 'create', replay semantics are unchanged and free. A new kind would need touchedFields extended and create-style replay reimplemented \u2014 a strong argument for widening 'create'."
+    },
+    {
+      "area": "schemaVersion 2 baseline",
+      "finding": "environment-page.ts firstVersionTemplate hardcodes FIRST_VERSION_SCHEMA_VERSION = 2 for a brand-new environment's prefill JSON.",
+      "filePath": "packages/dashboard/src/infrastructure/views/environment-page.ts",
+      "implication": "New environments created through the dashboard are already schemaVersion 2, so create-with-segments works there. Only pre-existing v1 environments hit SEGMENT_NEEDS_SCHEMA_VERSION_2."
+    },
+    {
+      "area": "Unit test layout",
+      "finding": "Two conventions coexist: packages/*/test/{domain,application,infrastructure}/*.test.ts AND co-located *.test.ts next to source under packages/dashboard/src/infrastructure/ (http-server.test.ts, segment-routes.test.ts, aws-adapters.test.ts, views/*.test.ts including segment-list-page.test.ts, segment-attach-form.test.ts, rollout-form.test.ts, feature-edit-form.test.ts, environment-page.test.ts).",
+      "filePath": "packages/dashboard/src/infrastructure/views/segment-list-page.test.ts",
+      "implication": "New dashboard infrastructure/view code gets a co-located test; new application/domain code gets a test under packages/dashboard/test/. Follow the layer's existing convention."
+    },
+    {
+      "area": "Coverage config",
+      "finding": "Root vitest.config.ts defines one project per packages/* dir, excludes integration/** and e2e/**, and enforces v8 coverage thresholds of 100 for lines/branches/functions/statements over include ['packages/*/src/**/*.ts'] exclude ['**/*.test.ts'].",
+      "filePath": "vitest.config.ts",
+      "implication": "Integration and e2e contribute zero coverage, so every new branch (unknown attribute, index read failure, empty picker, index write failure) needs a dedicated unit test. packages/deploy has no src/, so template changes are covered only by packages/deploy/test/stack-policies.test.ts."
+    },
+    {
+      "area": "Integration suites",
+      "finding": "LocalStack integration suites are packages/aws/integration/*.localstack.test.ts (incl. s3-segment-publisher, s3-segment-source-chain) and packages/dashboard/integration/{dashboard,dashboard-segments}.localstack.test.ts, run via pnpm test:integration which first builds core/aws/cli/dashboard.",
+      "filePath": "packages/dashboard/integration/dashboard-segments.localstack.test.ts",
+      "implication": "The integration proof for pointer memberAttribute belongs in packages/aws/integration/s3-segment-publisher.localstack.test.ts; the picker/list proof in packages/dashboard/integration/dashboard-segments.localstack.test.ts. Both require a build step, so packages must export any new types from index.ts."
+    },
+    {
+      "area": "Playwright e2e",
+      "finding": "3 specs: concurrent-edits.spec.ts, segment-upload-rollout.spec.ts, flag-list.spec.ts, with two fixture modules \u2014 e2e/support/fixtures.ts (in-memory) and e2e/support/localstack-fixtures.ts (per-test bucket via CreateBucket, seedSnapshotFor/seedPointerFor from test/support/seed-snapshot.ts, ENVIRONMENT='e2e'). playwright.config testDir 'e2e', channel chrome locally / bundled Chromium in CI, trace/screenshot/video all off for PII.",
+      "filePath": "packages/dashboard/e2e/support/localstack-fixtures.ts",
+      "implication": "New browser specs use the LocalStack fixture and can seed pointers directly via seedPointerFor. No artifacts are retained on failure, so keep specs small and assertion-rich."
+    },
+    {
+      "area": "CI job steps",
+      "finding": "ci.yml has two jobs. verify runs pnpm install -> pnpm verify (build 5 packages -> typecheck -> lint -> vitest --coverage) -> pnpm example:node-local. localstack requires LOCALSTACK_AUTH_TOKEN, starts docker compose, runs pnpm test:integration, installs Chromium, then runs pnpm --filter @featuresync/dashboard test:e2e with PLAYWRIGHT_CHANNEL=''.",
+      "filePath": ".github/workflows/ci.yml",
+      "implication": "Both the integration and the Playwright steps ALREADY exist in the localstack job \u2014 new specs and suites are picked up automatically with NO ci.yml edit."
+    },
+    {
+      "area": "ESLint layer rules",
+      "finding": "import-x/no-restricted-paths forbids packages/*/src/domain/** importing application or infrastructure, and packages/*/src/application/** importing infrastructure. lint runs with --max-warnings=0.",
+      "filePath": "eslint.config.js",
+      "implication": "A segment-index type must live in domain or be imported into the dashboard application layer from @featuresync/aws (a package boundary, which is allowed \u2014 upload-segment.ts already imports SegmentPointer in the application layer)."
+    },
+    {
+      "area": "Existing detach indexing hazard",
+      "finding": "Detach and setRollout address rules by array position: rollout-form.ts renders one form per rule index and detachSegment/setRollout use addressRule with feature.rules[ruleIndex]. attachSegment always APPENDS.",
+      "filePath": "packages/dashboard/src/infrastructure/views/rollout-form.ts",
+      "implication": "Creating a flag with N segments in one publish produces N rules at deterministic indices 0..N-1, so per-segment rollout at create time can be emitted directly without the index ambiguity of attach-then-setRollout. Create-with-segments is SAFER than the incremental path."
+    },
+    {
+      "area": "Segment upload precheck",
+      "finding": "segment-routes POST /segments rejects a key whose readSegmentVersion returns non-null with KEY_IN_USE_MESSAGE (422); the per-segment page POST /segments/<key> uploads a new version with expectedCurrentVersion from a hidden field. UPLOAD_STATUS maps each failure reason to 400/422/502.",
+      "filePath": "packages/dashboard/src/infrastructure/segment-routes.ts",
+      "implication": "The create-segment POST already performs a pointer read before publishing; if an index is introduced, this route is the natural place to detect index/pointer disagreement, and its 400/422/502 convention should be reused for index failures."
+    }
+  ],
+  "requiredMaterials": [],
+  "phases": [
+    {
+      "id": "pointer-member-attribute",
+      "order": 0,
+      "name": "Store the Member Attribute on the Segment Pointer",
+      "goal": "Record the Member Attribute a segment's members are matched on inside that segment's pointer record in storage, so it can later be read back instead of typed by the operator.",
+      "rationale": "A segment is a list of member values matched against one named attribute of the evaluation context (for example 'userId'). Today that attribute name is known only while the segment is being uploaded and is then thrown away, so anyone attaching the segment to a feature flag has to retype it from memory, and a typo silently creates a rule that matches nobody. Writing the attribute alongside the segment's current-version record fixes the problem at its source.",
+      "filesAffected": [
+        "packages/aws/src/domain/segment-pointer.ts",
+        "packages/aws/src/infrastructure/s3-segment-publisher.ts",
+        "packages/aws/test/domain/segment-pointer.test.ts",
+        "packages/aws/integration/s3-segment-publisher.localstack.test.ts"
+      ],
+      "changes": [
+        "Add an OPTIONAL memberAttribute string field to the Segment Pointer zod schema in segment-pointer.ts, keeping the shared schemaVersion literal at 1 (it is shared with the snapshot CurrentPointer schema and must not be bumped); optional keeps pointers published before this change parseable.",
+        "Add a memberAttribute parameter to buildSegmentPointer(environment, segmentKey, version) and include it in the returned record.",
+        "In createS3SegmentPublisher.publish, pass the already-in-scope segment.memberAttribute into buildSegmentPointer instead of discarding it \u2014 this is the single publish site shared by both the CLI upload command and the dashboard upload route, so no caller changes are needed.",
+        "Add unit tests covering: a pointer parsed WITH memberAttribute, a legacy pointer parsed WITHOUT it, and the publisher writing the attribute into the pointer body.",
+        "Extend the existing LocalStack publisher integration suite with one assertion that the written current.json contains the memberAttribute."
+      ],
+      "boundedContext": "Segment Publishing",
+      "layer": "infrastructure",
+      "blastRadius": "small",
+      "inputs": [
+        "packages/aws/src/domain/segment-pointer.ts current schema",
+        "packages/aws/src/infrastructure/s3-segment-publisher.ts publish flow"
+      ],
+      "expectedResult": "A published segment's current.json pointer contains its memberAttribute, and pointers written before this change still parse.",
+      "dependsOn": [],
+      "compensation": "The field is optional and additive; reverting the code leaves older pointers valid and newer pointers' extra field ignored by the non-strict parser.",
+      "rubric": [
+        {
+          "id": "optional-field-legacy-parse",
+          "label": "Legacy pointers still parse",
+          "ruleStatement": "The Segment Pointer schema accepts memberAttribute as optional, so a pointer JSON written without it parses successfully and yields an absent (not empty-string, not defaulted) attribute.",
+          "passCriteria": [
+            "Open packages/aws/src/domain/segment-pointer.ts and confirm the memberAttribute field is declared optional, not required and not given a default value.",
+            "Confirm the schemaVersion literal is still 1 (unchanged) in that file.",
+            "Run the unit test that parses a pointer object containing only the pre-existing fields (no memberAttribute) and confirm it parses without throwing.",
+            "Confirm that after parsing such a legacy pointer, memberAttribute is undefined rather than a placeholder string like \"\" or \"userId\"."
+          ],
+          "failureExamples": [
+            "The developer adds memberAttribute: z.string().default('userId'), so every legacy pointer silently claims an attribute it never had.",
+            "memberAttribute is declared required and the legacy-pointer test was written only against newly-built pointers, so parsing a real pre-horizon current.json throws.",
+            "schemaVersion was bumped to 2 to \"mark the new shape\", breaking the shared snapshot CurrentPointer schema."
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "publisher-writes-attribute",
+          "label": "Publisher persists the attribute",
+          "ruleStatement": "createS3SegmentPublisher.publish passes the in-scope segment's memberAttribute through buildSegmentPointer so the written current.json body contains it.",
+          "passCriteria": [
+            "Read packages/aws/src/infrastructure/s3-segment-publisher.ts and confirm the memberAttribute value comes from the segment being published, not from a constant, a parameter default, or a newly added publisher option.",
+            "Confirm buildSegmentPointer's signature takes the attribute and that the returned record includes it.",
+            "Run the unit test asserting the serialized pointer body written to S3 contains the memberAttribute of the uploaded segment.",
+            "Confirm no call site outside this file had to change to supply the attribute."
+          ],
+          "failureExamples": [
+            "buildSegmentPointer gains the parameter but publish still calls it with the old argument list, so the field is always undefined while the schema test passes.",
+            "The attribute is threaded in as a new required publisher constructor option, forcing the CLI and dashboard upload paths to pass it separately and reintroducing a place to get it wrong.",
+            "The attribute is written into the segment members object rather than into current.json, so the pointer reader still cannot see it."
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "localstack-roundtrip-assertion",
+          "label": "Real-storage round trip asserted",
+          "ruleStatement": "The existing LocalStack publisher integration suite asserts on the actual stored current.json object, not on an in-memory return value.",
+          "passCriteria": [
+            "Open packages/aws/integration/s3-segment-publisher.localstack.test.ts and confirm the new assertion reads the object back from S3 (GetObject on the current.json key) after publishing.",
+            "Confirm the assertion checks the memberAttribute equals the attribute of the segment the test published.",
+            "Confirm the assertion lives in the existing suite rather than a new file that CI does not run."
+          ],
+          "failureExamples": [
+            "The test asserts on the value the publisher returned in memory, so a serialization bug that drops the field still passes.",
+            "The assertion hardcodes an attribute name that happens to match the fixture, so it would pass even if the publisher wrote a constant."
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "infrastructure-layer-respected",
+          "label": "Domain stays free of storage concerns",
+          "ruleStatement": "The schema/builder change stays a pure domain concern and the S3 concern stays in infrastructure; no new outward dependency is introduced.",
+          "passCriteria": [
+            "Confirm packages/aws/src/domain/segment-pointer.ts imports nothing from ../application or ../infrastructure and no AWS SDK package.",
+            "Run the repo's lint command and confirm the import-boundary rules report no violations with --max-warnings=0.",
+            "Confirm typecheck is green and unit-test coverage over packages/*/src is still 100% on lines, branches, functions and statements from unit tests alone."
+          ],
+          "failureExamples": [
+            "The builder is moved into the publisher file \"since that is its only caller\", leaving the schema and its construction split across layers.",
+            "The new optional branch in the schema or builder is exercised only by the LocalStack integration test, so branch coverage from unit tests drops below 100%."
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "The usual miss is the field being optional in the schema but never actually threaded from segment.memberAttribute into buildSegmentPointer at the publish call site \u2014 check the written current.json body in the round-trip test first."
+    },
+    {
+      "id": "list-published-segments-usecase",
+      "order": 1,
+      "name": "List published segments with their using flags",
+      "goal": "Produce, for one environment, a row per published segment carrying its Segment Key, current pointer version, Member Attribute and the keys of the flags whose rules reference it.",
+      "rationale": "The dashboard currently derives its segment list only from segment keys mentioned by the current snapshot's flag rules, so a segment nobody has attached yet is invisible, and the page cannot say which flags use a segment. This step defines the use case and the data contract (port) it needs, so both the list page and the segment picker can be built on one source of truth.",
+      "filesAffected": [
+        "packages/dashboard/src/application/list-referenced-segments.ts",
+        "packages/dashboard/src/application/ports.ts",
+        "packages/dashboard/test/application/list-referenced-segments.test.ts"
+      ],
+      "changes": [
+        "Define a port method listPublishedSegments(environment) returning rows of {segmentKey, version, memberAttribute?} for every segment published in the environment, plus an explicit 'unavailable' result for a failed read \u2014 the application layer only declares this contract, an adapter supplies it later.",
+        "Replace/extend listReferencedSegments with a listPublishedSegments use case that calls the new port for the population, and derives usedByFlagKeys for each segment by scanning the flags and rules already returned by browseEnvironment for inSegment references (a segment with none is reported as unused).",
+        "Keep the existing per-row states meaningful: a row whose stored memberAttribute is absent (published before it was recorded) is reported as a distinct 'unknown attribute' state rather than throwing.",
+        "Add unit tests covering: a segment used by two flags, an unused published segment, a segment missing memberAttribute, an empty environment, and the port read failing."
+      ],
+      "boundedContext": "Segment Catalog",
+      "layer": "application",
+      "blastRadius": "medium",
+      "inputs": [
+        "stage1.5 discovery finding on listReferencedSegments",
+        "core referencedSegmentKeys semantics (rule.when[attr].inSegment)"
+      ],
+      "expectedResult": "A listPublishedSegments use case returning one row per published segment with version, Member Attribute state and the flag keys using it.",
+      "dependsOn": [],
+      "rubric": [
+        {
+          "id": "population-from-published-set",
+          "label": "Population is published segments, not referenced keys",
+          "ruleStatement": "The use case's row set comes from the listPublishedSegments port, so a published segment that no flag references still produces a row.",
+          "passCriteria": [
+            "Read packages/dashboard/src/application/list-referenced-segments.ts (or its replacement) and confirm the list of rows is built by iterating the port's result, not by iterating segment keys found in flag rules.",
+            "Run the unit test in which the port returns a segment that appears in no flag rule and confirm exactly one row is returned for it.",
+            "Confirm rule-scanning is used only to compute usage, never to add or remove rows."
+          ],
+          "failureExamples": [
+            "The implementation intersects the port result with the referenced keys \"to avoid showing stale segments\", so a freshly published, unattached segment never appears.",
+            "Rows are built from referenced keys and the port is consulted only to enrich them, reproducing the original invisibility bug with more code."
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "usage-attribution-correct",
+          "label": "Using-flag keys are accurate and explicit when empty",
+          "ruleStatement": "Each row carries the keys of every flag whose rules reference that segment via inSegment, and an empty set is represented as an explicit unused state rather than an ambiguous blank.",
+          "passCriteria": [
+            "Run the unit test where one segment is referenced by two different flags and confirm both flag keys appear on that row, deduplicated and in a deterministic order.",
+            "Run the unit test for a published segment referenced by no flag and confirm the row exposes a distinguishable unused state (a dedicated field/variant), not merely an empty array the view must interpret.",
+            "Confirm a flag referencing two different segments contributes its key to both rows.",
+            "Confirm the traversal reads inSegment references from rule.when[attr], matching core's referencedSegmentKeys semantics."
+          ],
+          "failureExamples": [
+            "Only the first matching rule per flag is inspected, so a flag whose second rule references the segment is not listed.",
+            "A flag that references the same segment in two rules is listed twice on the row.",
+            "Unused is encoded as an empty array with no explicit state, so the view later cannot tell unused from not-yet-computed."
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "attribute-and-unavailable-states",
+          "label": "Unknown attribute and unavailable listing are first-class states",
+          "ruleStatement": "A row whose pointer has no stored memberAttribute is reported as a distinct unknown-attribute state, and a failed port read produces the declared unavailable result instead of an exception or an empty list.",
+          "passCriteria": [
+            "Run the unit test with a port row lacking memberAttribute and confirm the use case returns a row in an explicit unknown-attribute state rather than throwing, substituting a default, or dropping the row.",
+            "Run the unit test where the port returns its unavailable result and confirm the use case propagates an unavailable outcome that a caller can distinguish from an environment with zero segments.",
+            "Run the empty-environment test and confirm it yields an empty-but-successful result, distinct from unavailable."
+          ],
+          "failureExamples": [
+            "A missing memberAttribute is rendered downstream-friendly by substituting the string 'unknown' in the use case, making a segment genuinely named 'unknown' indistinguishable.",
+            "The port failure is caught and turned into an empty list, so a broken S3 read looks identical to a clean environment and the operator silently sees nothing."
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "application-layer-purity",
+          "label": "Application declares the contract, owns no transport",
+          "ruleStatement": "The new port is only declared in the application layer and the use case contains no S3, HTTP, SDK or HTML concern.",
+          "passCriteria": [
+            "Confirm packages/dashboard/src/application/ports.ts declares listPublishedSegments as a type/interface only, with no implementation and no AWS import.",
+            "Grep the use case file for imports from ../infrastructure or any @aws-sdk package and confirm there are none.",
+            "Run lint and confirm the import-boundary rule forbidding application importing infrastructure reports zero violations at --max-warnings=0.",
+            "Confirm the use case's unit tests drive it entirely through an in-test fake port, with no network or filesystem access."
+          ],
+          "failureExamples": [
+            "The port type is declared in the application layer but its result type is imported from packages/aws infrastructure, dragging an SDK shape into the contract.",
+            "The use case formats the unused state as a display string like 'unused', putting a presentation decision in the application layer."
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "The likeliest failure is rows still being derived from flag-referenced keys with the port used only for enrichment \u2014 invert it so the port supplies the population and rule scanning only annotates usage."
+    },
+    {
+      "id": "segment-prefix-lister",
+      "order": 2,
+      "name": "List the segments prefix in S3",
+      "goal": "Let the dashboard discover every published segment by asking S3 to list the <env>/segments/ prefix directly, and serve the listPublishedSegments port from that listing plus each segment's pointer, with no index object involved.",
+      "rationale": "The dashboard needs the set of published Segment Keys before it can show a Segment List or offer a picker. Asking S3 for the <env>/segments/ prefix with Delimiter '/' returns exactly that set as common prefixes, with no second source of truth to write, version or repair on every publish. This deliberately supersedes the earlier horizon-10 project rule that the dashboard never calls ListObjectsV2. That rule existed to keep the SDK reader's permissions minimal \u2014 the SDK reader must never need bucket-listing rights, and it still does not, because nothing here changes the SDK reader. The dashboard is a different consumer: a single-operator tool running on localhost under the deploy role, and discovery confirmed that role already grants prefix-scoped s3:ListBucket in packages/deploy/template/featuresync-stack.json, so there is no IAM or CloudFormation change and no widening of any published client's permissions.",
+      "filesAffected": [
+        "packages/aws/src/infrastructure/s3-segment-lister.ts",
+        "packages/aws/src/index.ts",
+        "packages/aws/test/infrastructure/s3-segment-lister.test.ts",
+        "packages/dashboard/src/infrastructure/aws-adapters.ts",
+        "packages/dashboard/test/infrastructure/aws-adapters.test.ts"
+      ],
+      "changes": [
+        "Add packages/aws/src/infrastructure/s3-segment-lister.ts exporting createS3SegmentLister, which issues ListObjectsV2 against the bucket with Prefix '<env>/segments/' and Delimiter '/' and derives each Segment Key from the returned common prefixes.",
+        "Follow the listing across pages: while the response is truncated, re-issue the request with the returned continuation token and accumulate the Segment Keys, so a bucket with more segments than one page holds is listed in full.",
+        "Return an empty list, not an error, when the prefix does not exist or yields no common prefixes.",
+        "Export the lister and its result type from packages/aws/src/index.ts alongside the existing infrastructure exports.",
+        "In packages/dashboard/src/infrastructure/aws-adapters.ts, implement the listPublishedSegments port on top of the lister: for each listed Segment Key read that segment's pointer and combine the key with the pointer's version and stored memberAttribute.",
+        "Map a transport failure or an unparseable pointer onto the use case's 'unavailable' result instead of letting the error escape the page render.",
+        "Add unit tests covering a prefix holding several segments, an empty or absent prefix, a truncated multi-page listing, a malformed pointer for one listed key, and a transport error surfacing as 'unavailable', keeping packages/*/src at 100% branch coverage with unit tests only."
+      ],
+      "boundedContext": "Segment Catalog",
+      "layer": "infrastructure",
+      "blastRadius": "small",
+      "inputs": [
+        "The listPublishedSegments port contract and its 'unavailable' result from the list-published-segments use case",
+        "The existing pointer reader and pointer schema in packages/aws (version and memberAttribute fields)",
+        "The <env>/segments/<segmentKey>/ key layout used by the S3 segment publisher"
+      ],
+      "expectedResult": "The dashboard's listPublishedSegments port returns every published segment in an environment, each with its pointer version and stored Member Attribute, sourced from an S3 prefix listing.",
+      "dependsOn": [
+        "pointer-member-attribute",
+        "list-published-segments-usecase"
+      ],
+      "rubric": [
+        {
+          "id": "prefix-listing-shape",
+          "label": "Listing uses delimiter-scoped common prefixes",
+          "ruleStatement": "createS3SegmentLister derives Segment Keys from ListObjectsV2 common prefixes under '<env>/segments/' with Delimiter '/', not from enumerating every object key.",
+          "passCriteria": [
+            "Read packages/aws/src/infrastructure/s3-segment-lister.ts and confirm the request sets Prefix to '<env>/segments/' and Delimiter to '/'.",
+            "Confirm Segment Keys are read from the response's CommonPrefixes and stripped of the environment prefix and the trailing slash.",
+            "Run the unit test with a stubbed client returning several common prefixes and confirm the bare segment keys are returned.",
+            "Confirm keys are deduplicated and no key is returned containing a '/' or the environment name."
+          ],
+          "failureExamples": [
+            "The lister omits Delimiter and instead lists every object, then derives keys by splitting paths \u2014 correct on small buckets but paginating over every member file on a large one.",
+            "The trailing slash is left on the derived key, so pointer reads later build a double-slash path that 404s only against real S3."
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "pagination-completeness",
+          "label": "Truncated listings are followed to the end",
+          "ruleStatement": "The lister continues the listing while the response is truncated, accumulating keys across every page.",
+          "passCriteria": [
+            "Run the unit test in which the stubbed client returns a truncated first page with a continuation token and a second, final page; confirm the result contains the keys from both pages.",
+            "Confirm the continuation token sent on the follow-up request is the one returned by the previous response.",
+            "Confirm the loop terminates when IsTruncated is false and the test does not rely on a fixed iteration count."
+          ],
+          "failureExamples": [
+            "Only one extra page is fetched (an if rather than a loop), so a bucket with three pages of segments silently lists two.",
+            "NextContinuationToken is read but the follow-up request sets Prefix/Delimiter differently, so page two returns unrelated keys."
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "absent-prefix-and-failure-mapping",
+          "label": "Empty is empty, broken is unavailable",
+          "ruleStatement": "A missing or empty prefix yields an empty list, while a transport failure or an unparseable pointer is mapped onto the port's unavailable result rather than escaping the page render.",
+          "passCriteria": [
+            "Run the unit test where the stub returns no CommonPrefixes and confirm an empty list is returned with no error thrown.",
+            "Run the unit test where the client throws and confirm the dashboard adapter returns the use case's unavailable result rather than rejecting.",
+            "Run the unit test where one listed key's pointer is malformed and confirm the adapter's outcome matches the documented contract (unavailable, or that row marked) and that no exception reaches the caller.",
+            "Confirm no catch in the adapter swallows an error into an empty success list."
+          ],
+          "failureExamples": [
+            "The adapter wraps everything in try/catch returning [], so an expired credential renders an empty Segment List that looks like a clean environment.",
+            "A NoSuchKey from one segment's pointer read aborts the whole listing, so one corrupt segment hides every other segment from the operator."
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "adapter-composition",
+          "label": "Adapter joins listing to pointers correctly",
+          "ruleStatement": "The dashboard adapter implements listPublishedSegments by reading each listed key's pointer and combining key, pointer version and stored memberAttribute, without inventing values.",
+          "passCriteria": [
+            "Read packages/dashboard/src/infrastructure/aws-adapters.ts and confirm each returned row's version comes from that key's pointer, not from the listing.",
+            "Confirm a pointer with no memberAttribute produces a row with the attribute absent, not a substituted default.",
+            "Run the unit test with two segments having different versions and confirm each row carries its own version.",
+            "Confirm the lister and its result type are exported from packages/aws/src/index.ts."
+          ],
+          "failureExamples": [
+            "Pointer reads are issued but the row is assembled from the loop variable of an outer scope, giving every row the last segment's version.",
+            "A missing memberAttribute is filled with the environment's most common attribute as a convenience, producing a confidently wrong value on the list page."
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "unit-only-coverage-and-boundaries",
+          "label": "Unit-only coverage and layer boundaries hold",
+          "ruleStatement": "Every new branch in the lister and adapter is covered by unit tests alone, with the S3 client stubbed, and infrastructure code is not imported by domain or application.",
+          "passCriteria": [
+            "Run the unit test suite with coverage and confirm packages/*/src remains at 100% for lines, branches, functions and statements without any integration or e2e suite contributing.",
+            "Confirm the lister's unit tests inject a stubbed S3 client rather than reaching LocalStack or the network.",
+            "Run lint at --max-warnings=0 and typecheck and confirm both are green, including the import rules forbidding domain->application/infrastructure and application->infrastructure."
+          ],
+          "failureExamples": [
+            "The pagination and error branches are exercised only by the LocalStack integration suite, leaving branch coverage from unit tests short of 100%.",
+            "The lister is imported directly by the application use case as a shortcut, bypassing the port and tripping the import-boundary rule."
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "The most likely miss is pagination handled as a single extra fetch or errors collapsed into an empty list \u2014 add the two-page stub test and the throwing-client test and make the loop and the unavailable mapping explicit."
+    },
+    {
+      "id": "segment-list-page-columns",
+      "order": 3,
+      "name": "Show attribute and using flags per segment",
+      "goal": "Change the Segment List page at /env/<env>/segments to list every published segment with its pointer version, its Member Attribute and the flag keys that reference it.",
+      "rationale": "The operator currently sees only segment keys that some flag already mentions, with no attribute and no indication of who uses them, which makes it impossible to tell what exists or what is safe to change. Showing the full published set with its usage makes the page answer the questions an operator actually asks.",
+      "filesAffected": [
+        "packages/dashboard/src/infrastructure/views/segment-list-page.ts",
+        "packages/dashboard/src/infrastructure/views/segment-list-page.test.ts",
+        "packages/dashboard/src/infrastructure/segment-routes.ts",
+        "packages/dashboard/src/infrastructure/segment-routes.test.ts"
+      ],
+      "changes": [
+        "Point the route at the listPublishedSegments use case instead of the referenced-keys listing.",
+        "Add a 'Member attribute' column rendering the stored value, or an explicit 'unknown (published before attributes were recorded)' marker when absent.",
+        "Add a 'Used by flags' column listing the referencing flag keys, or an explicit 'unused' marker.",
+        "Update the page's introductory copy, which currently claims the list shows every key the snapshot's rules reference, and update the empty-state copy for 'no segments published yet'.",
+        "Add view unit tests for each rendered state: used by one flag, used by several, unused, unknown attribute, unavailable listing, and empty list."
+      ],
+      "boundedContext": "Segment Catalog",
+      "layer": "interface",
+      "blastRadius": "medium",
+      "inputs": [
+        "listPublishedSegments use case",
+        "existing renderSegmentListPage markup and row states"
+      ],
+      "expectedResult": "The Segment List page renders one row per published segment with its version, Member Attribute and using flag keys.",
+      "dependsOn": [
+        "list-published-segments-usecase",
+        "segment-prefix-lister"
+      ],
+      "rubric": [
+        {
+          "id": "every-published-segment-listed",
+          "label": "Unattached published segments appear",
+          "ruleStatement": "The rendered page shows a row for every segment returned by listPublishedSegments, including ones no flag references.",
+          "passCriteria": [
+            "Read packages/dashboard/src/infrastructure/segment-routes.ts and confirm the /env/<env>/segments handler calls listPublishedSegments and no longer calls the referenced-keys listing.",
+            "Run the view unit test that renders a use-case result containing one segment used by a flag and one used by none, and confirm both rows appear in the HTML.",
+            "Confirm no filtering of rows happens in the route or the view."
+          ],
+          "failureExamples": [
+            "The route calls the new use case but the view keeps an early skip for rows with no using flags from the old markup, so unattached segments are still invisible.",
+            "Rows are sorted by usage and truncated to the referenced ones for readability."
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "attribute-column-states",
+          "label": "Member attribute column, including unknown",
+          "ruleStatement": "Each row renders its stored Member Attribute, and a row whose attribute is absent renders an explicit unknown marker instead of a blank cell or a guessed value.",
+          "passCriteria": [
+            "Render the page in the unit test with a row carrying memberAttribute and confirm a 'Member attribute' column header and the stored value both appear.",
+            "Render a row in the unknown-attribute state and confirm the cell shows an explicit marker naming it as published before attributes were recorded \u2014 not an empty cell, a dash, or a fabricated attribute name.",
+            "Confirm the unknown marker text is distinguishable from a legitimate attribute value an operator could have used."
+          ],
+          "failureExamples": [
+            "The unknown case renders an empty table cell, which an operator reads as a segment matching on nothing rather than as missing metadata.",
+            "The unknown case falls back to rendering 'userId' because it is the common case, showing a wrong attribute with full confidence."
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "used-by-flags-column",
+          "label": "Used-by-flags column, including unused",
+          "ruleStatement": "Each row lists the flag keys referencing the segment, or an explicit 'unused' marker when there are none.",
+          "passCriteria": [
+            "Render a row used by one flag and confirm that flag key appears in a 'Used by flags' column.",
+            "Render a row used by several flags and confirm every flag key appears, separated readably rather than concatenated into one token.",
+            "Render an unused row and confirm the cell shows an explicit 'unused' marker rather than being blank.",
+            "Confirm flag keys are HTML-escaped in the rendered output."
+          ],
+          "failureExamples": [
+            "Multiple flag keys are rendered by joining without a separator or dropped after the first, so an operator underestimates a segment's blast radius.",
+            "'unused' is rendered with the same styling and no wording distinction from a flag key, so a flag literally named unused is indistinguishable."
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "copy-and-degraded-states",
+          "label": "Copy matches reality; empty and unavailable differ",
+          "ruleStatement": "The page's introductory and empty-state copy describe the published set rather than snapshot-referenced keys, and an unavailable listing renders differently from an empty environment.",
+          "passCriteria": [
+            "Read the rendered page copy and confirm it no longer claims the list shows keys the snapshot's rules reference.",
+            "Render an empty successful result and confirm the copy says no segments are published yet.",
+            "Render the unavailable result and confirm the page shows an explicit could-not-load state, visibly different from the empty state, and does not throw during render.",
+            "Confirm the route does not let an unavailable result produce a 500 or a blank page."
+          ],
+          "failureExamples": [
+            "The columns are added but the intro paragraph still says the list shows every segment key the current snapshot references, contradicting the table beneath it.",
+            "Unavailable renders the same 'no segments published yet' empty state, so a storage outage reads as a correct, empty catalog."
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "interface-layer-discipline",
+          "label": "View stays a view",
+          "ruleStatement": "The page and route contain no S3/SDK access and no rule-scanning logic; all data comes from the use case result.",
+          "passCriteria": [
+            "Grep segment-list-page.ts and segment-routes.ts for @aws-sdk imports or direct adapter imports and confirm there are none beyond the wiring the route already uses to construct the use case.",
+            "Confirm the view does not recompute which flags use a segment from a snapshot; it renders the fields the use case supplied.",
+            "Run lint at --max-warnings=0 and typecheck, and confirm unit-test coverage over packages/*/src is still 100% across all four metrics."
+          ],
+          "failureExamples": [
+            "The view re-derives usage from a snapshot it already has in context, so the page and the use case can disagree after a future change.",
+            "New render branches for unknown/unused are only reachable from the Playwright spec, dropping unit branch coverage below 100%."
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "The most likely failure is stale intro/empty copy or an unavailable result rendering as an empty catalog \u2014 render all six states in view unit tests and give unavailable its own distinct wording."
+    },
+    {
+      "id": "segment-picker-attach-form",
+      "order": 4,
+      "name": "Replace typed segment fields with a chooser",
+      "goal": "Let the operator attach a segment to a flag by choosing a published segment from a list, with the Member Attribute taken from storage instead of typed.",
+      "rationale": "The attach form makes the operator type both the Segment Key and the Member Attribute as free text; either typo produces a rule that matches nobody and gives no error. Choosing from the list of published segments removes both typing opportunities, because the attribute recorded when the segment was published is used automatically.",
+      "filesAffected": [
+        "packages/dashboard/src/infrastructure/views/segment-attach-form.ts",
+        "packages/dashboard/src/infrastructure/views/segment-attach-form.test.ts",
+        "packages/dashboard/src/infrastructure/views/environment-page.ts",
+        "packages/dashboard/src/infrastructure/http-server.ts",
+        "packages/dashboard/src/infrastructure/http-server.test.ts"
+      ],
+      "changes": [
+        "Replace the free-text Segment Key input and its optional suggestion list with a required dropdown listing every published segment (key plus its Member Attribute as the option label), and remove the free-text Member Attribute input entirely.",
+        "Have the environment page route load published segments for the chosen environment and pass them into the edit form context that feeds the attach form, replacing the referenced-keys-only source.",
+        "In the attach form's submit handler, resolve the chosen key back to its stored Member Attribute server-side and build the attach edit from that; reject a submitted key that is not in the published list with a clear validation message rather than emitting a rule.",
+        "Drop the now-obsolete typed Member Attribute from the form draft echoed back after a failed submit, following the ripple into the edit-draft type.",
+        "Render a clear disabled/empty state when the environment has no published segments, and an 'attribute unknown' state for a chosen segment published before attributes were recorded.",
+        "Add unit tests for: options rendered from the published list, submission using the stored attribute, an unknown key rejected, the empty-list state, and the unknown-attribute state."
+      ],
+      "boundedContext": "Flag Editing",
+      "layer": "interface",
+      "blastRadius": "medium",
+      "inputs": [
+        "listPublishedSegments use case",
+        "existing renderSegmentAttachForm and its attach context",
+        "EDIT_PARSERS attachSegment parser in http-server.ts"
+      ],
+      "expectedResult": "Attaching a segment is done by choosing from a dropdown of published segments, with no free-text Segment Key or Member Attribute input anywhere.",
+      "dependsOn": [
+        "list-published-segments-usecase",
+        "segment-prefix-lister"
+      ],
+      "rubric": [
+        {
+          "id": "no-free-text-anywhere",
+          "label": "Typing a key or attribute is impossible by construction",
+          "ruleStatement": "The attach form contains no free-text input for Segment Key or Member Attribute; the key is chosen from a required select of published segments and the attribute is never an input at all.",
+          "passCriteria": [
+            "Render the attach form in a unit test and confirm the produced HTML contains no text input or textarea whose name corresponds to the segment key or the member attribute.",
+            "Confirm the segment key control is a select marked required, whose option values are exactly the published segment keys.",
+            "Confirm no datalist/suggestion-backed text input remains from the previous implementation.",
+            "Grep packages/dashboard/src/infrastructure/views/segment-attach-form.ts and the edit-draft type and confirm the typed member-attribute field is removed, not merely hidden."
+          ],
+          "failureExamples": [
+            "The select is added but the old member-attribute text input is kept as a hidden field populated by client script, so a crafted submit still injects an arbitrary attribute.",
+            "The free-text key input is retained behind a 'use a custom key' toggle for flexibility, restoring the exact typo path this horizon removes.",
+            "The attribute input is given readonly rather than removed, so it is still submitted and still trusted server-side."
+          ],
+          "minScore": 9
+        },
+        {
+          "id": "attribute-resolved-server-side",
+          "label": "Attribute comes from storage on submit",
+          "ruleStatement": "The submit handler resolves the chosen Segment Key to its stored Member Attribute on the server and builds the attach edit from that value, ignoring any attribute present in the request body.",
+          "passCriteria": [
+            "Read the attachSegment handling in packages/dashboard/src/infrastructure/http-server.ts and confirm the attribute used in the emitted edit is looked up from the published-segments result, not read from the form body.",
+            "Run the unit test submitting a valid key and confirm the resulting rule carries the attribute stored for that segment.",
+            "Run a unit test that submits an extra attribute field in the body and confirm it has no effect on the emitted rule.",
+            "Confirm the lookup happens before the edit is emitted, not after."
+          ],
+          "failureExamples": [
+            "The option value encodes 'key|attribute' and the server splits and trusts it, moving the typo risk to anyone who can post a form.",
+            "The handler falls back to a default attribute when the lookup misses, emitting a rule that matches nobody \u2014 exactly the bug being fixed."
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "unknown-key-rejected",
+          "label": "Unlisted keys are rejected, not attached",
+          "ruleStatement": "A submitted Segment Key that is not in the environment's published list produces a clear validation message and emits no rule.",
+          "passCriteria": [
+            "Run the unit test submitting a key absent from the published list and confirm the response re-renders the form with a validation message naming the problem.",
+            "Confirm no attach edit is produced in that case (assert the edit-application collaborator was not called).",
+            "Confirm the message is operator-readable rather than a raw exception or stack trace."
+          ],
+          "failureExamples": [
+            "The unknown key is rejected with a 500 from an unguarded lookup, losing any draft the operator had and showing a stack trace.",
+            "The unknown key is accepted with attribute undefined, writing a rule that silently matches nobody."
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "empty-and-unknown-attribute-states",
+          "label": "No-segments and unknown-attribute states are handled",
+          "ruleStatement": "When the environment has no published segments the form renders a clear disabled/empty state, and a chosen segment published before attributes were recorded renders an explicit unknown-attribute state.",
+          "passCriteria": [
+            "Render the form with an empty published list and confirm it shows explanatory copy and does not present a submittable, empty dropdown.",
+            "Render an option for a segment whose stored attribute is absent and confirm its label shows an explicit unknown-attribute marker rather than a blank or a guessed attribute name.",
+            "Confirm submitting such a segment does not crash and behaves per the phase's declared handling (rejected or attached with the unknown state surfaced), consistently between form and handler.",
+            "Confirm option labels pair the segment key with its attribute so the operator can tell two similarly named segments apart."
+          ],
+          "failureExamples": [
+            "The empty case renders an empty required select, which the browser blocks on submit with a generic message and no explanation of why nothing is listed.",
+            "A segment with no stored attribute is silently omitted from the picker, making a real published segment unattachable with no visible reason."
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "context-plumbing-and-purity",
+          "label": "Published segments plumbed through the route, not fetched in the view",
+          "ruleStatement": "The environment page route loads the published segments and passes them into the edit-form context; the view itself performs no data access and the referenced-keys-only source is gone.",
+          "passCriteria": [
+            "Read packages/dashboard/src/infrastructure/views/environment-page.ts and confirm the attach context receives the published segments from its caller rather than importing an adapter or use case itself.",
+            "Confirm the referenced-keys source is no longer used to populate the attach form anywhere.",
+            "Run lint at --max-warnings=0 and typecheck and confirm both are green after the edit-draft type change ripples through.",
+            "Confirm unit-test coverage over packages/*/src remains 100% on lines, branches, functions and statements from unit tests only."
+          ],
+          "failureExamples": [
+            "The view calls the use case directly to avoid threading a parameter, coupling rendering to data access and breaking view unit tests' isolation.",
+            "The obsolete attribute field is left on the edit-draft type as optional to avoid touching call sites, leaving dead branches that unit tests cannot cover."
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "The most likely failure is the attribute surviving as a hidden or encoded form value that the server still trusts \u2014 delete it from the markup and the draft type and resolve the attribute purely from the published list in the handler."
+    },
+    {
+      "id": "browser-proof-picker-and-list",
+      "order": 5,
+      "name": "Test the segment picker in a browser",
+      "goal": "Prove in a real browser, against real storage, that an operator can see published segments on the list page and attach one to a flag through the chooser.",
+      "rationale": "The project requires every operator-facing dashboard change to be demonstrated by an automated browser test running against the real storage backend, because unit tests alone cannot show the page and the stored data agree. This test uploads a segment, checks it appears in the list, and attaches it via the chooser.",
+      "filesAffected": [
+        "packages/dashboard/e2e/segment-picker.spec.ts",
+        "packages/dashboard/e2e/support/localstack-fixtures.ts"
+      ],
+      "changes": [
+        "Add a browser test that seeds a published segment (its members object and its current.json pointer, including memberAttribute) under <env>/segments/<key>/ via the existing LocalStack fixtures, opens /env/<env>/segments, and asserts the row shows the segment's version, its Member Attribute, and the 'unused' state.",
+        "Extend the same test to open a flag's edit form, select that segment from the chooser, submit, and assert the flag's rules now reference it and the list page reports the flag under 'Used by flags'.",
+        "Extend the LocalStack fixture helpers with a parameterised seed function writing a segment's members object and pointer at the same key layout the S3 segment publisher uses, so the prefix lister discovers it \u2014 there is no index object to seed, the population comes from the prefix listing.",
+        "No CI workflow change is needed \u2014 the existing localstack job already runs the integration suites and the Playwright specs, and picks new files up automatically."
+      ],
+      "boundedContext": "Segment Catalog",
+      "layer": "cross-cutting",
+      "blastRadius": "small",
+      "inputs": [
+        "packages/dashboard/e2e/support/localstack-fixtures.ts seeding helpers",
+        "the shipped Segment List page and attach chooser"
+      ],
+      "expectedResult": "A Playwright spec that passes in the existing LocalStack CI job, covering the Segment List and picker-based attach.",
+      "dependsOn": [
+        "segment-list-page-columns",
+        "segment-picker-attach-form"
+      ],
+      "rubric": [
+        {
+          "id": "seeded-against-real-storage",
+          "label": "Seeds real published segments via LocalStack",
+          "ruleStatement": "The spec seeds a published segment through the LocalStack fixtures so the page reads it back from real storage, with no application code stubbed.",
+          "passCriteria": [
+            "Read packages/dashboard/e2e/segment-picker.spec.ts and confirm the setup writes the segment's pointer (and members) through the fixture helpers in packages/dashboard/e2e/support/localstack-fixtures.ts.",
+            "Confirm no route handler, adapter or S3 client is mocked or intercepted in the spec.",
+            "Confirm the seeded segment's key is unique per run (or the environment is cleaned between runs) so a leftover object from a previous run cannot make the test pass or fail spuriously.",
+            "Confirm the spec runs in the existing localstack CI job with no workflow file change required."
+          ],
+          "failureExamples": [
+            "The spec stubs the network response for the segments page to make it deterministic, proving only that the view renders its own fixture.",
+            "A fixed segment key is reused every run, so the test passes against leftover state even when seeding itself is broken."
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "list-page-assertions",
+          "label": "List page shows version, attribute and unused",
+          "ruleStatement": "Opening /env/<env>/segments asserts the seeded segment's row shows its pointer version, its Member Attribute and the explicit unused state.",
+          "passCriteria": [
+            "Confirm the spec navigates to /env/<env>/segments and locates the row for the seeded segment key.",
+            "Confirm it asserts the displayed version matches the seeded pointer version.",
+            "Confirm it asserts the displayed Member Attribute matches the attribute seeded at publish time, not merely that the cell is non-empty.",
+            "Confirm it asserts the row shows the unused state before any attach happens."
+          ],
+          "failureExamples": [
+            "The spec asserts only that the segment key appears somewhere on the page, so a regression blanking the attribute and version columns still passes.",
+            "The assertion uses a page-wide text match, so the attribute value matching some other row's text lets a wrong row pass."
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "attach-through-chooser",
+          "label": "Attach happens through the chooser and lands in the rules",
+          "ruleStatement": "The spec attaches the segment by selecting it in the dropdown and submitting, then asserts the flag's rules reference it and the list page reports the flag under 'Used by flags'.",
+          "passCriteria": [
+            "Confirm the spec selects the segment via the select control, and does not type into any field to supply the key or attribute.",
+            "Confirm that after submit it asserts the flag's rules reference the segment key (via the rendered flag state or the stored snapshot).",
+            "Confirm it then reloads /env/<env>/segments and asserts the segment's row now lists that flag key under 'Used by flags', no longer showing unused.",
+            "Confirm the assertions wait on the expected content rather than a fixed sleep."
+          ],
+          "failureExamples": [
+            "The spec submits the form by posting directly to the endpoint, bypassing the dropdown and proving nothing about the picker.",
+            "It asserts the submit returned 200 but never checks the rule was written, so a handler that drops the edit passes.",
+            "Arbitrary timeouts are used between navigation and assertion, making the spec flaky in CI."
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "fixture-helper-quality",
+          "label": "Seed helper is reusable and honest",
+          "ruleStatement": "The new fixture seeding helper writes the same object shapes the publisher writes, so a test seeded through it exercises the real read path.",
+          "passCriteria": [
+            "Read the new helper in packages/dashboard/e2e/support/localstack-fixtures.ts and confirm the pointer it writes matches the Segment Pointer schema, including memberAttribute and schemaVersion.",
+            "Confirm it writes under the same <env>/segments/<segmentKey>/ key layout the S3 publisher uses, so the prefix lister discovers it.",
+            "Confirm it is parameterised (env, key, version, attribute) rather than hardcoding one fixture.",
+            "Confirm the helper contains no assertions of its own that would mask a failure in the spec."
+          ],
+          "failureExamples": [
+            "The helper writes the pointer at a slightly different key path that the lister still happens to match by prefix, so the spec passes while real publishes would not be discoverable.",
+            "The helper omits memberAttribute and the spec asserts the unknown-attribute marker instead, so the happy path is never proven end to end."
+          ],
+          "minScore": 7
+        }
+      ],
+      "healerHint": "The most likely failure is the spec proving the page renders rather than that storage and page agree \u2014 seed through the real fixture key layout, select via the dropdown, and assert the exact seeded version and attribute on a located row."
+    }
+  ],
+  "successCriteria": [
+    "Done means, on a LocalStack-backed dashboard: (1) GET /env/<env>/segments lists every published segment in the environment \u2014 including segments no flag references yet \u2014 each row showing its Current Pointer version, its stored Member Attribute, and the flag keys whose rules reference it (or an explicit 'unused' state), with the population sourced from a ListObjectsV2 prefix listing of <env>/segments/ under the deploy role's existing prefix-scoped s3:ListBucket grant; (2) the Attach-a-segment form offers a chooser over that published-segment list, the operator never types a Segment Key or Member Attribute, and the Member Attribute used in the emitted rule is the one recorded at publish time, so a typo cannot produce a nobody-matching rule; (3) the Segment Pointer persists memberAttribute and a dashboard port exposes it, with pointers written before this horizon still parsing and rendering as an explicit unknown-attribute state; (4) all of it is covered by unit tests holding 100% line/branch/function/statement coverage on packages/*/src, ESLint layer rules and typecheck green, plus a LocalStack integration proof and a Playwright browser spec inside the existing localstack CI job for the Segment List and the picker-based attach; (5) blockers.md/decisions.md/discoveries.md/state.md are updated, including the explicit supersession of the horizon-21 'Member Attribute is typed by the operator' decision and of the horizon-10 'dashboard never calls ListObjectsV2' decision. Creating a flag with segments already attached is NOT part of this horizon's bar \u2014 it is deferred to horizon 24.",
+    "Store the Member Attribute on the Segment Pointer: A published segment's current.json pointer contains its memberAttribute, and pointers written before this change still parse.",
+    "List published segments with their using flags: A listPublishedSegments use case returning one row per published segment with version, Member Attribute state and the flag keys using it.",
+    "List the segments prefix in S3: The dashboard's listPublishedSegments port returns every published segment in an environment, each with its pointer version and stored Member Attribute, sourced from an S3 prefix listing.",
+    "Show attribute and using flags per segment: The Segment List page renders one row per published segment with its version, Member Attribute and using flag keys.",
+    "Replace typed segment fields with a chooser: Attaching a segment is done by choosing from a dropdown of published segments, with no free-text Segment Key or Member Attribute input anywhere.",
+    "Test the segment picker in a browser: A Playwright spec that passes in the existing LocalStack CI job, covering the Segment List and picker-based attach."
+  ],
+  "deferred": [
+    "Horizon 22's orphaned S3 object cleanup (delete-on-CONFLICT, lifecycle rule, IAM s3:DeleteObject) \u2014 explicitly superseded by the user for this horizon.",
+    "Editing or re-uploading a segment's member CSV from the segment list page \u2014 this horizon makes segments visible and selectable, it does not change the upload flow that already works.",
+    "Deleting or archiving a published segment, or garbage-collecting unreferenced segments \u2014 no delete contract exists and it would re-open the cleanup work just set aside.",
+    "Member count, createdAt or any other segment metadata beyond memberAttribute and pointer version \u2014 the horizon-18 decision limited the list to what the pointer carries, and each extra field is another stored-format change.",
+    "Per-SDK segment-version telemetry ('which version is each app actually using') \u2014 ruled out by the horizon-17 decision; no telemetry channel exists.",
+    "Changing the rollout bucketing algorithm, the percentage semantics, or the hash/salt contract \u2014 only the place the percentage is entered moves.",
+    "Re-opening concurrent-edit semantics: the field-granular replay rule, the tolerant 200+422 integration assertion, and the rejected bounded retry stay exactly as horizon 20 left them.",
+    "Auto-upgrading schemaVersion 1 snapshots to 2 \u2014 a standing deferred question, not needed to ship the picker or the create-with-segment flow.",
+    "Migrating the remaining in-memory Playwright specs onto LocalStack fixtures \u2014 only the new specs for this horizon's surface need the LocalStack fixture.",
+    "A general blockers.md backlog audit \u2014 this horizon retires only the horizon-21 entries it actually resolves.",
+    "Segment change notifications via SNS on upload \u2014 the notification contract is snapshot-only by the horizon-13 decision.",
+    "Authentication, multi-user attribution or an audit log for who attached which segment \u2014 the dashboard remains a single-operator localhost tool.",
+    "Creating a new flag with one or more segments already attached, each with its own rollout percentage. Reason: YAGNI gate 2 \u2014 it blocks nothing else in this horizon, and discovery shows it is the largest of the three features (widening the existing 'create' flag edit plus its three exhaustive switches, a repeated-control form, an extended create draft echo, a rules array emitted by createFeature, and extending the schemaVersion-2 guard to the create path). It is a dependency-closed slice of its own and plans better once the published-segment list and chooser exist to build the form on. Note for that horizon: widen the existing 'create' edit kind rather than adding a new one, so the existing replay/compare-and-set semantics stay free.",
+    "Setting a rollout percentage at the moment of attaching, rather than as a follow-up edit. Reason: same slice as create-with-segments; attaching then setting the percentage still works today, and rules addressed by array position make the incremental path the riskier one to change in isolation.",
+    "Deleting, archiving or garbage-collecting a published segment, and removing its index entry. Reason: explicitly out of scope; no delete contract exists and it re-opens the orphaned-object cleanup work the user set aside.",
+    "Showing member counts, upload timestamps or any segment metadata beyond Member Attribute and pointer version. Reason: YAGNI gate 1 \u2014 not asked for, and each extra field is another stored-format change.",
+    "Automatically upgrading schemaVersion 1 snapshots to 2 so older environments can use segment rules. Reason: a standing deferred question, not needed to ship the list or the chooser; new environments are already created at version 2.",
+    "Maintaining a written per-environment segment index object. Reason: superseded by the user's decision to list the <env>/segments/ prefix directly; the deploy role already grants prefix-scoped s3:ListBucket, so the index would be a second source of truth to write, version and repair for no gain."
+  ],
+  "revision": 0
+}

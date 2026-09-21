@@ -14,7 +14,14 @@ const CONFIG: FlagDefinitionView = {
   ruleCount: 1,
   rules: [{ when: { plan: 'pro' }, value: { max: 9 } }],
 };
-const CONTEXT: EditContext = { environment: 'production', baseVersion: 7 };
+const CONTEXT: EditContext = {
+  environment: 'production',
+  baseVersion: 7,
+  publishedSegments: {
+    status: 'listed',
+    rows: [{ segmentKey: 'beta-testers', version: 2, attribute: { status: 'known', memberAttribute: 'userId' }, usage: { status: 'unused' } }],
+  },
+};
 const METADATA = { createdAt: '2026-09-19T06:00:00.000Z', createdBy: 'ops', reason: 'Launch' };
 const RAW = {
   schemaVersion: 1,

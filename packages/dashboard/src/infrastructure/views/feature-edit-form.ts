@@ -1,4 +1,5 @@
 import type { FlagDefinitionView } from '../../application/browse-environment.js';
+import type { PublishedSegmentsView } from '../../application/list-published-segments.js';
 import { environmentPath, escapeHtml } from './escape.js';
 import { renderRolloutForms } from './rollout-form.js';
 import { renderSegmentAttachForm } from './segment-attach-form.js';
@@ -9,7 +10,6 @@ export interface EditDraft {
   readonly defaultJson?: string;
   readonly rulesJson?: string;
   readonly segmentKey?: string;
-  readonly memberAttribute?: string;
   /** The attached value exactly as typed, so a rejected submission re-renders it rather than its decoded form. */
   readonly segmentValue?: string;
   readonly message: string;
@@ -20,8 +20,8 @@ export interface EditContext {
   readonly environment: string;
   readonly baseVersion: number;
   readonly draft?: EditDraft;
-  /** Segment Keys this snapshot already references, offered as suggestions by the attach form. */
-  readonly segmentKeys?: readonly string[];
+  /** Every segment published in the Environment, loaded by the route and offered by the attach form. */
+  readonly publishedSegments?: PublishedSegmentsView;
 }
 
 export const renderDraftError = (draft: { readonly message: string; readonly issues: readonly string[] }): string => {
@@ -75,7 +75,7 @@ ${renderRolloutForms(flag, action, baseVersionInput(context))}
 ${renderSegmentAttachForm(flag, {
     action,
     baseVersionInput: baseVersionInput(context),
-    segmentKeys: context.segmentKeys ?? [],
+    segments: context.publishedSegments ?? { status: 'unavailable' },
     ...(draft === undefined ? {} : { draft }),
   })}
 ${renderDeleteControl(flag, action, context)}`;

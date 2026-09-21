@@ -113,6 +113,32 @@ describe('createS3SegmentVersionReader', () => {
     await expectReason(reader.readVersion('production', 'beta'), 'INVALID_POINTER');
   });
 
+  it('returns the whole pointer, including the stored Member Attribute, from readPointer', async () => {
+    const { reader } = readerOver({
+      [POINTER_KEY]: { body: JSON.stringify({ ...segmentPointer('beta', 4), memberAttribute: 'accountId' }), etag: '"x"' },
+    });
+
+    await expect(reader.readPointer('production', 'beta')).resolves.toMatchObject({
+      segmentKey: 'beta',
+      version: 4,
+      memberAttribute: 'accountId',
+    });
+  });
+
+  it('leaves memberAttribute undefined on a pointer written before it was stored', async () => {
+    const { reader } = readerOver({ [POINTER_KEY]: storedPointer(4) });
+
+    const pointer = await reader.readPointer('production', 'beta');
+
+    expect(pointer?.memberAttribute).toBeUndefined();
+  });
+
+  it('returns null from readPointer when the segment has never been published', async () => {
+    const { reader } = readerOver({});
+
+    await expect(reader.readPointer('production', 'beta')).resolves.toBeNull();
+  });
+
   it('builds its own S3 client from the environment when none is given', () => {
     constructedWith.length = 0;
 

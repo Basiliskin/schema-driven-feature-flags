@@ -155,7 +155,7 @@ export function createS3SegmentPublisher(options: S3SegmentPublisherOptions): S3
     const segmentKey = valid(validateSegmentKey(segment.key), `${env}/segments`);
     const current = await readPointer(env, segmentKey);
     checkExpectedVersion(env, segmentKey, current, publishOptions?.expectedCurrentVersion);
-    const pointer = valid(buildSegmentPointer(env, segmentKey, nextSegmentVersion(current?.pointer)), env);
+    const pointer = valid(buildSegmentPointer(env, segmentKey, nextSegmentVersion(current?.pointer), segment.memberAttribute), env);
     const stored = parseSegment({
       schemaVersion: SEGMENT_SCHEMA_VERSION,
       key: segmentKey,

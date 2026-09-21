@@ -1,3 +1,13 @@
 .segment-unavailable {
   color: var(--danger);
 }
+
+.segment-unknown,
+.segment-unused {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.segment-user {
+  font-family: var(--mono);
+}

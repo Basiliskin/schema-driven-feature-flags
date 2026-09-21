@@ -1,4 +1,4 @@
-import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { S3PublishError, S3SegmentPublishError } from '@featuresync/aws';
 import { describe, expect, it, vi } from 'vitest';
 import { createAwsDashboardPorts } from './aws-adapters.js';
@@ -35,6 +35,30 @@ const segmentClient = (currentVersion: number) =>
       objectKey: `production/segments/beta/${String(currentVersion)}.json`,
     }),
   });
+
+const pointerBody = (segmentKey: string, version: number, memberAttribute?: string) =>
+  JSON.stringify({
+    schemaVersion: 1,
+    environment: 'production',
+    segmentKey,
+    version,
+    objectKey: `production/segments/${segmentKey}/${String(version)}.json`,
+    ...(memberAttribute === undefined ? {} : { memberAttribute }),
+  });
+
+/** A client whose segments prefix lists `segmentKeys` and whose pointers come from `objects`. */
+const catalogueClient = (segmentKeys: readonly string[], objects: Record<string, string>, listError?: Error) => {
+  const inner = fakeClient(objects);
+  const send = vi.fn((command: unknown) => {
+    if (!(command instanceof ListObjectsV2Command)) return inner.send(command);
+    if (listError !== undefined) return Promise.reject(listError);
+    return Promise.resolve({
+      CommonPrefixes: segmentKeys.map((key) => ({ Prefix: `production/segments/${key}/` })),
+      IsTruncated: false,
+    });
+  });
+  return { send };
+};
 
 const putCommands = (client: { send: { mock: { calls: [unknown][] } } }): PutObjectCommand[] =>
   client.send.mock.calls.map(([command]) => command).filter((command) => command instanceof PutObjectCommand);
@@ -125,6 +149,57 @@ describe('createAwsDashboardPorts', () => {
 
     await expect(ports.readSegmentVersion('production', 'beta')).resolves.toBe(3);
     await expect(ports.readSegmentVersion('production', 'gamma')).resolves.toBeNull();
+  });
+
+  it('lists every published segment with its own version and stored Member Attribute', async () => {
+    const client = catalogueClient(['beta', 'gamma'], {
+      'production/segments/beta/current.json': pointerBody('beta', 3, 'accountId'),
+      'production/segments/gamma/current.json': pointerBody('gamma', 7),
+    });
+    const ports = createAwsDashboardPorts({ bucket: 'flags', client });
+
+    await expect(ports.listPublishedSegments('production')).resolves.toEqual({
+      status: 'listed',
+      segments: [
+        { segmentKey: 'beta', version: 3, memberAttribute: 'accountId' },
+        { segmentKey: 'gamma', version: 7 },
+      ],
+    });
+  });
+
+  it('lists an environment holding no segments as listed and empty, not unavailable', async () => {
+    const ports = createAwsDashboardPorts({ bucket: 'flags', client: catalogueClient([], {}) });
+
+    await expect(ports.listPublishedSegments('production')).resolves.toEqual({ status: 'listed', segments: [] });
+  });
+
+  it('reports the listing as unavailable rather than empty when S3 refuses it', async () => {
+    const client = catalogueClient([], {}, Object.assign(new Error('denied'), { name: 'AccessDenied' }));
+    const ports = createAwsDashboardPorts({ bucket: 'flags', client });
+
+    await expect(ports.listPublishedSegments('production')).resolves.toEqual({ status: 'unavailable' });
+  });
+
+  it('reports the listing as unavailable when one listed segment has an unreadable pointer', async () => {
+    const client = catalogueClient(['beta', 'gamma'], {
+      'production/segments/beta/current.json': '{not json',
+      'production/segments/gamma/current.json': pointerBody('gamma', 7),
+    });
+    const ports = createAwsDashboardPorts({ bucket: 'flags', client });
+
+    await expect(ports.listPublishedSegments('production')).resolves.toEqual({ status: 'unavailable' });
+  });
+
+  it('leaves out a listed key whose pointer is absent and still lists the others', async () => {
+    const client = catalogueClient(['beta', 'gamma'], {
+      'production/segments/gamma/current.json': pointerBody('gamma', 7),
+    });
+    const ports = createAwsDashboardPorts({ bucket: 'flags', client });
+
+    await expect(ports.listPublishedSegments('production')).resolves.toEqual({
+      status: 'listed',
+      segments: [{ segmentKey: 'gamma', version: 7 }],
+    });
   });
 
   it('accepts a valid snapshot and falls back to the default S3 client when none is given', async () => {

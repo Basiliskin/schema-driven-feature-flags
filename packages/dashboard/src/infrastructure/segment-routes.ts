@@ -1,13 +1,13 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { segmentKeySchema } from '@featuresync/core';
-import { listReferencedSegments, type ListReferencedSegmentsPorts } from '../application/list-referenced-segments.js';
+import { listPublishedSegments, type ListPublishedSegmentsPorts } from '../application/list-published-segments.js';
 import { uploadSegment, type SegmentUploadFailureReason, type SegmentUploadPorts } from '../application/upload-segment.js';
 import { HttpError, decodeSegment, readForm, send, type HttpMethod, type Route } from './http-primitives.js';
 import type { Notice } from './views/layout.js';
 import { renderSegmentListPage, type SegmentDraft } from './views/segment-list-page.js';
 import { renderSegmentPage } from './views/segment-page.js';
 
-export type SegmentRoutePorts = SegmentUploadPorts & ListReferencedSegmentsPorts;
+export type SegmentRoutePorts = SegmentUploadPorts & ListPublishedSegmentsPorts;
 
 /** 100,000 members of up to 256 characters, URL-encoded. Only the upload POST reads a body this large. */
 export const MAX_SEGMENT_CSV_BYTES = 32 * 1024 * 1024;
@@ -52,8 +52,12 @@ export function matchSegmentRoute(
       notices: readonly Notice[],
       draft?: SegmentDraft,
     ): Promise<void> => {
-      const rows = await listReferencedSegments(ports, environment);
-      send(response, status, renderSegmentListPage({ environment, rows }, draft === undefined ? { notices } : { notices, draft }));
+      const listing = await listPublishedSegments(ports, environment);
+      send(
+        response,
+        status,
+        renderSegmentListPage({ environment, listing }, draft === undefined ? { notices } : { notices, draft }),
+      );
     };
 
     const handlers = {

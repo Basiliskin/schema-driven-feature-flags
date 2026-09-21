@@ -1,54 +1,108 @@
 import { describe, expect, it } from 'vitest';
 import type { EnvironmentView } from '../../application/browse-environment.js';
+import type { PublishedSegmentRow } from '../../application/list-published-segments.js';
 import { renderEnvironmentPage } from './environment-page.js';
 import { renderSegmentListPage, segmentListPath, type SegmentListPageView } from './segment-list-page.js';
 import { STYLESHEET } from './stylesheet.js';
 
 const MEMBER = 'bob@x.io';
 
+const row = (overrides: Partial<PublishedSegmentRow> = {}): PublishedSegmentRow => ({
+  segmentKey: 'beta',
+  version: 4,
+  attribute: { status: 'known', memberAttribute: 'userId' },
+  usage: { status: 'used', flagKeys: ['checkout'] },
+  ...overrides,
+});
+
+const listed = (...rows: readonly PublishedSegmentRow[]): SegmentListPageView => ({
+  environment: 'production',
+  listing: { status: 'listed', rows },
+});
+
 describe('the segment list page', () => {
-  it('renders one row per state, each key linking to its segment page', () => {
-    const html = renderSegmentListPage({
-      environment: 'production',
-      rows: [
-        { key: 'beta', state: 'published', version: 4 },
-        { key: 'staff', state: 'not-published' },
-        { key: 'eu', state: 'unavailable' },
-      ],
-    });
+  it('renders a row for every published segment, including one no flag references', () => {
+    const html = renderSegmentListPage(
+      listed(row(), row({ segmentKey: 'staff', version: 2, usage: { status: 'unused' } })),
+    );
 
     expect(html).toContain('<a href="/env/production/segments/beta">beta</a>');
     expect(html).toContain('version 4');
     expect(html).toContain('<a href="/env/production/segments/staff">staff</a>');
-    expect(html).toContain('>not published<');
-    expect(html).toContain('<a href="/env/production/segments/eu">eu</a>');
-    expect(html).toContain('>unavailable<');
+    expect(html).toContain('version 2');
   });
 
   it('renders version 0 as a published version rather than an empty cell', () => {
-    const html = renderSegmentListPage({ environment: 'production', rows: [{ key: 'beta', state: 'published', version: 0 }] });
+    expect(renderSegmentListPage(listed(row({ version: 0 })))).toContain('version 0');
+  });
 
-    expect(html).toContain('version 0');
-    expect(html).not.toContain('not published');
+  it('shows the stored member attribute under its own column', () => {
+    const html = renderSegmentListPage(listed(row({ attribute: { status: 'known', memberAttribute: 'accountId' } })));
+
+    expect(html).toContain('<th scope="col">Member attribute</th>');
+    expect(html).toContain('<td data-label="Member attribute">accountId</td>');
+  });
+
+  it('says an absent member attribute is unrecorded rather than leaving the cell blank or guessing one', () => {
+    const html = renderSegmentListPage(listed(row({ attribute: { status: 'unknown' } })));
+
+    expect(html).toContain('unknown (published before attributes were recorded)');
+    expect(html).not.toContain('<td data-label="Member attribute"></td>');
+    expect(html).not.toContain('>userId<');
+  });
+
+  it('lists every flag using a segment, separated so the keys stay distinguishable', () => {
+    const html = renderSegmentListPage(listed(row({ usage: { status: 'used', flagKeys: ['checkout', 'search'] } })));
+
+    expect(html).toContain('<th scope="col">Used by flags</th>');
+    expect(html).toContain('<span class="segment-user">checkout</span>, <span class="segment-user">search</span>');
+  });
+
+  it('marks an unattached segment in words that a flag key cannot be confused with', () => {
+    const html = renderSegmentListPage(listed(row({ usage: { status: 'unused' } })));
+
+    expect(html).toContain('<span class="segment-unused">used by no flag</span>');
+    expect(html).not.toContain('<td data-label="Used by flags"></td>');
+  });
+
+  it('escapes a flag key that contains markup', () => {
+    const html = renderSegmentListPage(listed(row({ usage: { status: 'used', flagKeys: ['a"<b'] } })));
+
+    expect(html).toContain('<span class="segment-user">a&quot;&lt;b</span>');
   });
 
   it('shows no member data, member count or timestamp', () => {
-    const html = renderSegmentListPage({ environment: 'production', rows: [{ key: 'beta', state: 'published', version: 4 }] });
+    const html = renderSegmentListPage(listed(row()));
 
     expect(html).not.toContain(MEMBER);
     expect(html).not.toMatch(/\d+ members/);
     expect(html).not.toMatch(/\d{4}-\d{2}-\d{2}/);
   });
 
-  it('explains itself instead of rendering an empty table when no rule references a segment', () => {
-    const html = renderSegmentListPage({ environment: 'production', rows: [] });
+  it('describes the table as the published set, not the keys the snapshot happens to reference', () => {
+    const html = renderSegmentListPage(listed(row()));
+
+    expect(html).toContain('Every segment published in this environment');
+    expect(html).not.toContain('snapshot’s rules reference');
+  });
+
+  it('says nothing is published yet when the listing succeeded and was empty', () => {
+    const html = renderSegmentListPage(listed());
 
     expect(html).not.toContain('<table');
-    expect(html).toContain('No flag rule in the current snapshot references a segment.');
+    expect(html).toContain('No segments published yet in this environment.');
+  });
+
+  it('renders an unreadable catalogue as its own state rather than as an empty one', () => {
+    const html = renderSegmentListPage({ environment: 'production', listing: { status: 'unavailable' } });
+
+    expect(html).toContain('The segment catalogue could not be read');
+    expect(html).not.toContain('No segments published yet');
+    expect(html).not.toContain('<table');
   });
 
   it('escapes the key in the cell and encodes it in the link', () => {
-    const html = renderSegmentListPage({ environment: 'production', rows: [{ key: 'a"<b', state: 'not-published' }] });
+    const html = renderSegmentListPage(listed(row({ segmentKey: 'a"<b' })));
 
     expect(html).toContain('>a&quot;&lt;b<');
     expect(html).toContain('href="/env/production/segments/a%22%3Cb"');
@@ -66,12 +120,14 @@ describe('the segment list page', () => {
 
   it('has its styles served in the stylesheet', () => {
     expect(STYLESHEET).toContain('.segment-unavailable');
+    expect(STYLESHEET).toContain('.segment-unknown');
+    expect(STYLESHEET).toContain('.segment-unused');
     expect(STYLESHEET).toContain('.segment-create');
   });
 });
 
 describe('the create segment form', () => {
-  const LIST: SegmentListPageView = { environment: 'pro d', rows: [] };
+  const LIST: SegmentListPageView = { environment: 'pro d', listing: { status: 'listed', rows: [] } };
 
   it('posts the key, attribute and file to the environment it was rendered for', () => {
     const html = renderSegmentListPage(LIST);
@@ -115,8 +171,8 @@ describe('the create segment form', () => {
     expect(html).not.toContain('value="a"<b"');
   });
 
-  it('says a segment no rule references yet stays out of the table', () => {
-    expect(renderSegmentListPage(LIST)).toContain('stays out of the table above until some flag rule references it');
+  it('says a newly created segment shows up in the table straight away', () => {
+    expect(renderSegmentListPage(LIST)).toContain('appears in the table above as soon as it is published');
   });
 
   it('never echoes CSV contents back into the page', () => {

@@ -1,0 +1,42 @@
+{
+  "roadmapFile": "horizon-22-orphaned-object-cleanup-roadmap.json",
+  "roadmapRevision": 0,
+  "phases": [
+    {
+      "phaseId": "prove-orphan-localstack",
+      "status": "superseded",
+      "attempts": 0,
+      "notes": "superseded by horizon 23 (segment picker and listing UX); planned 2026-09-20, never executed"
+    },
+    {
+      "phaseId": "fakes-accept-delete",
+      "status": "superseded",
+      "attempts": 0,
+      "notes": "superseded by horizon 23 (segment picker and listing UX); planned 2026-09-20, never executed"
+    },
+    {
+      "phaseId": "snapshot-cleanup-delete",
+      "status": "superseded",
+      "attempts": 0,
+      "notes": "superseded by horizon 23 (segment picker and listing UX); planned 2026-09-20, never executed"
+    },
+    {
+      "phaseId": "segment-cleanup-delete",
+      "status": "superseded",
+      "attempts": 0,
+      "notes": "superseded by horizon 23 (segment picker and listing UX); planned 2026-09-20, never executed"
+    },
+    {
+      "phaseId": "grant-delete-permission",
+      "status": "superseded",
+      "attempts": 0,
+      "notes": "superseded by horizon 23 (segment picker and listing UX); planned 2026-09-20, never executed"
+    },
+    {
+      "phaseId": "expire-noncurrent-versions",
+      "status": "superseded",
+      "attempts": 0,
+      "notes": "superseded by horizon 23 (segment picker and listing UX); planned 2026-09-20, never executed"
+    }
+  ]
+}

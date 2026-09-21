@@ -39,13 +39,16 @@ const segmentPointer = (version: number, overrides: Record<string, unknown> = {}
   segmentKey: 'beta',
   version,
   objectKey: `production/segments/beta/${String(version)}.json`,
+  memberAttribute: 'userId',
   ...overrides,
 });
 
-const storedPointer = (version: number, etag = `"p${String(version)}"`): StoredObject => ({
-  body: JSON.stringify(segmentPointer(version)),
-  etag,
-});
+// Pointers already in the bucket predate the attribute, so stored fixtures keep the pre-attribute shape.
+const storedPointer = (version: number, etag = `"p${String(version)}"`): StoredObject => {
+  const legacy: Record<string, unknown> = { ...segmentPointer(version) };
+  delete legacy.memberAttribute;
+  return { body: JSON.stringify(legacy), etag };
+};
 
 interface Put {
   readonly key: string;
@@ -150,6 +153,17 @@ describe('createS3SegmentPublisher', () => {
 
     expect(s3.puts[0]?.key).toBe('production/segments/beta/2.json');
     expect(JSON.parse(String(s3.puts[0]?.input.Body))).toMatchObject({ version: 2 });
+  });
+
+  it('writes the published segment\'s member attribute into the pointer body', async () => {
+    const s3 = fakeWritableS3({ [POINTER_KEY]: storedPointer(1) });
+    const publisher = createS3SegmentPublisher({ bucket: 'flags', client: s3.client });
+
+    const pointer = await publisher.publish('production', { ...draft(), memberAttribute: 'accountId' });
+
+    expect(pointer.memberAttribute).toBe('accountId');
+    expect(s3.puts[1]?.key).toBe(POINTER_KEY);
+    expect(JSON.parse(String(s3.puts[1]?.input.Body))).toMatchObject({ memberAttribute: 'accountId' });
   });
 
   it('reports VERSION_EXISTS and leaves the pointer alone when the version object already exists', async () => {

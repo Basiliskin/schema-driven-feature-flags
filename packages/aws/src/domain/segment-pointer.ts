@@ -9,6 +9,8 @@ export interface SegmentPointer {
   readonly segmentKey: string;
   readonly version: number;
   readonly objectKey: string;
+  /** Absent on pointers published before the attribute was recorded. */
+  readonly memberAttribute?: string | undefined;
 }
 
 export type SegmentPointerResult =
@@ -37,6 +39,7 @@ const segmentPointerSchema = z
     segmentKey: segmentKeySchema,
     version: versionSchema,
     objectKey: z.string(),
+    memberAttribute: z.string().min(1).optional(),
   })
   .refine(
     (pointer) => pointer.objectKey === segmentObjectKeyFor(pointer.environment, pointer.segmentKey, pointer.version),
@@ -65,7 +68,12 @@ export type BuildSegmentPointerResult =
   | { readonly ok: true; readonly value: SegmentPointer }
   | { readonly ok: false; readonly error: PublishingError | InvalidSegmentKey };
 
-export function buildSegmentPointer(environment: string, segmentKey: string, version: number): BuildSegmentPointerResult {
+export function buildSegmentPointer(
+  environment: string,
+  segmentKey: string,
+  version: number,
+  memberAttribute: string,
+): BuildSegmentPointerResult {
   const validEnvironment = validateEnvironmentName(environment);
   if (!validEnvironment.ok) return validEnvironment;
   const validKey = validateSegmentKey(segmentKey);
@@ -78,6 +86,7 @@ export function buildSegmentPointer(environment: string, segmentKey: string, ver
       segmentKey,
       version,
       objectKey: segmentObjectKeyFor(environment, segmentKey, version),
+      memberAttribute,
     }),
   };
 }

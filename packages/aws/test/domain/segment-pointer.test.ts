@@ -89,7 +89,7 @@ describe('nextSegmentVersion', () => {
 
 describe('buildSegmentPointer', () => {
   it.each([1, 3, 42, 1000])('builds a pointer for version %i that the reader accepts', (version) => {
-    const built = buildSegmentPointer('production', 'beta-testers', version);
+    const built = buildSegmentPointer('production', 'beta-testers', version, 'userId');
     if (!built.ok) throw new Error('expected a pointer');
     const pointer = built.value;
     const parsed = parseSegmentPointer(JSON.parse(JSON.stringify(pointer)));
@@ -100,16 +100,39 @@ describe('buildSegmentPointer', () => {
   });
 });
 
+describe('the member attribute on a segment pointer', () => {
+  it('round-trips the attribute the segment was built with', () => {
+    const built = buildSegmentPointer('production', 'beta-testers', 2, 'accountId');
+    if (!built.ok) throw new Error('expected a pointer');
+
+    expect(built.value.memberAttribute).toBe('accountId');
+    expect(parseSegmentPointer(JSON.parse(JSON.stringify(built.value)))).toEqual({ ok: true, value: built.value });
+  });
+
+  it('parses a pointer published before the attribute was recorded', () => {
+    const result = parseSegmentPointer(validPointer());
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.memberAttribute).toBeUndefined();
+  });
+
+  it('rejects an empty attribute rather than storing one nothing can match on', () => {
+    expect(issuesOf({ ...validPointer(), memberAttribute: '' })).toContainEqual(
+      expect.objectContaining({ path: 'memberAttribute' }),
+    );
+  });
+});
+
 describe('buildSegmentPointer rejections', () => {
   it.each(['../x', 'A B', '../prod/current', ''])('rejects segment key %j with INVALID_SEGMENT_KEY', (key) => {
-    const result = buildSegmentPointer('production', key, 1);
+    const result = buildSegmentPointer('production', key, 1, 'userId');
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.reason).toBe('INVALID_SEGMENT_KEY');
   });
 
   it.each(['', 'prod/eu', '../x'])('rejects environment %j with INVALID_ENVIRONMENT', (environment) => {
-    const result = buildSegmentPointer(environment, 'beta', 1);
+    const result = buildSegmentPointer(environment, 'beta', 1, 'userId');
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.reason).toBe('INVALID_ENVIRONMENT');

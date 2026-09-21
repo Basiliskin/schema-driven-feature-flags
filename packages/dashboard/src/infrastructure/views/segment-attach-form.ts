@@ -1,33 +1,34 @@
+import type { PublishedSegmentRow, PublishedSegmentsView } from '../../application/list-published-segments.js';
 import type { FlagDefinitionView } from '../../application/browse-environment.js';
 import { escapeHtml } from './escape.js';
 
-/** The attach fields of a rejected submission, echoed back so the operator keeps what they typed. */
+/** The attach fields of a rejected submission, echoed back so the operator keeps their choice. */
 export interface AttachDraft {
   readonly segmentKey?: string;
-  readonly memberAttribute?: string;
   readonly segmentValue?: string;
 }
 
 export interface AttachContext {
   readonly action: string;
   readonly baseVersionInput: string;
-  /** Segment Keys the current snapshot already references, offered as suggestions. */
-  readonly segmentKeys: readonly string[];
+  /** Every segment published in the Environment — the only keys the form offers. */
+  readonly segments: PublishedSegmentsView;
   readonly draft?: AttachDraft;
 }
 
-const DEFAULT_MEMBER_ATTRIBUTE = 'userId';
+export const UNKNOWN_ATTRIBUTE_LABEL = 'attribute unknown';
 
-const listId = (flagKey: string): string => `attach-segments-${flagKey}`;
+const wrap = (body: string): string =>
+  `<details class="segment-attach"><summary>Attach a segment</summary>\n${body}\n</details>`;
 
-// A datalist suggests the keys already in use while still accepting a key typed by hand, so a segment
-// created for a fresh environment — referenced by nothing yet — can still be attached.
-const renderSuggestions = (flagKey: string, segmentKeys: readonly string[]): string =>
-  segmentKeys.length === 0
-    ? ''
-    : `<datalist id="${escapeHtml(listId(flagKey))}">${segmentKeys
-        .map((key) => `<option value="${escapeHtml(key)}"></option>`)
-        .join('')}</datalist>`;
+// Segments published before the attribute was recorded on the pointer stay listed but unselectable: the
+// operator can see the segment exists and that re-uploading it is what makes it attachable.
+const renderOption = (row: PublishedSegmentRow, chosen: string | undefined): string => {
+  const unknown = row.attribute.status === 'unknown';
+  const label = `${row.segmentKey} · ${row.attribute.status === 'known' ? row.attribute.memberAttribute : UNKNOWN_ATTRIBUTE_LABEL}`;
+  const selected = !unknown && row.segmentKey === chosen ? ' selected' : '';
+  return `<option value="${escapeHtml(row.segmentKey)}"${unknown ? ' disabled' : ''}${selected}>${escapeHtml(label)}</option>`;
+};
 
 const renderValueControl = (flag: FlagDefinitionView, draft: AttachDraft | undefined): string =>
   flag.type === 'config'
@@ -36,17 +37,19 @@ const renderValueControl = (flag: FlagDefinitionView, draft: AttachDraft | undef
     : '';
 
 export const renderSegmentAttachForm = (flag: FlagDefinitionView, context: AttachContext): string => {
-  const { draft, segmentKeys } = context;
-  const suggestions = renderSuggestions(flag.key, segmentKeys);
-  const list = suggestions === '' ? '' : ` list="${escapeHtml(listId(flag.key))}"`;
-  return `<details class="segment-attach"><summary>Attach a segment</summary>
-<form method="post" action="${escapeHtml(context.action)}" class="stack">
+  const { draft, segments } = context;
+  if (segments.status === 'unavailable') {
+    return wrap('<p class="muted">The list of published segments could not be read, so there is nothing to choose from right now.</p>');
+  }
+  if (segments.rows.length === 0) {
+    return wrap('<p class="muted">No segments are published in this environment yet. Upload a segment first, then attach it here.</p>');
+  }
+  const options = segments.rows.map((row) => renderOption(row, draft?.segmentKey)).join('');
+  return wrap(`<form method="post" action="${escapeHtml(context.action)}" class="stack">
 ${context.baseVersionInput}
-${suggestions}<label>Segment key <input type="text" name="segmentKey"${list} value="${escapeHtml(draft?.segmentKey ?? '')}" required></label>
-<label>Member attribute <input type="text" name="memberAttribute" value="${escapeHtml(draft?.memberAttribute ?? DEFAULT_MEMBER_ATTRIBUTE)}" required></label>
-<p class="muted">Use the attribute the segment was uploaded with; members are matched on it.</p>
+<label>Segment <select name="segmentKey" required><option value="" disabled${segments.rows.some((row) => row.segmentKey === draft?.segmentKey) ? '' : ' selected'}>Choose a segment…</option>${options}</select></label>
+<p class="muted">Each segment is listed with the member attribute it was published with; members are matched on it.</p>
 ${renderValueControl(flag, draft)}
 <div class="actions"><button type="submit" name="field" value="attachSegment">Attach segment</button></div>
-</form>
-</details>`;
+</form>`);
 };

@@ -1,11 +1,11 @@
-import type { SegmentListRow } from '../../application/list-referenced-segments.js';
+import type { PublishedSegmentRow, PublishedSegmentsView } from '../../application/list-published-segments.js';
 import { environmentPath, escapeHtml } from './escape.js';
 import { renderPage, type Notice } from './layout.js';
 import { segmentPath } from './segment-page.js';
 
 export interface SegmentListPageView {
   readonly environment: string;
-  readonly rows: readonly SegmentListRow[];
+  readonly listing: PublishedSegmentsView;
 }
 
 /** What the operator typed into the Create Segment form, echoed back when the submit was rejected. */
@@ -21,33 +21,40 @@ export interface SegmentListPageState {
 
 export const segmentListPath = (environment: string): string => `${environmentPath(environment)}/segments`;
 
-const renderState = (row: SegmentListRow): string => {
-  switch (row.state) {
-    case 'published':
-      return `version ${String(row.version)}`;
-    case 'not-published':
-      return '<span class="muted">not published</span>';
-    default:
-      return '<span class="segment-unavailable">unavailable</span>';
-  }
-};
+const renderAttribute = (row: PublishedSegmentRow): string =>
+  row.attribute.status === 'known'
+    ? escapeHtml(row.attribute.memberAttribute)
+    : '<span class="segment-unknown">unknown (published before attributes were recorded)</span>';
 
-const renderRow = (environment: string, row: SegmentListRow): string => `<tr>
-<td data-label="Segment"><a href="${escapeHtml(segmentPath(environment, row.key))}">${escapeHtml(row.key)}</a></td>
-<td data-label="Current pointer">${renderState(row)}</td>
+const renderUsage = (row: PublishedSegmentRow): string =>
+  row.usage.status === 'used'
+    ? row.usage.flagKeys.map((flagKey) => `<span class="segment-user">${escapeHtml(flagKey)}</span>`).join(', ')
+    : '<span class="segment-unused">used by no flag</span>';
+
+const renderRow = (environment: string, row: PublishedSegmentRow): string => `<tr>
+<td data-label="Segment"><a href="${escapeHtml(segmentPath(environment, row.segmentKey))}">${escapeHtml(row.segmentKey)}</a></td>
+<td data-label="Current pointer">version ${escapeHtml(row.version)}</td>
+<td data-label="Member attribute">${renderAttribute(row)}</td>
+<td data-label="Used by flags">${renderUsage(row)}</td>
 </tr>`;
 
-const renderTable = (view: SegmentListPageView): string =>
-  view.rows.length === 0
-    ? '<p class="muted">No flag rule in the current snapshot references a segment.</p>'
-    : `<div class="table-wrap">
+const renderRows = (environment: string, rows: readonly PublishedSegmentRow[]): string => `<div class="table-wrap">
 <table class="flag-table">
-<thead><tr><th scope="col">Segment</th><th scope="col">Current pointer</th></tr></thead>
+<thead><tr><th scope="col">Segment</th><th scope="col">Current pointer</th><th scope="col">Member attribute</th><th scope="col">Used by flags</th></tr></thead>
 <tbody>
-${view.rows.map((row) => renderRow(view.environment, row)).join('\n')}
+${rows.map((row) => renderRow(environment, row)).join('\n')}
 </tbody>
 </table>
 </div>`;
+
+const renderTable = (view: SegmentListPageView): string => {
+  if (view.listing.status === 'unavailable') {
+    return '<p class="segment-unavailable">The segment catalogue could not be read, so this list is incomplete. Segments may well be published; try again.</p>';
+  }
+  return view.listing.rows.length === 0
+    ? '<p class="muted">No segments published yet in this environment.</p>'
+    : renderRows(view.environment, view.listing.rows);
+};
 
 const DEFAULT_MEMBER_ATTRIBUTE = 'userId';
 
@@ -61,7 +68,7 @@ const renderCreateForm = (environment: string, draft: SegmentDraft | undefined):
 <label>CSV file <input type="file" name="file" accept=".csv,text/csv" required data-segment-file></label>
 <div class="actions"><button type="submit">Create segment</button></div>
 </form>
-<p class="muted">A new Segment Key stays out of the table above until some flag rule references it, so note the key down after creating it.</p>
+<p class="muted">A new segment appears in the table above as soon as it is published, before any flag uses it.</p>
 </section>`;
 
 export const renderSegmentListPage = (view: SegmentListPageView, state: SegmentListPageState = {}): string => {
@@ -70,7 +77,7 @@ export const renderSegmentListPage = (view: SegmentListPageView, state: SegmentL
     heading,
     `<p><a class="back-link" href="${escapeHtml(environmentPath(view.environment))}">Back to ${escapeHtml(view.environment)}</a></p>
 <div class="page-head"><h1>${escapeHtml(heading)}</h1></div>
-<p class="muted">Every Segment Key the current snapshot’s rules reference, with the version its Segment Pointer names. Members are never listed here.</p>
+<p class="muted">Every segment published in this environment, with the version its Segment Pointer names, the Member attribute its rows are matched on, and the flags whose rules use it. Members are never listed here.</p>
 ${renderTable(view)}
 ${renderCreateForm(view.environment, state.draft)}`,
     state.notices ?? [],

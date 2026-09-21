@@ -1,0 +1,357 @@
+{
+  "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-23-segment-picker-and-listing-roadmap.json",
+  "roadmapTask": "Make the FeatureSync dashboard's segment experience usable: show a Segment List of every published segment with its Member Attribute and the flags that use it, and let an operator attach a segment to a flag by choosing a published segment from a list instead of typing its Segment Key and Member Attribute as free text.",
+  "createdAt": "2026-09-20T18:13:56Z",
+  "updatedAt": "2026-09-21T01:15:00Z",
+  "roadmapRevision": 0,
+  "phases": [
+    {
+      "phaseId": "pointer-member-attribute",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-20T18:14:29Z",
+      "baseRef": "406291607d3f7981c6d8fd13a7f1d612de0559bc",
+      "baseDirty": true,
+      "notes": "Changed by this phase: packages/aws/src/domain/segment-pointer.ts, packages/aws/src/infrastructure/s3-segment-publisher.ts, packages/aws/test/domain/segment-pointer.test.ts, packages/aws/test/infrastructure/s3-segment-publisher.test.ts, packages/aws/integration/s3-segment-publisher.localstack.test.ts. SegmentPointer gains an optional memberAttribute (schemaVersion still 1); buildSegmentPointer takes it and the single publish call site passes segment.memberAttribute, so a published segment's current.json records the attribute while pre-existing pointers still parse with it undefined. s3-segment-publisher.test.ts is outside filesAffected but holds the roadmap's required publisher unit test; its storedPointer fixture keeps the pre-attribute shape so the legacy read path stays exercised. Compensation not needed and not invoked; if it were, it is a plain revert of these files — the field is optional and additive, so older pointers stay valid and the non-strict parser ignores the extra field on newer ones. Graded 9/9/9/9, all dimensions passing; no dimension scored 10, so no 10-to-9 calibration demotion applied.",
+      "unplannedFiles": [
+        "packages/aws/test/infrastructure/s3-segment-publisher.test.ts"
+      ],
+      "completedAt": "2026-09-20T18:23:24Z",
+      "gateRun": "pnpm verify: pass (exit 0 - build 5 packages, pnpm typecheck, eslint . --max-warnings=0, vitest run --coverage @ 100% thresholds); pnpm test:integration: pass (exit 0, LocalStack); new localstack assertion also run in isolation: pass",
+      "gradeResult": {
+        "phaseId": "pointer-member-attribute",
+        "dimensionScores": [
+          {
+            "dimensionId": "optional-field-legacy-parse",
+            "score": 9,
+            "pass": true,
+            "evidence": "memberAttribute declared z.string().min(1).optional() with no default; schemaVersion literal still 1; unit test parses a pre-attribute pointer and asserts memberAttribute is undefined, not a placeholder."
+          },
+          {
+            "dimensionId": "publisher-writes-attribute",
+            "score": 9,
+            "pass": true,
+            "evidence": "publish passes the in-scope segment.memberAttribute into buildSegmentPointer; unit test asserts the serialized PutObject body for current.json contains it; no call site outside the publisher changed."
+          },
+          {
+            "dimensionId": "localstack-roundtrip-assertion",
+            "score": 9,
+            "pass": true,
+            "evidence": "New assertion lives in the existing LocalStack suite, reads current.json back from S3 via GetObject, and checks a non-default attribute ('accountId') that only this publish could have written."
+          },
+          {
+            "dimensionId": "infrastructure-layer-respected",
+            "score": 9,
+            "pass": true,
+            "evidence": "segment-pointer.ts imports only core, zod and sibling domain files — no application, infrastructure or AWS SDK import; pnpm verify green including eslint --max-warnings=0 and 100% coverage thresholds, with the new optional branch covered by unit tests alone."
+          }
+        ],
+        "overallPass": true
+      }
+    },
+    {
+      "phaseId": "list-published-segments-usecase",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-21T00:00:00Z",
+      "baseRef": "406291607d3f7981c6d8fd13a7f1d612de0559bc",
+      "baseDirty": true,
+      "notes": "Already dirty at start (not this phase): docs/roadmaps/featuresync/** and docs/userId.csv, plus packages/aws segment-pointer + s3-segment-publisher sources/tests from phase pointer-member-attribute. Changed by this phase (both new): packages/dashboard/src/application/list-published-segments.ts, packages/dashboard/test/application/list-published-segments.test.ts. What it does: declares the PublishedSegmentsPort (listPublishedSegments -> {status:listed,segments[]} | {status:unavailable}) and a listPublishedSegments use case whose row population comes from that port, annotating each row with attribute {known|unknown} and usage {used,flagKeys|unused} derived by scanning browseEnvironment flag rules for inSegment. Rows sorted by segmentKey, flagKeys deduped per flag and sorted by flag key. listReferencedSegments is left untouched and still serves the page until phase segment-list-page-columns switches over. Amended filesAffected (1 amendment; horizon total 1 of 3) — ports.ts does not exist anywhere in the repo. Note for verification: the application-layer-purity rubric names packages/dashboard/src/application/ports.ts in one passCriteria; the real declaration site is list-published-segments.ts, which is still application-layer, type-only and AWS-free. Also: do not run a bare `tsc -b` — it emits .js/.d.ts beside the sources and turns lint and coverage red; `pnpm verify` is the gate. Observed while implementing (not a grade): corepack pnpm verify exits 0 — build, typecheck, lint, 1434 tests, coverage 100% statements/branches/functions/lines. One unrelated pre-existing flake seen once in @featuresync/core file-snapshot-source.test.ts \"pushes a bundle when watching\" (a vi.waitFor timing test); it passed on re-run. VERIFIED: gates green (verify, example:node-local, test:integration); graded overallPass=true, scores 10/9/9/9 against minScore 8 on every dimension, no dimension re-scored for unearned evidence. Phase has no compensation. Grader noted one wart it kept off 10: conditionOf casts the unknown rule shape to {when: Condition} with only a comment as justification.",
+      "unplannedFiles": [],
+      "amendments": [
+        {
+          "at": "2026-09-21T00:00:00Z",
+          "by": "execute",
+          "reason": "filesAffected named packages/dashboard/src/application/ports.ts, which does not exist — no ports.ts exists in any package. Ports are declared in their own use-case module, and the new use case got its own module rather than being grafted into the differently-named listReferencedSegments file that phase segment-list-page-columns will retire.",
+          "grounding": "find packages -name ports.ts returns nothing; BrowsePorts is declared in browse-environment.ts and SegmentUploadPorts in upload-segment.ts.",
+          "before": {
+            "filesAffected": [
+              "packages/dashboard/src/application/list-referenced-segments.ts",
+              "packages/dashboard/src/application/ports.ts",
+              "packages/dashboard/test/application/list-referenced-segments.test.ts"
+            ]
+          },
+          "after": {
+            "filesAffected": [
+              "packages/dashboard/src/application/list-published-segments.ts",
+              "packages/dashboard/test/application/list-published-segments.test.ts"
+            ]
+          }
+        }
+      ],
+      "completedAt": "2026-09-21T00:00:00Z",
+      "gateRun": "corepack pnpm verify: pass (build 5 packages, typecheck, eslint, vitest --coverage 100% lines/branches/functions/statements). corepack pnpm example:node-local: pass. corepack pnpm test:integration: pass (against a LocalStack container that predates this session). Not run: pnpm --filter @featuresync/dashboard test:e2e — the Playwright browser proof is phase browser-proof-picker-and-list, and no e2e spec references this module.",
+      "gradeResult": {
+        "phaseId": "list-published-segments-usecase",
+        "dimensionScores": [
+          {
+            "dimensionId": "population-from-published-set",
+            "score": 10,
+            "pass": true,
+            "evidence": "Rows are [...listing.segments].sort().map(), iterating only the port result; usage.get() is a lookup that never adds or removes rows, and browseEnvironment's own segmentKeys field is deliberately unused. Above a 9: the suite pins the port as sole population source behaviourally — toHaveBeenCalledExactlyOnceWith plus the unavailable test asserting readCurrentVersion was never called, so re-deriving rows from rules would break a test, not just a review."
+          },
+          {
+            "dimensionId": "usage-attribution-correct",
+            "score": 9,
+            "pass": true,
+            "evidence": "flagKeysBySegment sorts flags by key then unions per-flag Sets, so the two-flag test yields ['alpha-copy','new-dashboard'] deduplicated and deterministic despite a duplicate inSegment; all rules of each flag are scanned. Traversal mirrors core referencedSegmentKeys exactly (Object.values(rule.when), typeof expected === 'object' && expected.inSegment !== undefined). Unused is the explicit {status:'unused'} variant."
+          },
+          {
+            "dimensionId": "attribute-and-unavailable-states",
+            "score": 9,
+            "pass": true,
+            "evidence": "toRow maps an absent memberAttribute to {status:'unknown'} with no default substitution and no dropped row. The port's unavailable result propagates as {status:'unavailable'} rather than throwing or emptying, while an empty environment yields {status:'listed',rows:[]} — both asserted, so the two outcomes are distinguishable."
+          },
+          {
+            "dimensionId": "application-layer-purity",
+            "score": 9,
+            "pass": true,
+            "evidence": "Judged at the real declaration site per the amendment. PublishedSegmentsPort is a bare interface with its result types declared locally; the only imports are Condition from @featuresync/core and browse-environment.js — no ../infrastructure, no @aws-sdk. States are structured variants, not display strings. eslint --max-warnings=0 clean; tests drive it through inline fake ports only. Kept off 10 by the unchecked `as {readonly when: Condition}` cast in conditionOf, justified only by a comment."
+          }
+        ],
+        "overallPass": true
+      }
+    },
+    {
+      "phaseId": "segment-prefix-lister",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-21T00:26:48Z",
+      "baseRef": "406291607d3f7981c6d8fd13a7f1d612de0559bc",
+      "baseDirty": true,
+      "notes": "Already dirty at start (not this phase): docs/roadmaps/featuresync/**, docs/userId.csv, packages/aws segment-pointer + s3-segment-publisher sources/tests (phase pointer-member-attribute), packages/dashboard list-published-segments source+test (phase list-published-segments-usecase). Changed by this phase: packages/aws/src/infrastructure/s3-segment-lister.ts (new), packages/aws/src/infrastructure/s3-segment-version-reader.ts, packages/aws/src/index.ts, packages/aws/test/infrastructure/s3-segment-lister.test.ts (new), packages/aws/test/infrastructure/s3-segment-version-reader.test.ts, packages/aws/test/infrastructure/s3-snapshot-source.load.test.ts, packages/dashboard/src/infrastructure/aws-adapters.ts, packages/dashboard/src/infrastructure/aws-adapters.test.ts. What it does: createS3SegmentLister issues ListObjectsV2 with Prefix <env>/segments/ and Delimiter / , derives each Segment Key from the CommonPrefixes (stripping prefix and trailing slash, dropping anything that is not a valid segment key), follows NextContinuationToken while IsTruncated, dedupes and returns sorted keys; a denied or failed listing throws REQUEST_FAILED rather than reporting an empty environment. S3SegmentVersionReader gains readPointer, returning the parsed SegmentPointer (so memberAttribute is available) with readVersion now delegating to it. createAwsDashboardPorts implements the PublishedSegmentsPort: it lists the prefix, reads each key pointer, maps a null pointer (never published) to a skipped row and any thrown listing/pointer error to {status:unavailable}, and never substitutes a memberAttribute. 1 amendment this phase (horizon total 2 of 3). Unplanned file: s3-snapshot-source.load.test.ts pins the @featuresync/aws public export surface with an exhaustive sorted Object.keys assertion, so adding createS3SegmentLister required updating that list. Observed while implementing (not a grade): corepack pnpm verify exits 0 — build, typecheck, eslint --max-warnings=0, 1451 tests, coverage 100% statements/branches/functions/lines. Integration and e2e suites not run; the lister has no LocalStack proof in this phase. Phase has no compensation. VERIFIED: three gates green (verify, example:node-local, test:integration); graded overallPass=true, scores 9/9/9/9/8 against minScore 8 on every dimension. No dimension scored 10, so no 10-to-9 calibration demotion applied. Phase has no compensation, so none was invoked or needed. Grading payload sent: ledger notes + 8-file list with line counts + 181 lines (full new lister source, aws-adapters.ts and index.ts diffs); the grader read the three test files itself.",
+      "unplannedFiles": [
+        "packages/aws/test/infrastructure/s3-snapshot-source.load.test.ts"
+      ],
+      "amendments": [
+        {
+          "at": "2026-09-21T00:31:02Z",
+          "by": "execute",
+          "reason": "filesAffected named packages/dashboard/test/infrastructure/aws-adapters.test.ts, which does not exist — the dashboard package keeps its tests co-located beside the source, and the real file is packages/dashboard/src/infrastructure/aws-adapters.test.ts. It also had no entry for reading a pointer: the adapter needs each segment version AND its stored memberAttribute, and the only pointer reader in the repo (s3-segment-version-reader.ts) parsed the whole pointer and returned only the version, so it gained a readPointer member rather than a second module re-reading the same key.",
+          "grounding": "ls packages/dashboard/test/infrastructure fails (no such directory); packages/dashboard/src/infrastructure/aws-adapters.test.ts exists and holds the adapter suite. s3-segment-version-reader.ts already calls parseSegmentPointer and discards every field but version.",
+          "before": {
+            "filesAffected": [
+              "packages/aws/src/infrastructure/s3-segment-lister.ts",
+              "packages/aws/src/index.ts",
+              "packages/aws/test/infrastructure/s3-segment-lister.test.ts",
+              "packages/dashboard/src/infrastructure/aws-adapters.ts",
+              "packages/dashboard/test/infrastructure/aws-adapters.test.ts"
+            ]
+          },
+          "after": {
+            "filesAffected": [
+              "packages/aws/src/infrastructure/s3-segment-lister.ts",
+              "packages/aws/src/infrastructure/s3-segment-version-reader.ts",
+              "packages/aws/src/index.ts",
+              "packages/aws/test/infrastructure/s3-segment-lister.test.ts",
+              "packages/aws/test/infrastructure/s3-segment-version-reader.test.ts",
+              "packages/dashboard/src/infrastructure/aws-adapters.ts",
+              "packages/dashboard/src/infrastructure/aws-adapters.test.ts"
+            ]
+          }
+        }
+      ],
+      "completedAt": "2026-09-21T00:37:42Z",
+      "gradeResult": {
+        "phaseId": "segment-prefix-lister",
+        "dimensionScores": [
+          {
+            "dimensionId": "prefix-listing-shape",
+            "score": 9,
+            "pass": true,
+            "evidence": "ListObjectsV2Command sends Prefix `${environment}/segments/` and Delimiter '/'; keys come only from response.CommonPrefixes via keyFromCommonPrefix, which requires startsWith(prefix) and endsWith('/'), slices off both and drops anything failing validateSegmentKey, so no '/' or env name survives; keys accumulate in a Set and return sorted. Tests assert the exact request input and that a foreign-environment prefix, a slash-less prefix, an undefined Prefix and 'Not A Key' are all dropped."
+          },
+          {
+            "dimensionId": "pagination-completeness",
+            "score": 9,
+            "pass": true,
+            "evidence": "do/while continues while IsTruncated===true and NextContinuationToken is defined; the follow-up command rebuilds the same Bucket/Prefix/Delimiter and only adds ContinuationToken. A three-page test asserts the ContinuationToken sequence [undefined,'page-2','page-3'] and identical Prefix on all three, with no fixed iteration count; a further test proves termination when IsTruncated is true but no token is returned."
+          },
+          {
+            "dimensionId": "absent-prefix-and-failure-mapping",
+            "score": 9,
+            "pass": true,
+            "evidence": "Verified by running the suites: empty prefix -> [] with no throw; a denied listing throws REQUEST_FAILED with key 'production/segments/' rather than an empty list, and the adapter maps it to unavailable; a malformed pointer yields unavailable with no rejection reaching the caller. The adapter's only catch returns unavailable, never []; an absent pointer (readPointer -> null) is distinguished and omitted, proven by the test that still lists gamma when beta's pointer is missing."
+          },
+          {
+            "dimensionId": "adapter-composition",
+            "score": 9,
+            "pass": true,
+            "evidence": "Each key maps through readPointer and the row is built inside toPublishedSegment(pointer), so version and memberAttribute come from that key's own pointer, not an outer loop variable; memberAttribute is spread conditionally so an absent one stays absent with no default. The beta v3/accountId + gamma v7/no-attribute test confirms per-row versions. createS3SegmentLister and its two types are exported from packages/aws/src/index.ts and pinned by the exhaustive export-surface test."
+          },
+          {
+            "dimensionId": "unit-only-coverage-and-boundaries",
+            "score": 8,
+            "pass": true,
+            "evidence": "vitest.config.ts scopes coverage to packages/*/src at 100% on all four metrics and excludes integration/** and e2e/**, so the green pnpm verify (1451 tests) is unit-only. The lister tests inject a stubbed {send} client and mock @aws-sdk/client-s3 so the default-client path runs without network. import-x/no-restricted-paths zones forbid domain->application/infrastructure and application->infrastructure; the lister is reached only through the PublishedSegmentsPort and imported nowhere outside packages/aws and the dashboard infrastructure adapter."
+          }
+        ],
+        "overallPass": true
+      },
+      "gateRun": "corepack pnpm verify: pass (exit 0 — build 5 packages, pnpm -r typecheck, eslint . --max-warnings=0, vitest run --coverage, 1451 tests, 100% statements/branches/functions/lines). corepack pnpm example:node-local: pass (exit 0). corepack pnpm test:integration: pass (exit 0, LocalStack). Not run: pnpm --filter @featuresync/dashboard test:e2e — the Playwright proof is phase browser-proof-picker-and-list and no e2e spec references the lister."
+    },
+    {
+      "phaseId": "segment-list-page-columns",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-21T00:41:42Z",
+      "baseRef": "406291607d3f7981c6d8fd13a7f1d612de0559bc",
+      "baseDirty": true,
+      "notes": "Changed: views/segment-list-page.ts, views/segment-list-page.test.ts, segment-routes.ts, segment-routes.test.ts (planned) + http-server.ts, http-server.test.ts, views/styles/segment-list.css, test/main.test.ts, e2e/support/fixtures.ts (unplanned). The /env/<env>/segments route now calls listPublishedSegments instead of listReferencedSegments, and the page renders a four-column table (Segment, Current pointer, Member attribute, Used by flags) over PublishedSegmentsView, with distinct states for unknown attribute, used-by-no-flag, empty-listed and unavailable; intro and create-form copy updated to match. Unplanned files are the wiring the new port needed: DashboardPorts gained PublishedSegmentsPort (http-server.ts) and the three DashboardPorts fakes plus two new CSS classes followed. 30 paths were already dirty at start and are excluded from this list. Not run here: repo gates and grade. Dashboard typecheck exit 0 and its 581 unit tests pass locally; lint, full test:coverage and other packages are VERIFY's to run. VERIFIED: gates green, graded 9/9/9/9/8 against minScores 8/8/7/8/8, all dimensions pass, no overrides. Grader held interface-layer-discipline at 8 over the 5 unplanned files and the now-dead list-referenced-segments.ts.",
+      "unplannedFiles": [
+        "packages/dashboard/src/infrastructure/http-server.ts",
+        "packages/dashboard/src/infrastructure/http-server.test.ts",
+        "packages/dashboard/src/infrastructure/views/styles/segment-list.css",
+        "packages/dashboard/test/main.test.ts",
+        "packages/dashboard/e2e/support/fixtures.ts"
+      ],
+      "completedAt": "2026-09-21T06:10:45Z",
+      "gradeResult": {
+        "phaseId": "segment-list-page-columns",
+        "dimensionScores": [
+          {
+            "dimensionId": "every-published-segment-listed",
+            "score": 9,
+            "pass": true,
+            "evidence": "Route calls listPublishedSegments and the referenced-keys import is gone; renderRows maps every row with no predicate; view and route tests both cover a used+unused pair, asserting the unattached segment renders."
+          },
+          {
+            "dimensionId": "attribute-column-states",
+            "score": 9,
+            "pass": true,
+            "evidence": "Member attribute header and stored value asserted; unknown branch renders an explicit 'published before attributes were recorded' marker, with tests ruling out both a blank cell and a fabricated userId default."
+          },
+          {
+            "dimensionId": "used-by-flags-column",
+            "score": 9,
+            "pass": true,
+            "evidence": "Multiple flag keys render as separate comma-separated spans (separator asserted verbatim), keys are HTML-escaped, and the unused state has its own class and wording distinct from a flag key."
+          },
+          {
+            "dimensionId": "copy-and-degraded-states",
+            "score": 9,
+            "pass": true,
+            "evidence": "Intro copy now describes the published set and the old snapshot-references wording is asserted gone; empty-listed and unavailable render distinct copy, and the route test drives unavailable through the real server to a 200, not a 500 or blank page."
+          },
+          {
+            "dimensionId": "interface-layer-discipline",
+            "score": 8,
+            "pass": true,
+            "evidence": "No SDK or adapter imports in view or route; the view never re-derives usage, all rule scanning stays in the untouched use case; every new branch is unit-tested under lint --max-warnings=0, typecheck and 100% coverage. Held at 8 for the now-dead list-referenced-segments.ts left in place and the unplanned DashboardPorts widening."
+          }
+        ],
+        "overallPass": true
+      },
+      "gateRun": "pnpm verify: pass (build x5 -> pnpm typecheck -> eslint . --max-warnings=0 -> vitest run --coverage at 100% v8 thresholds), exit 0"
+    },
+    {
+      "phaseId": "segment-picker-attach-form",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-21T06:16:50Z",
+      "baseRef": "406291607d3f7981c6d8fd13a7f1d612de0559bc",
+      "baseDirty": true,
+      "notes": "Changed by this phase: views/segment-attach-form.ts, views/segment-attach-form.test.ts, views/environment-page.ts, http-server.ts, http-server.test.ts (planned) + views/feature-edit-form.ts, views/feature-edit-form.test.ts (unplanned ripple of the EditContext/EditDraft change the phase's changes[] called for). The attach form is now a required <select> of published segments labelled '<key> · <attribute>', with a disabled placeholder, disabled options for segments with no stored attribute, and explanatory copy instead of a form when the list is empty or unreadable; the free-text segmentKey input, its datalist and the memberAttribute input are gone, as is memberAttribute from AttachDraft/EditDraft and editDraftOf. http-server resolves the chosen key to its stored attribute via the listPublishedSegments use case before emitting the edit and rejects an unlisted key, an unknown-attribute segment and an unreadable listing with 400 + operator-readable messages; all four renderEnvironmentPage routes now pass publishedSegments into page state. Dashboard typecheck clean, 591 unit tests pass, eslint --max-warnings=0 clean on the 7 files. Not run (VERIFY owns them): pnpm verify, full-repo coverage thresholds. | VERIFY: gates green; graded 10/9/9/9/9 against its own 5-dimension rubric, all above minScore. 2 dimensions re-scored 10->9 mechanically for evidence that restated the bar rather than naming an above-bar observable. No amendments, no override.",
+      "unplannedFiles": [
+        "packages/dashboard/src/infrastructure/views/feature-edit-form.ts",
+        "packages/dashboard/src/infrastructure/views/feature-edit-form.test.ts"
+      ],
+      "completedAt": "2026-09-21T06:27:01Z",
+      "gateRun": "pnpm verify (build 5 packages -> pnpm typecheck -> eslint . --max-warnings=0 -> vitest run --coverage @100% thresholds): pass; pnpm example:node-local: pass. Not run: LocalStack integration suites and the Playwright browser suite (need LocalStack + auth token; a browser proof of the picker is phase browser-proof-picker-and-list). Build left no stray .js/.d.ts beside sources.",
+      "gradeResult": {
+        "phaseId": "segment-picker-attach-form",
+        "dimensionScores": [
+          {
+            "dimensionId": "no-free-text-anywhere",
+            "score": 10,
+            "pass": true,
+            "evidence": "segment-attach-form.ts renders only <select name=\"segmentKey\" required>; the datalist, DEFAULT_MEMBER_ATTRIBUTE and the memberAttribute input are deleted, and memberAttribute is removed from AttachDraft/EditDraft (not made optional). Above the bar: an escaping test no passCriteria bullet asks for proves injected keys/attributes cannot reintroduce markup."
+          },
+          {
+            "dimensionId": "attribute-resolved-server-side",
+            "score": 9,
+            "pass": true,
+            "evidence": "parseAttach in http-server.ts finds the row in the listPublishedSegments result and uses chosen.attribute.memberAttribute; the option value carries only the key, and the lookup runs in parse before editFeature is called. A test posting memberAttribute='spoofed' asserts the published rule is still { userId: { inSegment: 'beta-testers' } }. Re-scored 10->9 by the orchestrator: the grader's above-bar claims (the spoof test, the absent fallback) restate passCriteria #3 and the dimension's own failureExample rather than naming something a 9 lacks."
+          },
+          {
+            "dimensionId": "unknown-key-rejected",
+            "score": 9,
+            "pass": true,
+            "evidence": "An it.each covers an unpublished key, an empty key and a missing key: each yields 400, a body containing the operator-readable 'not published in this environment', and writer.publish not called."
+          },
+          {
+            "dimensionId": "empty-and-unknown-attribute-states",
+            "score": 9,
+            "pass": true,
+            "evidence": "Empty and unavailable listings render explanatory copy with no <select> and no <form> (asserted both ways); a row with no stored attribute renders <option value=\"legacy\" disabled>legacy - attribute unknown</option>, and labels pair key with attribute. Re-scored 10->9 by the orchestrator: the grader's above-bar claims restate the dimension's failureExample and passCriteria #3."
+          },
+          {
+            "dimensionId": "context-plumbing-and-purity",
+            "score": 9,
+            "pass": true,
+            "evidence": "environment-page.ts takes state.publishedSegments via a type-only import with no use-case call and defaults to { status: 'unavailable' }; the old segmentKeys attach source is gone, all four renderEnvironmentPage routes pass the listing, and pnpm verify (lint --max-warnings=0, typecheck, 100% coverage thresholds) is green after the EditDraft removal rippled into feature-edit-form."
+          }
+        ],
+        "overallPass": true
+      }
+    },
+    {
+      "phaseId": "browser-proof-picker-and-list",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-21T00:00:00Z",
+      "baseRef": "406291607d3f7981c6d8fd13a7f1d612de0559bc",
+      "baseDirty": true,
+      "notes": "Changed by this phase (exactly the planned filesAffected, no unplanned files): packages/dashboard/e2e/segment-picker.spec.ts (new), packages/dashboard/e2e/support/localstack-fixtures.ts. What it does: localstack-fixtures gains a parameterised seedSegment(key, version, memberAttribute, members) fixture that writes the version object and the current.json pointer at the publishers <env>/segments/<key>/ layout, running the pointer through parseSegmentPointer so a seed the real schema rejects throws instead of passing; its put helper was extracted as putJson and reused by the existing dashboard seed. segment-picker.spec.ts seeds one segment under a per-run unique key (pilot-<uuid8>, attribute accountId, version 3), opens /env/<env>/segments and asserts on the located row that Current pointer is \"version 3\", Member attribute is \"accountId\" and Used by flags is \"used by no flag\"; then opens the checkout flag, selects the segment from the attach <select>, fills the config value, submits, asserts the publish notice, reopens the collapsed details and asserts the .rule-segment markup names the key, reads the published snapshot from S3 and asserts the last rule equals {when:{accountId:{inSegment:<key>}}, value:\"adyen\"}, then reloads the list page and asserts the row now shows checkout under Used by flags. No application code is stubbed and no route is intercepted. No CI workflow change needed: ci.yml line 60 runs `pnpm --filter @featuresync/dashboard test:e2e` with no file list. Observed while implementing (not a grade): dashboard tsc --noEmit exit 0; eslint --max-warnings=0 clean on both files; the new spec passes against the running LocalStack, and the full 11-spec Playwright suite passes (6.8s), so the fixture change did not regress the other specs. Not run here (VERIFY owns them): pnpm verify and the full-repo coverage thresholds. Phase has no compensation. Pre-existing housekeeping, not this phase: three stray ledger backups sit beside the status file, one with a corrupt name (...status.json%%.json.status.last_good.json). | VERIFIED: four gates green (pnpm verify, example:node-local, test:integration, dashboard test:e2e — 11 Playwright specs incl. the new one, all exit 0). Graded overallPass=true, 9/9/9/10 against minScores 8/8/8/7. The one 10 (fixture-helper-quality) named an above-the-bar observable — the helper validates its own pointer through the production parseSegmentPointer — so no 10-to-9 calibration demotion applied. No amendments this phase, no override. Phase has no compensation, so none was invoked or needed.",
+      "unplannedFiles": [],
+      "completedAt": "2026-09-21T01:15:00Z",
+      "gateRun": [
+        "pnpm verify: pass",
+        "pnpm example:node-local: pass",
+        "pnpm test:integration: pass",
+        "pnpm --filter @featuresync/dashboard test:e2e: pass"
+      ],
+      "gradeResult": {
+        "phaseId": "browser-proof-picker-and-list",
+        "dimensions": [
+          {
+            "id": "seeded-against-real-storage",
+            "score": 9,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "Seeds only via the seedSegment fixture writing <env>/segments/<key>/3.json and current.json to LocalStack S3; no page.route or mock anywhere in the spec; key is per-run unique (pilot-<uuid8>). ci.yml line 60 runs test:e2e with no file list, so the localstack job picks it up unchanged."
+          },
+          {
+            "id": "list-page-assertions",
+            "score": 9,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "Locates the row by table.flag-table tbody tr filtered on the exact segment-key link, asserts toHaveCount(1), then row-scoped [data-label] assertions: Current pointer = version 3, Member attribute = accountId (the seeded attribute), Used by flags = used by no flag. No page-wide text match."
+          },
+          {
+            "id": "attach-through-chooser",
+            "score": 9,
+            "minScore": 8,
+            "pass": true,
+            "evidence": "Attach goes through getByLabel('Segment').selectOption on the real <select name=segmentKey>; only the config value field is typed. After submit it asserts the publish notice, the rendered .rule-segment naming the key, and reads the S3 snapshot to assert the last rule equals {when:{accountId:{inSegment:<key>}}, value:'adyen'}. All waits are web-first expects, no fixed sleeps."
+          },
+          {
+            "id": "fixture-helper-quality",
+            "score": 10,
+            "minScore": 7,
+            "pass": true,
+            "evidence": "Writes exactly the publisher's layout (matching segmentObjectKeyFor/segmentPointerKeyFor) and is fully parameterised. Above the bar: runs the pointer through the production parseSegmentPointer and throws on !ok, so a seed shape no real publisher could emit fails loudly instead of quietly making the spec pass — a guard the criteria did not require."
+          }
+        ],
+        "overallPass": true,
+        "summary": "A genuinely end-to-end browser proof: real LocalStack seeding at the publisher's exact key layout, a per-run unique segment key, row-scoped assertions on version/attribute/unused, attach driven through the real <select>, and verification both in the rendered rules and in the stored S3 snapshot."
+      }
+    }
+  ]
+}

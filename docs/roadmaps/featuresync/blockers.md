@@ -35,7 +35,7 @@
 - 2026-09-20 | horizon 17 | Does the app.js FileReader upload work in real browsers? Nothing tests it end to end yet.
 - 2026-09-20 | horizon 17 | Should setRollout on a schemaVersion 1 snapshot upgrade it to 2, or keep failing and force an explicit migration?
 - 2026-09-20 | horizon 17 | Should a rollout edit that only changes `enabled` on the same flag really auto-replay, or does per-rule editing need a finer conflict check?
-- 2026-09-20 | horizon 17 | A segment publish that loses the pointer IfMatch race leaves an orphaned version object from the IfNoneMatch body put. Readers never see it, but nothing cleans it up. Lifecycle rule, or delete on CONFLICT?
+- 2026-09-20 | horizon 17 | A segment publish that loses the pointer IfMatch race leaves an orphaned version object from the IfNoneMatch body put. Readers never see it, but nothing cleans it up. Lifecycle rule, — see horizon-17 roadmap.md
 - 2026-09-20 | horizon 18 | Where should the browser+LocalStack proof run in CI — inside the existing localstack job, or a third job standing up its own LocalStack? — resolved by decision 2026-09-20
 - 2026-09-20 | horizon 18 | How does the Playwright process get AWS endpoint/credentials? playwright.config.ts has no .env loading; is .env or CI-supplied env right? — resolved by decision 2026-09-20
 - 2026-09-20 | horizon 18 | Which browser does CI use — bundled Chromium with an install step, or the locally installed Chrome channel the config defaults to? — resolved by decision 2026-09-20
@@ -59,7 +59,17 @@
 - 2026-09-20 | horizon 20 | Can the browser e2e suite be moved off the in-memory InMemoryEnvironment fake onto localstack-fixtures without a rewrite, and what would that cost?
 - 2026-09-20 | horizon 20 | How much logic now lives in app.js, which is permanently outside the 100% coverage include glob, and what is the project's standing rule for when that logic must move into a covered .ts module?
 - 2026-09-20 | horizon 20 | What is the localstack CI job's actual wall-clock runtime since the Chromium install and browser suite were added, and does retries:0 remain tenable at that runtime and failure surface?
-- 2026-09-20 | horizon 21 | A hand-typed Member Attribute that does not match the one the segment was uploaded with yields a rule matching nobody, and nothing detects it. Is a memberAttribute-only read port — see horizon-21 roadmap.md
-- 2026-09-20 | horizon 21 | A segment created but not yet referenced by any flag rule appears in no listing; is the on-page note enough, or does an unreferenced-segment list need a storage mechanism that does not require bucket listing?
+- 2026-09-20 | horizon 21 | A hand-typed Member Attribute that does not match the uploaded one yields a rule matching nobody — resolved by decision 2026-09-20 (stored on the Segment Pointer, read back, never typed)
+- 2026-09-20 | horizon 21 | A segment created but not yet referenced by any flag rule appears in no listing — resolved by decision 2026-09-20 (the dashboard lists the <env>/segments/ prefix; no index object)
 - 2026-09-20 | horizon 21 | Does detach-by-rule-index stay correct in practice once operators reorder or hand-edit rules between render and submit?
 - 2026-09-20 | horizon 21 | EDIT_PARSERS is a plain object keyed by the untrusted form field, so field=toString answers 400 with an undefined message instead of 422 — fix with Object.create(null) or a hasOwn — see horizon-21 roadmap.md
+- 2026-09-20 | horizon 23 | Should creating a flag with segments widen the existing 'create' FlagEdit kind (preserving canReplayEdit's create-specific replay rule for free) or introduce a new kind, and if — see horizon-23 roadmap.md
+- 2026-09-20 | horizon 23 | Where do bucketBy and salt come from when the operator only enters a rollout percentage at create time — reuse the rollout form's defaults (bucketBy='userId', salt=''), derive salt — see horizon-23 roadmap.md
+- 2026-09-20 | horizon 23 | Should a rollout percentage be optional per attached segment at create time (rule with no rollout = 100%), or required for every attached segment?
+- 2026-09-20 | horizon 23 | Should attachSegment itself gain an optional rollout (making attach-then-setRollout one round trip), or does per-segment rollout exist only on the create path?
+- 2026-09-20 | horizon 23 | How should the schemaVersion-1 rejection guard in applyFlagEdit generalize — keyed on 'the edit produces a segment rule' rather than edit.kind === 'attachSegment' — and what error — see horizon-23 roadmap.md
+- 2026-09-20 | horizon 23 | What is the exact HTML form encoding for repeated segment rows in renderNewFlagForm (segmentKey[]/percentage[] vs indexed names), and how does the existing form-field parser in — see horizon-23 roadmap.md
+- 2026-09-20 | horizon 23 | What does CreateDraft echo back after a failed create — are partially filled segment rows preserved, and in what order?
+- 2026-09-20 | horizon 23 | Can a create-with-segments be submitted when the environment has no published segments, and what does the form render then?
+- 2026-09-20 | horizon 23 | Is horizon 22's orphaned-object cleanup still wanted at all, or has horizon 23's decision to list the <env>/segments/ prefix changed its premise (a prefix listing now makes orphans visible)?
+- 2026-09-20 | horizon 23 | Does the segment picker on the new-flag form need the same 'unknown attribute' state as the attach form, and can a segment with no stored memberAttribute be attached at create time at all?

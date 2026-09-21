@@ -1,4 +1,5 @@
 import type { EnvironmentView, SnapshotMetadata, VersionEntry } from '../../application/browse-environment.js';
+import type { PublishedSegmentsView } from '../../application/list-published-segments.js';
 import { environmentPath, escapeHtml } from './escape.js';
 import type { EditDraft } from './feature-edit-form.js';
 import { renderPage, renderRawJson, renderTimestamp, type Notice } from './layout.js';
@@ -11,6 +12,8 @@ export interface EnvironmentPageState {
   readonly draft?: string;
   readonly editDraft?: EditDraft;
   readonly createDraft?: CreateDraft;
+  /** Loaded by the route so the attach form can offer a picker; absent renders it as unreadable. */
+  readonly publishedSegments?: PublishedSegmentsView;
   /** An edit was rejected because someone published first; the page offers to review what changed since. */
   /** `key` names the flag whose edit was rejected; absent when the rejected change was a pasted snapshot. */
   readonly conflict?: { readonly since: number; readonly key?: string };
@@ -73,7 +76,7 @@ const renderFlags = (view: PublishedView, state: EnvironmentPageState): string =
   const context = {
     environment: view.environment,
     baseVersion: view.currentVersion,
-    segmentKeys: current.contents.status === 'valid' ? current.contents.segmentKeys : [],
+    publishedSegments: state.publishedSegments ?? { status: 'unavailable' as const },
   };
   const flags = renderSnapshotContents(current.contents, {
     ...context,

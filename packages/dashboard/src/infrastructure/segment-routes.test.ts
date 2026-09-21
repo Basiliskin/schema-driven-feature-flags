@@ -1,6 +1,7 @@
 import { request as httpRequest, type OutgoingHttpHeaders } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SegmentPointer } from '@featuresync/aws';
+import type { PublishedSegment, PublishedSegmentListing } from '../application/list-published-segments.js';
 import { MAX_BODY_BYTES, startDashboardServer, type DashboardPorts, type RunningDashboard } from './http-server.js';
 import { MAX_SEGMENT_CSV_BYTES } from './segment-routes.js';
 
@@ -34,6 +35,7 @@ const fakes = (overrides: Partial<DashboardPorts> = {}): Fakes => {
       openWriter: () => ({ publish: () => Promise.resolve(4), rollback: (_env: string, v: number) => Promise.resolve(v) }),
       publishSegment,
       readSegmentVersion,
+      listPublishedSegments: overrides.listPublishedSegments ?? (() => Promise.resolve({ status: 'listed', segments: [] })),
     },
   };
 };
@@ -283,15 +285,23 @@ const snapshotText = (segmentKeys: readonly string[]): string =>
     ),
   });
 
-const listFakes = (segmentKeys: readonly string[], readSegmentVersion: DashboardPorts['readSegmentVersion']): DashboardPorts => ({
-  ...fakes({ readSegmentVersion }).ports,
+const published = (segmentKey: string, memberAttribute?: string): PublishedSegment => ({
+  segmentKey,
+  version: 4,
+  ...(memberAttribute === undefined ? {} : { memberAttribute }),
+});
+
+const listFakes = (listing: PublishedSegmentListing, referencedKeys: readonly string[] = []): DashboardPorts => ({
+  ...fakes({ listPublishedSegments: () => Promise.resolve(listing) }).ports,
   readCurrentVersion: () => Promise.resolve(1),
-  fetchSnapshotText: () => Promise.resolve(snapshotText(segmentKeys)),
+  fetchSnapshotText: () => Promise.resolve(snapshotText(referencedKeys)),
 });
 
 describe('the segment list route', () => {
-  it('lists every referenced segment with its pointer version', async () => {
-    const dashboard = await start(listFakes(['beta', 'staff'], () => Promise.resolve(4)));
+  it('lists every published segment with its version, attribute and using flags', async () => {
+    const dashboard = await start(
+      listFakes({ status: 'listed', segments: [published('beta', 'userId'), published('staff', 'accountId')] }, ['beta']),
+    );
 
     const page = await call(dashboard, 'GET', LIST_PATH);
 
@@ -299,20 +309,37 @@ describe('the segment list route', () => {
     expect(page.body).toContain('>beta</a>');
     expect(page.body).toContain('>staff</a>');
     expect(page.body).toContain('version 4');
+    expect(page.body).toContain('accountId');
+    expect(page.body).toContain('>flag-0<');
   });
 
-  it('distinguishes a segment with no pointer from one whose pointer cannot be read', async () => {
-    const dashboard = await start(
-      listFakes(['beta', 'staff'], (_environment, key) =>
-        key === 'beta' ? Promise.resolve(null) : Promise.reject(new Error('boom')),
-      ),
-    );
+  it('shows a published segment no flag references, rather than filtering it out', async () => {
+    const dashboard = await start(listFakes({ status: 'listed', segments: [published('staff', 'userId')] }));
 
     const page = await call(dashboard, 'GET', LIST_PATH);
 
     expect(page.status).toBe(200);
-    expect(page.body).toContain('>not published<');
-    expect(page.body).toContain('>unavailable<');
+    expect(page.body).toContain('>staff</a>');
+    expect(page.body).toContain('used by no flag');
+  });
+
+  it('marks a segment published before attributes were recorded instead of guessing one', async () => {
+    const dashboard = await start(listFakes({ status: 'listed', segments: [published('legacy')] }));
+
+    const page = await call(dashboard, 'GET', LIST_PATH);
+
+    expect(page.status).toBe(200);
+    expect(page.body).toContain('unknown (published before attributes were recorded)');
+  });
+
+  it('serves the page with a could-not-read state rather than a 500 when the catalogue is unavailable', async () => {
+    const dashboard = await start(listFakes({ status: 'unavailable' }));
+
+    const page = await call(dashboard, 'GET', LIST_PATH);
+
+    expect(page.status).toBe(200);
+    expect(page.body).toContain('The segment catalogue could not be read');
+    expect(page.body).not.toContain('No segments published yet');
   });
 
   it('still serves the segment page and upload route for a four-part path', async () => {
@@ -379,7 +406,7 @@ describe('creating a segment from the list page', () => {
   });
 
   it('still renders the list on GET', async () => {
-    const dashboard = await start(listFakes(['beta'], () => Promise.resolve(4)));
+    const dashboard = await start(listFakes({ status: 'listed', segments: [published('beta', 'userId')] }, ['beta']));
 
     const page = await call(dashboard, 'GET', LIST_PATH);
 

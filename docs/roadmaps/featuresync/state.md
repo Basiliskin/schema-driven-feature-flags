@@ -45,3 +45,7 @@
 - 2026-09-20 | horizon 20 | completed | 2 phases (document the field-granular replay rule; test both outcomes of the pointer-read window); 1 amendment, 0 overrides; no behaviour change to product code
 - 2026-09-20 | horizon 21 | planned | 7 phases (schemaVersion-2 first-version template, create-segment POST branch, Create Segment form, attach/detach flag edits, edit outcomes, form parsing with lenient config — see horizon-21 roadmap.md
 - 2026-09-20 | horizon 21 | completed | 7 phases (schemaVersion-2 template, create-segment POST branch, Create Segment form, attach/detach flag edits, edit outcomes, form parsing, Attach form + Detach list); 3 amendments, 0 overrides
+- 2026-09-20 | horizon 22 | planned | 6 phases (prove the orphan on LocalStack, teach the fake S3 deletes, snapshot cleanup delete, segment cleanup delete, IAM delete permission, noncurrent-version lifecycle — see horizon-22 roadmap.md
+- 2026-09-20 | horizon 22 | superseded | by horizon 23: user chose segment picker/listing UX over orphaned-object cleanup; plan kept, never executed
+- 2026-09-20 | horizon 23 | planned | 6 phases (store Member Attribute on the Segment Pointer, published-segments use case, S3 segments-prefix lister, Segment List columns, picker-based attach, browser proof); — see horizon-23 roadmap.md
+- 2026-09-21 | horizon 23 | completed | 6 phases (Member Attribute on the Segment Pointer, published-segments use case, S3 segments-prefix lister, Segment List columns, picker-based attach, browser proof); 2 amendments, 0 overrides
