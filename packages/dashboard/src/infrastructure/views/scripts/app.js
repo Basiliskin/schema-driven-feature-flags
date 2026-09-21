@@ -32,7 +32,6 @@
     var list = document.querySelector('.' + input.getAttribute('data-filter'));
     if (!list) return;
     var empty = list.parentNode.querySelector('[data-filter-empty]');
-    input.hidden = false;
     input.addEventListener('input', function () {
       var terms = input.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
       var shown = 0;

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { NO_URL_STATE } from '../url-state.js';
 import type { FlagDefinitionView } from '../../application/browse-environment.js';
 import { renderFeatureEditForm, type EditContext } from './feature-edit-form.js';
 import { renderRolloutForms } from './rollout-form.js';
@@ -6,7 +7,7 @@ import { STYLESHEET } from './stylesheet.js';
 
 const ACTION = '/env/production/features/checkout';
 const BASE_VERSION_INPUT = '<input type="hidden" name="baseVersion" value="7">';
-const CONTEXT: EditContext = { environment: 'production', baseVersion: 7 };
+const CONTEXT: EditContext = { environment: 'production', baseVersion: 7, urlState: NO_URL_STATE };
 
 const flagWith = (rules: readonly unknown[]): FlagDefinitionView => ({
   key: 'checkout',
@@ -24,7 +25,8 @@ const ROLLED_OUT_RULE = {
 };
 const PLAIN_RULE = { when: { plan: 'free' }, enabled: false };
 
-const render = (rules: readonly unknown[]): string => renderRolloutForms(flagWith(rules), ACTION, BASE_VERSION_INPUT);
+const render = (rules: readonly unknown[]): string =>
+  renderRolloutForms(flagWith(rules), { action: ACTION, baseVersionInput: BASE_VERSION_INPUT, stateInputs: '' });
 
 describe('renderRolloutForms', () => {
   it('shows a badge only for the rule that has a rollout', () => {
@@ -164,5 +166,20 @@ describe('the stylesheet', () => {
   it('serves the rollout rules', () => {
     expect(STYLESHEET).toContain('.badge-rollout');
     expect(STYLESHEET).toContain('.rule-segments');
+  });
+});
+
+describe('the URL state the rollout and detach forms carry', () => {
+  const STATE_INPUTS = '<input type="hidden" name="filter" value="dark">';
+  const render = (rules: readonly unknown[]): string =>
+    renderRolloutForms(flagWith(rules), { action: ACTION, baseVersionInput: BASE_VERSION_INPUT, stateInputs: STATE_INPUTS });
+
+  it('puts it in the set-rollout form and in the detach form of a segment rule', () => {
+    const html = render([{ when: { plan: { inSegment: 'beta-testers' } }, rollout: { percentage: 40, bucketBy: 'userId', salt: '' } }]);
+    const forms = html.split('<form method="post"').slice(1);
+
+    expect(forms).toHaveLength(2);
+    for (const body of forms) expect(body).toContain(STATE_INPUTS);
+    expect(html).toContain('value="detachSegment"');
   });
 });

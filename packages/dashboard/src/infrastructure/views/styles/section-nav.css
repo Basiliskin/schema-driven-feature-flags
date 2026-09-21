@@ -1,0 +1,26 @@
+.section-nav {
+  /* Clears the update banner, which sticks at top 0.5rem and is about 2.5rem tall; a lower stacking
+     order than the banner's 10 keeps the banner on top wherever the two still meet. */
+  position: sticky;
+  top: 3.25rem;
+  z-index: 9;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  margin: 0 0 1rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.section-nav > a {
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.section-nav > a:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}

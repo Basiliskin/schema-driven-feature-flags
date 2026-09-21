@@ -51,3 +51,5 @@
 - 2026-09-21 | horizon 23 | completed | 6 phases (Member Attribute on the Segment Pointer, published-segments use case, S3 segments-prefix lister, Segment List columns, picker-based attach, browser proof); 2 amendments, 0 overrides
 - 2026-09-21 | horizon 24 | planned | 5 phases (one-read segment list, five-version window, paged version use case, versions route, flag page); items 3-5 of the user's five deferred to horizon 25 — see horizon-24 roadmap.md
 - 2026-09-21 | horizon 24 | completed | 5 phases (one-read segment list, five-version window, paged version use case, versions route, bookmarkable flag page); 1 amendment, 0 overrides
+- 2026-09-21 | horizon 25 | planned | 6 phases (query-string state module, server-side flag filter function, server-filtered flag list, URL-driven open flag rows, state echo through eight write forms, sticky Section Nav); user chose all six over the 3-phase cut — see horizon-25 roadmap.md
+- 2026-09-21 | horizon 25 | completed | 6 phases (query-string state module, server-side flag filter, server-filtered flag list, URL-driven open rows, state echo through eight write forms, sticky Section Nav); 0 amendments, 0 overrides

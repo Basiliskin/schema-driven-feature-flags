@@ -47,7 +47,9 @@ test('lists a published segment and attaches it to a flag through the chooser', 
 
   await page.goto(`${dashboard.url}/env/${environment}`);
   const flag = page.locator(`[data-flag="${SEED_FLAG}"]`);
-  await flag.locator('.flag-row > summary').click();
+  // Opened through the Expand link rather than the disclosure widget, so the row is named in the URL and the
+  // attach form carries it through the publish below.
+  await flag.getByRole('link', { name: 'Expand' }).click();
 
   const attach = flag.locator('details.segment-attach');
   await attach.locator('summary').click();
@@ -57,8 +59,8 @@ test('lists a published segment and attaches it to a flag through the chooser', 
 
   await expect(page.getByText(`Published version 2 to ${environment}.`)).toBeVisible();
 
-  // The reload after the publish collapses every <details> again, so the flag has to be reopened.
-  await flag.locator('.flag-row > summary').click();
+  // The flag row comes back open from the URL state; the nested rollout panel is deliberately outside that
+  // contract, so it still has to be opened by hand.
   await flag.locator('details.rollouts > summary').click();
   await expect(flag.locator('.rule-segment').filter({ hasText: segmentKey })).toBeVisible();
 

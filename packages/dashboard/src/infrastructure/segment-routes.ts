@@ -37,6 +37,8 @@ const parseExpectedVersion = (value: string | null): number | null => {
   return Number(value);
 };
 
+// The segment routes carry no filter/open state: that state describes the environment page's flag list, and
+// segments are their own pages. Leaving it out here is deliberate, not an oversight.
 export function matchSegmentRoute(
   ports: SegmentRoutePorts,
   environment: string,

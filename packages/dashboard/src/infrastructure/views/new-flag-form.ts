@@ -1,6 +1,8 @@
 import type { FlagType } from '../../domain/flag-edit.js';
+import { withUrlState, type DashboardUrlState } from '../url-state.js';
 import { environmentPath, escapeHtml } from './escape.js';
 import { renderDraftError } from './feature-edit-form.js';
+import { stateInputs } from './state-fields.js';
 
 export interface CreateDraft {
   readonly key: string;
@@ -14,6 +16,7 @@ export interface CreateDraft {
 export interface NewFlagContext {
   readonly environment: string;
   readonly baseVersion: number;
+  readonly urlState: DashboardUrlState;
   readonly draft?: CreateDraft;
 }
 
@@ -23,12 +26,12 @@ const typeOption = (type: FlagType, selected: FlagType): string =>
 export const renderNewFlagForm = (context: NewFlagContext): string => {
   const { draft } = context;
   const type = draft?.type ?? 'boolean';
-  const action = `${environmentPath(context.environment)}/features`;
+  const action = withUrlState(`${environmentPath(context.environment)}/features`, context.urlState);
   // Opened when a create draft was rejected, so the operator sees the error next to their input.
   return `<details class="card"${draft === undefined ? '' : ' open'}>
 <summary>New flag</summary>
 ${draft === undefined ? '' : renderDraftError(draft)}<form method="post" action="${escapeHtml(action)}" class="stack">
-<input type="hidden" name="baseVersion" value="${String(context.baseVersion)}">
+<input type="hidden" name="baseVersion" value="${String(context.baseVersion)}">${stateInputs(context.urlState)}
 <div class="form-row">
 <label>Key <input type="text" name="key" required value="${escapeHtml(draft?.key ?? '')}" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
 <label>Type <select name="type">${typeOption('boolean', type)}${typeOption('config', type)}</select></label>

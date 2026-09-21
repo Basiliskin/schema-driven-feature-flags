@@ -212,6 +212,12 @@ pre {
   padding-bottom: 1rem;
 }
 
+.flag-filter-form {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .flag-filter {
   width: 100%;
   max-width: 18rem;

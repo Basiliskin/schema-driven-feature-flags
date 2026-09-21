@@ -1,8 +1,10 @@
 import type { FlagDefinitionView } from '../../application/browse-environment.js';
 import type { PublishedSegmentsView } from '../../application/list-published-segments.js';
-import { environmentPath, escapeHtml } from './escape.js';
+import { withUrlState, type DashboardUrlState } from '../url-state.js';
+import { escapeHtml, flagPath } from './escape.js';
 import { renderRolloutForms } from './rollout-form.js';
 import { renderSegmentAttachForm } from './segment-attach-form.js';
+import { stateInputs, type WriteFormContext } from './state-fields.js';
 
 export interface EditDraft {
   readonly key: string;
@@ -19,6 +21,8 @@ export interface EditDraft {
 export interface EditContext {
   readonly environment: string;
   readonly baseVersion: number;
+  /** The view to come back to after a write; every form below carries it so a submit does not reset the page. */
+  readonly urlState: DashboardUrlState;
   readonly draft?: EditDraft;
   /** Every segment published in the Environment, loaded by the route and offered by the attach form. */
   readonly publishedSegments?: PublishedSegmentsView;
@@ -50,11 +54,17 @@ const renderRulesControl = (flag: FlagDefinitionView, draft: EditDraft | undefin
 const baseVersionInput = (context: EditContext): string =>
   `<input type="hidden" name="baseVersion" value="${String(context.baseVersion)}">`;
 
+const writeFormContext = (flag: FlagDefinitionView, context: EditContext): WriteFormContext => ({
+  action: withUrlState(flagPath(context.environment, flag.key), context.urlState),
+  baseVersionInput: baseVersionInput(context),
+  stateInputs: stateInputs(context.urlState),
+});
+
 // A <details> disclosure is the confirmation step, so the page needs no JavaScript confirm().
-const renderDeleteControl = (flag: FlagDefinitionView, action: string, context: EditContext): string =>
+const renderDeleteControl = (flag: FlagDefinitionView, form: WriteFormContext): string =>
   `<details class="danger-zone"><summary>Delete</summary>
-<form method="post" action="${escapeHtml(action)}">
-${baseVersionInput(context)}
+<form method="post" action="${escapeHtml(form.action)}">
+${form.baseVersionInput}${form.stateInputs}
 <p>Delete ${escapeHtml(flag.key)}? This publishes a new version without it.</p>
 <button type="submit" class="button-danger" name="field" value="delete">Delete ${escapeHtml(flag.key)}</button>
 </form>
@@ -63,20 +73,19 @@ ${baseVersionInput(context)}
 export const renderFeatureEditForm = (flag: FlagDefinitionView, context: EditContext): string => {
   const draft = context.draft?.key === flag.key ? context.draft : undefined;
   const enabled = draft?.enabled ?? flag.enabled;
-  const action = `${environmentPath(context.environment)}/features/${encodeURIComponent(flag.key)}`;
-  return `${draft === undefined ? '' : renderDraftError(draft)}<form method="post" action="${escapeHtml(action)}" class="stack">
-${baseVersionInput(context)}
+  const form = writeFormContext(flag, context);
+  return `${draft === undefined ? '' : renderDraftError(draft)}<form method="post" action="${escapeHtml(form.action)}" class="stack">
+${form.baseVersionInput}${form.stateInputs}
 <div class="form-row"><label class="check"><input type="checkbox" name="enabled"${enabled ? ' checked' : ''}> Enabled</label>
 <button type="submit" name="field" value="enabled">Save enabled</button></div>
 ${flag.type === 'config' ? renderDefaultControl(flag, draft) : ''}
 ${renderRulesControl(flag, draft)}
 </form>
-${renderRolloutForms(flag, action, baseVersionInput(context))}
+${renderRolloutForms(flag, form)}
 ${renderSegmentAttachForm(flag, {
-    action,
-    baseVersionInput: baseVersionInput(context),
+    ...form,
     segments: context.publishedSegments ?? { status: 'unavailable' },
     ...(draft === undefined ? {} : { draft }),
   })}
-${renderDeleteControl(flag, action, context)}`;
+${renderDeleteControl(flag, form)}`;
 };

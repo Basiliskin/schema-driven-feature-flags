@@ -1,0 +1,1039 @@
+{
+  "task": "Horizon 25 of the FeatureSync dashboard: put the dashboard's UI state (flag filter text and which flag rows are open) in the URL query string rendered server-side so a page is bookmarkable and survives a form submit; build the server-side flag filter on top of that contract while keeping the in-browser instant filter as progressive enhancement; and add a sticky Section Nav. Write POSTs keep re-rendering inline with 200/400/422 and draft values \u2014 redirect-after-POST is rejected.",
+  "analysis": {
+    "objective": "Move the FeatureSync dashboard's UI state \u2014 the flag filter text and which flag rows are open \u2014 into a server-rendered query-string contract on the environment page, rebuild the flag filter server-side on top of it while keeping the in-browser instant filter as progressive enhancement, and add a sticky Section Nav, so the environment page is bookmarkable and survives a write POST.",
+    "successDefinition": "Done when: (1) a single URL-State contract module in packages/dashboard owns the query-string keys (filter text, open flag keys, and the existing version page/pageSize) \u2014 no flag-list paging key is added \u2014 parses them with the established strict-parse/HttpError(400) style for the numeric keys and leniently for the rest, caps and deduplicates the lenient inputs, and re-serialises them through one helper consistent with flagPath/versionsPath; (2) GET of THE ENVIRONMENT PAGE renders filter text and flag-row open/closed state purely from the query string with no JS required, and copying that URL into a fresh browser reproduces the same rendered state \u2014 the flag page, the versions page and collapsible page-sections are explicitly NOT covered and stay deferred; (3) every write POST (feature edit, feature delete, rollout set/remove, segment attach, new flag, publish, rollback) still re-renders inline with 200/400/422 with draft values, notices and field-granular replay behaviour unchanged, and each such form echoes the URL state so the re-rendered page preserves filter and open rows; (4) the flag list is filtered server-side with documented matching semantics reproducing today's browser rule including its two known quirks, the client-side live filter in app.js is RETAINED as progressive enhancement over the already-filtered set (not removed), and flag-list.spec.ts covers both the server submit-and-render flow and the retained instant filtering; flag paging is recorded as deliberately not built; (5) a sticky Section Nav renders on the environment page with links that carry the URL state, styled via a per-feature sheet registered in STYLE_FILES; (6) pnpm verify is green with 100% line/branch/function/statement coverage over packages/*/src/**/*.ts, lint/layer rules clean, and the Playwright suite (including at least one spec proving bookmarkability and open-rows-survive-submit) passes with retries:0.",
+    "assumptions": [
+      "Redirect-after-POST is off the table by user instruction; state travels through hidden form fields and/or form action query strings, and the horizon-23 'every POST collapses every <details>' workaround is retired by server-rendered openness rather than by redirecting.",
+      "Open/closed state covers the per-flag <details class=\"flag-row\"> rows on the environment page only, encoded as a bounded, deduplicated, length-capped list of flag keys so the query string cannot grow without limit. Page-level sections are NOT collapsible today and are deferred; nested rollout/segment panels stay client-controlled.",
+      "Server-side filter reproduces today's composite client match (key, type, on|off, lowercased, whitespace-split terms, AND, substring) so behaviour does not regress; the client-side live filter is kept as progressive enhancement layered over the server-filtered set (user decision), not removed; an unmatched filter renders the existing empty-state, never an error.",
+      "The query-string module horizon 24 deferred as premature is now justified, since three pages read overlapping keys.",
+      "Flag paging is treated as conditional: flags all come from one already-read snapshot, so paging is a UI/scroll win at best and is built only if the horizon has room after items 3 and 4.",
+      "Unknown or malformed query values fail the established way \u2014 strict parse to HttpError(400) for numeric page params, lenient ignore for unknown open-ids and over-long filter text \u2014 and are tested in the same phase they are written.",
+      "app.js stays outside the coverage gate per the horizon-18 decision, so any logic moved off it lands in covered .ts view modules; no new app.js logic is added.",
+      "The existing e2e seed (3 flags, 1 version) may need a few more seeded flags to exercise filtering/paging; enlarging it is in scope only to the extent existing specs' counts must be updated."
+    ],
+    "risks": [
+      "Blast radius: roughly six view/form modules plus three POST handlers in http-server.ts must echo state; a single form left un-echoed silently loses filter/open state and is easy to miss without a per-form test.",
+      "Rejecting POST-redirect-GET means state correctness now depends on hand-written hidden inputs in every form, which is the fragile path; the compensating control is an exhaustive per-form test asserting the echoed fields.",
+      "The 100% branch gate over hand-written HTML strings \u2014 already a standing open blocker \u2014 gets materially harder with filter/open-state conditionals in every view; test files may balloon or the gate may force awkward view shapes.",
+      "Encoding open flag rows in the URL is an unbounded-input surface: without a hard cap on count and value length, a crafted URL becomes a cheap render-amplification/DoS vector and a long-URL 414 source.",
+      "Filter text and flag keys flow into HTML and into form action URLs, so any path missing escapeHtml/encodeURIComponent is an injection defect; existing escape helpers must be used on every new emission point.",
+      "flag-list.spec.ts is being replaced rather than extended; if the rewrite is weaker than the original, loss of live-filter coverage will not be visible to the coverage gate (e2e is excluded from it).",
+      "Scope overflow is likely at six-to-eight phases; Section Nav is the designated drop, but dropping it after its CSS/markup is half-landed would leave dead STYLE_FILES entries.",
+      "Server-rendered openness can fight app.js's existing details.open = true replay behaviour, producing rows that reopen or refuse to close; ownership must be decided once, not per page.",
+      "Open blockers about the concurrent-replay 200+422 race and the pointer-read window remain unresolved; touching every write form raises the chance of tripping that flakiness in CI."
+    ],
+    "outOfScope": [
+      "Redirect-after-POST / POST-redirect-GET for any write handler \u2014 explicitly rejected by the user; inline 200/400/422 re-render with draft values and field-granular replay must not change.",
+      "Any change to edit, publish, rollback or replay semantics, including the unresolved 200+422 concurrent-replay race \u2014 this horizon moves UI state, not write behaviour.",
+      "Segment List filtering, paging or URL state \u2014 only flags and versions are in the contract; segments stay as horizon 23/24 left them.",
+      "Version-index or bucket-listing shortcuts \u2014 the horizon-24 decision that version history is paged arithmetically from the Current Pointer stands.",
+      "New client-side behaviour in app.js \u2014 app.js is outside the coverage gate, so logic moves to the server rather than growing there.",
+      "Fixing the double snapshot read per environment-page render (browseEnvironment + listPublishedSegments) \u2014 a known read-cost discovery, but a separate performance concern.",
+      "Retiring the dead listReferencedSegments module and other recorded tech debt \u2014 unrelated cleanup that would dilute this horizon's diff.",
+      "Visual redesign, theming or responsive rework of the dashboard beyond the sticky Section Nav's own per-feature stylesheet.",
+      "Authentication, authorization or sharing semantics for bookmarkable URLs \u2014 the dashboard's existing Origin/Host localhost guard is unchanged.",
+      "URL state on the flag page and the versions page, and collapsible page-level sections \u2014 the success bar was deliberately narrowed to the environment page at the alignment checkpoint so the horizon can pass its own bar.",
+      "Removing the client-side live filter from app.js \u2014 the user chose to keep it as progressive enhancement over the server-filtered list, so no UX regression and no loss of its existing e2e coverage."
+    ],
+    "domainShape": "technical",
+    "domainShapeReason": "The objective is about the dashboard's HTTP/URL plumbing and server-side rendering machinery \u2014 query-string parsing, form round-trips, view markup and nav chrome \u2014 not about flag, segment or snapshot domain rules, which are untouched.",
+    "ubiquitousLanguage": [
+      {
+        "term": "URL State",
+        "meaning": "The dashboard's UI state carried in the query string (filter text, open sections, open flag rows, page numbers) and rendered server-side."
+      },
+      {
+        "term": "Query-String Contract",
+        "meaning": "The single module owning the key spellings, value grammar, parsing, clamping and re-serialisation of URL State, shared by the environment, flag and versions pages."
+      },
+      {
+        "term": "Flag Filter",
+        "meaning": "The server-side substring match over a flag's key, type and on/off state that selects which flag rows are rendered; successor to the app.js live filter."
+      },
+      {
+        "term": "Open/Closed State",
+        "meaning": "Which page sections and per-flag <details> rows render expanded, decided by URL State instead of by the browser or app.js."
+      },
+      {
+        "term": "State Echo",
+        "meaning": "The hidden form fields and/or form action query string by which a write POST carries URL State through an inline re-render, with no redirect."
+      },
+      {
+        "term": "Section Nav",
+        "meaning": "The sticky in-page navigation strip on dashboard pages whose links carry URL State forward."
+      },
+      {
+        "term": "Flag Page",
+        "meaning": "The per-flag GET route added in horizon 24 (flagPath) that URL State deep-links into."
+      },
+      {
+        "term": "Coverage Gate",
+        "meaning": "The CI-enforced 100% line/branch/function/statement threshold over packages/*/src/**/*.ts that every new view branch must satisfy in the phase that writes it."
+      },
+      {
+        "term": "URL State Contract",
+        "meaning": "The URL State Contract subsystem of the dashboard \u2014 the pipeline stage this horizon's phase of that name delivers."
+      }
+    ]
+  },
+  "discoveryFindings": [
+    {
+      "area": "routing / dispatch",
+      "finding": "dispatch() builds new URL(String(request.url), 'http://localhost'), splits pathname into non-empty segments, then calls match(segments, request.method). The URL object (including url.searchParams) is passed as the 3rd arg to route.handle, so every handler already has query access \u2014 but only 4 handlers use it: home ('env'), /changes ('since','edited'), /versions ('page','pageSize'). All POST handlers take only (request, response) and ignore the URL entirely.",
+      "filePath": "packages/dashboard/src/infrastructure/http-server.ts",
+      "implication": "No new plumbing is needed to read the query string in POST handlers: just add the url param to their handle signatures. Form-action query strings are therefore the cheaper echo mechanism than hidden fields for handlers, though hidden fields are needed for the fields readForm() sees. Plan should pick one and state it, since both are already available."
+    },
+    {
+      "area": "routing / segment guard",
+      "finding": "match() has a hard guard: if (segments[0] !== 'env' || segments.length < 2 || segments.length > 4) return undefined. Everything is keyed off segments.length (2/3/4) plus segments[2] equality. Branch order: [] home, STYLESHEET_PATH, CLIENT_SCRIPT_PATH, guard, len2 env page, current-version, changes, merge, merge/apply, publish, rollback, features (create), features/:key (POST editRoute else GET flag page), matchSegmentRoute, versions (list), versions/:n, undefined.",
+      "filePath": "packages/dashboard/src/infrastructure/http-server.ts",
+      "implication": "Any new route must fit within 2-4 segments. Adding URL state needs no routing change at all \u2014 it is query-string only, the lowest-risk shape."
+    },
+    {
+      "area": "strict query parsing style",
+      "finding": "Two parsers exist. parseVersion(value): /^[1-9]\\d{0,8}$/ else throw new HttpError(400,'The version must be a positive integer.'). parsePageNumber(value, fallback, message): null -> fallback, else same regex or HttpError(400) with PAGE_MESSAGE / PAGE_SIZE_MESSAGE. parseBaseVersion(fields) is the lenient sibling: same regex but returns undefined on failure, which callers convert into a 400/422 inline draft failure with BASE_VERSION_MESSAGE.",
+      "filePath": "packages/dashboard/src/infrastructure/http-server.ts",
+      "implication": "The URL-state module should reuse exactly these two idioms: strict-throw for numeric page keys, lenient-ignore for open-ids and filter text. The regex caps at 9 digits, so clamping happens downstream in listVersionPage (clamp to 1..MAX_VERSION_PAGE_SIZE=50), not in the parser. A new contract module must decide where clamping lives and stay consistent."
+    },
+    {
+      "area": "POST handlers \u2014 exact inventory",
+      "finding": "Five POST re-render surfaces in http-server.ts: (a) editRoute, a factory used twice \u2014 POST /env/:e/features (create, draftState -> {createDraft}) and POST /env/:e/features/:key (edit, draftState -> {editDraft}); it re-renders renderEnvironmentPage(view, state) with 200 success / 400 when outcome.invalidInput===true / 422 otherwise; (b) POST /publish echoes draft + conflict; (c) POST /rollback no draft; (d) POST /merge returns a fragment; (e) POST /merge/apply returns JSON 200/409. Plus segment-routes.ts has POST /segments and POST /segments/:key.",
+      "filePath": "packages/dashboard/src/infrastructure/http-server.ts",
+      "implication": "The brief's 'three POST handlers' undercounts: editRoute is one factory but two routes, plus publish and rollback = 4 environment-page re-renders that must re-render URL state. merge/merge-apply are fragment/JSON and need no state. Segment POSTs are out of scope, so they need no echo \u2014 the plan should say so to avoid a reviewer flagging them."
+    },
+    {
+      "area": "path helpers (horizon 24)",
+      "finding": "There is no single helpers module. environmentPath(environment) lives in views/escape.ts alongside escapeHtml. flagPath(environment, key) lives in views/flag-page.ts = environmentPath(e) + '/features/' + encodeURIComponent(key) \u2014 no query params. versionsPath(environment, page = 1) lives in views/version-list-page.ts and appends bare '?page=' with no merging of other keys \u2014 the only helper that appends a query. segmentListPath in segment-list-page.ts, segmentPath in segment-page.ts. feature-edit-form.ts and new-flag-form.ts build their form actions inline rather than calling flagPath.",
+      "filePath": "packages/dashboard/src/infrastructure/views/version-list-page.ts",
+      "implication": "versionsPath's '?page=' must be refactored to compose with the new contract or the version pager will drop filter/open state. feature-edit-form's inline action duplicates flagPath's expression \u2014 the most likely place state gets lost. Path helpers are scattered across 5 files; centralising them is a natural companion to the contract module."
+    },
+    {
+      "area": "view modules inventory",
+      "finding": "20 modules under views/ with line counts: error-page 4, client-script 10, escape 12, home-page 13, stylesheet 15, version-page 31, segment-page 40, new-flag-form 41, flag-page 44, snapshot-contents 47, layout 50, segment-attach-form 55, changes-dialog 64, version-list-page 69, feature-edit-form 82, segment-list-page 85, merge-dialog 91, rollout-form 99, environment-page 165. Plus scripts/app.js 315 and 10 CSS files.",
+      "implication": "Nine of these render a form. Modules are small (<=165 lines); a new url-state.ts of ~60-100 lines fits the convention. environment-page.ts at 165 is the largest and is where Section Nav, filter and section-openness all land \u2014 it will need splitting or it becomes the new god view."
+    },
+    {
+      "area": "forms \u2014 exact actions and hidden inputs",
+      "finding": "Every form and what it emits: (1) feature-edit-form.ts action=/env/<e>/features/<key> hidden baseVersion, submit buttons name=field. (2) same file delete form, same action, hidden baseVersion, field=delete. (3) rollout-form.ts detach form, hidden baseVersion + ruleIndex, field=detachSegment. (4) rollout-form.ts rollout form, hidden baseVersion + ruleIndex + percentage/bucketBy/salt. (5) segment-attach-form.ts, hidden baseVersion, select segmentKey. (6) new-flag-form.ts action=/env/<e>/features hidden baseVersion. (7) environment-page.ts publish form action=/env/<e>/publish hidden baseVersion. (8) version-list-page.ts rollback form action=/env/<e>/rollback hidden version. (9) merge dialogs method=dialog close forms. (10) home-page.ts method=get action=/. Segment forms in segment-list-page.ts and segment-page.ts.",
+      "implication": "Eight write forms need state echo (1-8). baseVersionInput() in feature-edit-form.ts is already the established pattern for a hidden input every form threads through \u2014 feature-edit-form passes it as a string into renderRolloutForms and renderSegmentAttachForm. Mirroring it with a required stateInputs()/stateQuery() param makes 'a form left un-echoed' a compile error rather than a silent bug."
+    },
+    {
+      "area": "app.js live filter \u2014 exact semantics",
+      "finding": "For each [data-filter] input: list = querySelector('.' + data-filter); empty = list.parentNode.querySelector('[data-filter-empty]'); input.hidden = false (the input is rendered hidden server-side and revealed only by JS). On 'input': terms = value.trim().toLowerCase().split(/\\s+/).filter(Boolean); for each [data-search] item, match = terms.every(term => text.indexOf(term) !== -1); item.hidden = !match; empty.hidden = shown !== 0. The haystack is the data-search attribute built in snapshot-contents.ts: (flag.key + ' ' + flag.type + ' ' + (flag.enabled ? 'on' : 'off')).toLowerCase().",
+      "filePath": "packages/dashboard/src/infrastructure/views/scripts/app.js",
+      "implication": "The server-side filter must reproduce: whitespace-split into terms, AND across terms, case-insensitive substring (indexOf, not word-boundary), over exactly key + ' ' + type + ' ' + on|off. There is a pre-existing quirk: the term 'on' matches 'off' by substring and also matches 'config'. Documenting the matching semantics must own that quirk explicitly \u2014 keep it, or fix it and note the behaviour change."
+    },
+    {
+      "area": "app.js details.open replay",
+      "finding": "Two places force openness. In restore(): var details = field.closest('details'); while (details) { details.open = true; details = details.parentElement.closest('details'); } \u2014 walks every ancestor details open for each carried-over edit field. In the changesBody click handler for inConflict() + 'keep': row.querySelector('details').open = true; row.scrollIntoView.",
+      "filePath": "packages/dashboard/src/infrastructure/views/scripts/app.js",
+      "implication": "This is the direct conflict the brief warns about. Both paths run AFTER the server renders openness from the URL, so client-forced-open wins and rows the URL says are closed pop open when a carried edit touches them. Decide once: keep the client force-open as an additive override and accept URL/DOM divergence, or have these paths rewrite history.replaceState \u2014 but the latter is new app.js logic, which is forbidden. The additive override is the only consistent option."
+    },
+    {
+      "area": "page sections are NOT collapsible today",
+      "finding": "The 'Flags' and 'Version history' blocks are plain <section class=\"section\" aria-labelledby=\"flags-heading\"> / versions-heading with a <div class=\"section-head\">. They are always expanded \u2014 there is no details element at page-section level anywhere. layout.css only gives .section a margin-top and .section-head a flex row. The only details on the environment page are .flag-row per flag, .rollouts, .segment-attach, .danger-zone delete, the rules editor, the New flag card and Raw JSON.",
+      "implication": "'Which page sections are open or closed' is a NEW capability, not a relocation: the plan must first convert the two sections into collapsible disclosures (markup + CSS + tests) before URL state can control them. That is a distinct phase from flag-row openness, and a candidate to cut if the horizon overflows \u2014 flag-row openness is the one that actually retires the horizon-23 workaround."
+    },
+    {
+      "area": "openness decided today",
+      "finding": "Server-side openness is per-draft only: snapshot-contents.ts const open = editable.draft?.key === flag.key ? ' open' : ''; feature-edit-form.ts <details${draft?.rulesJson === undefined ? '' : ' open'}>; new-flag-form.ts <details class=\"card\"${draft === undefined ? '' : ' open'}>. Nothing else ever emits open.",
+      "filePath": "packages/dashboard/src/infrastructure/views/snapshot-contents.ts",
+      "implication": "URL-driven openness must OR with these existing draft rules, not replace them \u2014 a rejected draft must still force its row open even if the URL says closed, or the 400/422 inline-error UX regresses. That is an extra branch, and therefore an extra test, at each of the three sites."
+    },
+    {
+      "area": "horizon-23 reopen workaround",
+      "finding": "The workaround lives in the e2e specs, not in src. segment-upload-rollout.spec.ts clicks '.flag-row > summary' then 'details.rollouts > summary' before asserting; segment-picker.spec.ts has the explicit comment 'The reload after the publish collapses every <details> again, so the flag has to be reopened' followed by two summary clicks. fixtures.ts exports expandFlag(page,key) which encapsulates the first click.",
+      "filePath": "packages/dashboard/e2e/segment-picker.spec.ts",
+      "implication": "Retiring the workaround means editing two LocalStack-backed specs which require LocalStack to run \u2014 they cannot be verified in a plain unit run. The nested .rollouts panel would still collapse unless nested panels are in the contract, which they are not. So the workaround only half-retires: the plan should explicitly keep the nested reopen click and say why."
+    },
+    {
+      "area": "stylesheet convention",
+      "finding": "stylesheet.ts is 15 lines: STYLE_FILES is a 10-entry as-const array with an ordering comment ('tokens first, then layout, then the components that use both'): base, layout, forms, components, tables, rollout, segments, segment-list, segment-create, segment-attach. STYLESHEET is readFileSync().join. STYLESHEET_PATH='/assets/app.css'; STYLESHEET_HREF appends a 12-char sha256 content hash. Per-feature sheets are tiny: segments.css 12, segment-create.css 12, segment-list.css 13, segment-attach.css 23, rollout.css 34 (vs base 128, components 439).",
+      "filePath": "packages/dashboard/src/infrastructure/views/stylesheet.ts",
+      "implication": "A section-nav.css of ~15-30 lines appended to STYLE_FILES is exactly the established shape. Per the ordering comment a nav sheet belongs after components.css. There is already one position:sticky precedent (.update-banner, top 0.5rem, z-index 10) \u2014 the Section Nav must coordinate z-index and top with it or the two stickies overlap."
+    },
+    {
+      "area": "escaping helpers",
+      "finding": "views/escape.ts is 12 lines: an ENTITIES map (& < > \" ') and escapeHtml = (value: unknown) => String(value).replace(/[&<>\"']/g, ...). There is NO url-encoding helper beyond raw encodeURIComponent, used in exactly 4 places: escape.ts (environmentPath), flag-page.ts (flagPath), segment-page.ts (segmentPath), feature-edit-form.ts (inline action). versionsPath does not encode its page number. Every href/action/value emission wraps the whole URL in escapeHtml \u2014 that double layer is the house pattern.",
+      "filePath": "packages/dashboard/src/infrastructure/views/escape.ts",
+      "implication": "Filter text and flag keys entering query strings need BOTH layers. Safest: build the query with URLSearchParams.toString() (which percent-encodes) then escapeHtml the whole URL \u2014 otherwise the & separators get double-escaped or the filter text leaks a quote into an attribute. An existing test ('HTML-escapes environment names, flag keys and values, including in attributes' with encodeURIComponent of a script tag and quotes) is the template for the new escaping tests."
+    },
+    {
+      "area": "test surfaces \u2014 unit",
+      "finding": "http-server.test.ts is 1714 lines, ~80 it() cases in nested describes per route, with helpers call(dashboard, method, path, body?) and form(fields) => new URLSearchParams(fields).toString(). Co-located view tests: environment-page.test.ts 92, flag-page.test.ts 96, version-list-page.test.ts 105, dialogs.test.ts 103, rollout-form.test.ts 168, segment-attach-form.test.ts 173, segment-list-page.test.ts 184, feature-edit-form.test.ts 395. They build literal view fixtures and assert on the HTML string via regex extraction. Application tests live under test/application/, NOT co-located; infrastructure tests ARE co-located.",
+      "filePath": "packages/dashboard/src/infrastructure/http-server.test.ts",
+      "implication": "Convention is clear: a new url-state.ts under src/infrastructure gets a co-located url-state.test.ts. Per-form echo assertions belong in the co-located view tests (cheap, no server) while the round-trip belongs in http-server.test.ts, already 1714 lines and growing. Budget for that growth explicitly."
+    },
+    {
+      "area": "test surfaces \u2014 e2e",
+      "finding": "Only 4 specs: flag-list.spec.ts 44, segment-picker.spec.ts 77, segment-upload-rollout.spec.ts 77, concurrent-edits.spec.ts 101. flag-list.spec.ts has 3 tests; the live-filter test fills the searchbox and asserts page.locator('[data-flag]').filter({visible:true}) counts \u2014 fill('dark') -> 1 visible, fill('boolean on') -> 1 visible, fill('nothing-like-this') -> 'No flags match.' visible. playwright.config.ts: testDir 'e2e', fullyParallel, retries 0, timeout 30s, trace/screenshot/video all off (deliberately, because CSVs carry personal data).",
+      "filePath": "packages/dashboard/e2e/flag-list.spec.ts",
+      "implication": "Rewriting flag-list.spec.ts server-side means visibility assertions become presence/absence assertions (filtered rows are no longer rendered at all, so [data-flag] count, not filter({visible:true})). 'boolean on' currently yields exactly 1 and depends on the 3-flag seed; if the seed grows that assertion must be recomputed. retries:0 plus trace:off means new flakiness is hard to debug \u2014 argues for few, deterministic new e2e assertions."
+    },
+    {
+      "area": "e2e fixtures",
+      "finding": "e2e/support/fixtures.ts is 113 lines. InMemoryEnvironment holds snapshots: string[], currentVersion = snapshots.length, publish() enforces the same CAS as S3 (throws S3PublishError/CONFLICT), publishAs(createdBy, features, reason). ports() returns DashboardPorts with readCurrentVersion, fetchSnapshotText, listPublishedSegments -> {status:'listed', segments: []}, publishSegment and openWriter().rollback as rejecting stubs, readSegmentVersion -> null. SEED has exactly 3 flags: new-dashboard (boolean, enabled), checkout-limits (config, disabled, default {max:3}), dark-mode (boolean, disabled), published once -> exactly 1 version. Exports checkForUpdates(page) and expandFlag(page,key).",
+      "filePath": "packages/dashboard/e2e/support/fixtures.ts",
+      "implication": "3 flags / 1 version. Flag paging over 3 flags is unjustifiable without enlarging SEED, and enlarging SEED breaks concurrent-edits.spec.ts which spreads ...SEED in four places and asserts on published feature maps. Strong evidence for recording flag paging as deliberately not built. Also openWriter().rollback rejects, so the rollback POST cannot be exercised e2e at all \u2014 its state echo must be covered by http-server.test.ts only."
+    },
+    {
+      "area": "coverage gate",
+      "finding": "Root vitest.config.ts (28 lines) builds one project per packages/* dir, each excluding integration/** and e2e/**. coverage: provider v8, include ['packages/*/src/**/*.ts'], exclude ['**/*.test.ts'], thresholds lines/branches/functions/statements all 100. No per-file overrides, no exclusions for view modules.",
+      "filePath": "vitest.config.ts",
+      "implication": "app.js is outside the gate (it is .js and include is *.ts), e2e is outside it, and every new ternary in a view template is a branch that must be hit in the same phase. The include glob also means a new src/infrastructure/url-state.ts is gated from the moment it exists \u2014 the plan must not land it un-tested even as a stub."
+    },
+    {
+      "area": "application seam for filtering/paging",
+      "finding": "browseEnvironment(ports, environment) returns EnvironmentView = {environment, status, currentVersion, versions: VersionEntry[], current: SnapshotVersionView}. Flags arrive NOT pre-sliced: the full flag list is built in readContents() from Object.entries(parsed.value.features).map(...) into SnapshotContents.flags. It reads a window of min(currentVersion, ENVIRONMENT_VERSION_WINDOW=5) versions in parallel. renderSnapshotContents(contents, editable?) and the module-private renderFlagCard(flag, editable) are the render seam; renderSnapshotContents also has the non-editable table branch (renderTableRow) reused by version-page.ts.",
+      "filePath": "packages/dashboard/src/application/browse-environment.ts",
+      "implication": "Filtering/slicing can happen in the application layer (a pure filterFlags over SnapshotContents.flags, testable without HTML) or inside renderSnapshotContents. The former is far better for the 100% branch gate and matches the list-version-page.ts precedent (clamp + slice in application, render in view). But renderSnapshotContents is shared with version-page.ts, which must NOT be filtered \u2014 so the filter must apply only to the editable branch, or be a separate parameter defaulted off."
+    },
+    {
+      "area": "no existing query-string module",
+      "finding": "Grepped all of packages/dashboard/src: there is no shared query-string, url-state or params module of any kind. URLSearchParams appears only in http-primitives.ts readForm() (parsing POST bodies) and as the type flowing through http-server.ts's form parsers; url.searchParams is read ad-hoc in 4 handlers. decisions.md already records the horizon-24 user decision: 'Filter and open/closed state will live in the query string rendered server-side, never in app.js'.",
+      "implication": "The contract module is genuinely new \u2014 nothing to reconcile against, and the architectural decision is already made and recorded, so the first phase need not re-litigate it. There is no precedent for where such a module lives: src/infrastructure/ beside http-primitives.ts is the natural home since it is HTTP plumbing, and views already import from infrastructure siblings."
+    },
+    {
+      "area": "lint / layer rules",
+      "finding": "eslint.config.js uses tseslint.configs.strictTypeChecked repo-wide plus import-x/no-restricted-paths with exactly two zones scoped to packages/*/src/**/*.ts: domain must not import application or infrastructure; application must not import infrastructure. There is NO rule restricting infrastructure-to-infrastructure or views-to-infrastructure imports, and none forbidding views importing each other. app.js is separately configured with sourceType script, disableTypeChecked and an explicit global allowlist. Root scripts: lint = eslint . --max-warnings=0; verify = builds 5 packages then typecheck + lint + test --coverage.",
+      "filePath": "eslint.config.js",
+      "implication": "A url-state module under src/infrastructure/ can be imported freely by http-server.ts and every views/* module \u2014 no lint obstacle. But application code may not import it, so if any filtering logic goes into src/application/ then the contract it depends on must live in application or domain. That layering choice must be made in the first phase, not discovered in the fourth. strictTypeChecked also means no any, and URLSearchParams.get() returning string|null must be narrowed explicitly everywhere."
+    },
+    {
+      "area": "filter input is JS-gated today",
+      "finding": "environment-page.ts renders the filter input with a literal hidden attribute and the comment 'Revealed by the page script; without JavaScript every flag simply stays listed.' It is <input type=\"search\" class=\"flag-filter\" data-filter=\"flag-list\" placeholder=\"Filter flags\u2026\" aria-label=\"Filter flags by key, type or on/off\" hidden> \u2014 not inside any form, so it currently cannot submit anything. The empty-state is a sibling <p class=\"muted\" data-filter-empty hidden>No flags match.</p>. Both only appear when contents.status==='valid' and flags.length > 0.",
+      "filePath": "packages/dashboard/src/infrastructure/views/environment-page.ts",
+      "implication": "Server-side filtering requires wrapping this input in a method=get form (a real markup change), dropping the hidden attribute so it works without JS (a behaviour improvement worth asserting), and re-deriving the empty state server-side. The e2e locator getByRole('searchbox', {name: /Filter flags/}) keeps working if aria-label is preserved. A GET form's action plus hidden inputs is the only way to carry the other state keys through the filter submit, so the filter form itself is a state-echo site too \u2014 easy to miss."
+    },
+    {
+      "area": "home page GET form precedent",
+      "finding": "home-page.ts already uses <form method=\"get\" action=\"/\"> with <input name=\"env\">, handled by a route that reads url.searchParams.get('env') and 303-redirects to environmentPath(environment) when non-empty, else renders the home page. A redirect() helper issuing 303 exists.",
+      "filePath": "packages/dashboard/src/infrastructure/views/home-page.ts",
+      "implication": "There IS a GET-form plus redirect precedent, so a GET filter form is idiomatic here. The redirect() helper is used only by that one route \u2014 the plan should note it stays unused by write POSTs, so no reviewer mistakes the rejected redirect-after-POST for 'the helper already exists, why not use it'."
+    },
+    {
+      "area": "anchor targets for Section Nav",
+      "finding": "Stable ids already exist for nav anchoring: current-heading, flags-heading, versions-heading, plus publish-dialog, changes-dialog, update-banner, merge-notice, current-json, version-json, snapshot. The sections themselves carry aria-labelledby pointing at those heading ids but have no id of their own.",
+      "filePath": "packages/dashboard/src/infrastructure/views/environment-page.ts",
+      "implication": "Section Nav links can target #current-heading / #flags-heading / #versions-heading with zero markup churn, or add ids to the sections for a better scroll target. Either way the Section Nav is genuinely markup plus CSS only and depends on nothing the other items produce \u2014 confirming it as the clean drop. If built, it should be the LAST phase so dropping it leaves no dead STYLE_FILES entry."
+    },
+    {
+      "area": "could not determine",
+      "finding": "No written justification for flag paging exists anywhere in the repo; next-horizon-brief.md and decisions.md discuss it only as an open question. blockers.md and state.md were not read in full, so the exact wording of the unresolved 200+422 concurrent-replay race and pointer-read window blockers is unverified beyond the analysis summary.",
+      "filePath": "docs/roadmaps/featuresync/next-horizon-brief.md",
+      "implication": "Per the analysis's own gate ('flag paging ships only if a written justification exists'), no such justification exists today \u2014 so the plan should default to recording flag paging as deliberately not built, while the contract module still parses and reserves the key so adding paging later needs no contract change."
+    }
+  ],
+  "requiredMaterials": [],
+  "phases": [
+    {
+      "id": "url-state-contract-module",
+      "order": 0,
+      "name": "Add query-string state module for dashboard URLs",
+      "goal": "Create one module in packages/dashboard that owns the dashboard's URL query-string keys \u2014 flag filter text, open flag rows, version page and page size \u2014 parsing them from a URL and serialising them back into a query string.",
+      "rationale": "The dashboard currently reads query parameters ad hoc in four different request handlers with no shared spelling or validation, so the same parameter can be parsed two different ways. One module that both reads and writes these parameters gives every page and link a single agreed contract, and is the foundation every later phase in this horizon builds on.",
+      "filesAffected": [
+        "packages/dashboard/src/infrastructure/url-state.ts",
+        "packages/dashboard/src/infrastructure/url-state.test.ts",
+        "packages/dashboard/src/infrastructure/views/version-list-page.ts"
+      ],
+      "changes": [
+        "Create packages/dashboard/src/infrastructure/url-state.ts exporting a DashboardUrlState type with fields: filter (string, default empty), openFlags (string[] of flag keys, default empty), and page/pageSize (numbers \u2014 these are the EXISTING version-history paging keys the versions page already uses). Do NOT add a flag-list paging key: flag paging is deliberately not built this horizon.",
+        "Export parseUrlState(searchParams) that reads the keys 'filter', 'open', 'page' and 'pageSize'; parse 'page'/'pageSize' with the existing strict style used by parsePageNumber in http-server.ts (regex match or throw HttpError(400) with the existing page messages), and parse 'filter'/'open' leniently \u2014 never throw, ignore what does not fit.",
+        "Bound the lenient inputs: trim filter text and cut it at a fixed maximum length (e.g. 100 characters); split 'open' on commas, drop empty entries, drop entries longer than a fixed key length cap, deduplicate, and keep at most a fixed number (e.g. 20) so a hand-crafted URL cannot grow the render without limit.",
+        "Export serialiseUrlState(state) building the query string with URLSearchParams so values are percent-encoded, omitting keys that hold their default value so clean URLs stay clean, and returning '' when nothing needs carrying.",
+        "Export withUrlState(path, state) returning path plus '?' plus the serialised query when non-empty; callers wrap the result in the existing escapeHtml helper when it lands in an href or action attribute.",
+        "Change versionsPath in views/version-list-page.ts to build its query through serialiseUrlState/withUrlState instead of appending a bare '?page=' string, so the version pager stops being the one hand-rolled query builder.",
+        "Add url-state.test.ts covering every branch: defaults, each key present and absent, a rejected non-numeric page (HttpError 400), over-long filter text, over-long/duplicate/empty/over-count 'open' entries, round-trip parse(serialise(state)) equality, and a filter value containing quotes and '&' to prove encoding."
+      ],
+      "boundedContext": "URL State Contract",
+      "layer": "infrastructure",
+      "blastRadius": "small",
+      "inputs": [
+        "Existing parsePageNumber/parseVersion strict-parse style in packages/dashboard/src/infrastructure/http-server.ts",
+        "Existing versionsPath helper in views/version-list-page.ts",
+        "Repository coverage rule: 100% line/branch/function/statement over packages/*/src/**/*.ts"
+      ],
+      "expectedResult": "packages/dashboard/src/infrastructure/url-state.ts exists with parse and serialise functions and a co-located test file at 100% branch coverage, with versionsPath now building its query through it.",
+      "dependsOn": [],
+      "compensation": "Delete url-state.ts and its test and restore versionsPath's previous '?page=' string concatenation; nothing else imports the module yet.",
+      "rubric": [
+        {
+          "id": "key-grammar-and-strictness-split",
+          "label": "Key grammar with strict/lenient split",
+          "ruleStatement": "url-state.ts must parse exactly the keys 'filter', 'open', 'page', 'pageSize', throwing HttpError 400 for malformed page/pageSize while never throwing for filter/open. 10 = the strict path reuses or exactly matches http-server.ts's existing page-number parse style and error message text; 8 = both behaviours correct with equivalent messages; minScore = split exists and lenient path provably never throws.",
+          "passCriteria": [
+            "The module exports a parse function reading the literal strings 'filter', 'open', 'page', 'pageSize' and no other keys",
+            "Calling it with page=abc (and with page=0, page=-1) produces a 400-style error whose message matches the text already used in http-server.ts for bad page numbers",
+            "Calling it with filter or open set to garbage (binary bytes, 500 chars, only commas) returns a value instead of throwing",
+            "No flag-list paging key (e.g. flagPage) is introduced anywhere in the module",
+            "Defaults are observable: with an empty query the result has filter '' and an empty open array"
+          ],
+          "failureExamples": [
+            "parseInt is used for page, so 'page=3abc' silently parses as 3 instead of erroring",
+            "The strict parse is re-implemented with a slightly different error message, so existing http-server tests asserting the message text still pass but two different messages now exist for the same fault",
+            "open='' produces ['']  rather than an empty array, so an empty-string flag key reaches the renderer"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "bounded-lenient-inputs",
+          "label": "Caps on filter length and open-list size",
+          "ruleStatement": "Attacker-controllable inputs must be clamped in the parser so no crafted URL can amplify rendering. 10 = caps are named constants, exported or documented, and applied to length, per-entry length, count, and duplicates; 8 = all four clamps present inline; minScore = filter length and open count are both capped.",
+          "passCriteria": [
+            "Filter text is trimmed and truncated at a fixed maximum length; a 10,000-character filter comes back at or below that cap",
+            "The open list drops entries longer than a fixed per-key length cap",
+            "The open list deduplicates, so open=a,a,a returns one entry",
+            "The open list keeps at most a fixed number of entries; a URL with 500 comma-separated keys returns no more than that cap",
+            "Each cap is a named constant rather than a bare number sprinkled at the use site"
+          ],
+          "failureExamples": [
+            "Count cap and dedupe are applied in the wrong order, so 25 copies of one key collapse to 1 but 25 distinct keys are all kept past the cap \u2014 or vice versa, so dedupe runs after slicing and the result is 1 entry when 20 were expected",
+            "Filter is truncated before trimming, so a 100-space-prefixed filter truncates to whitespace and then trims to empty",
+            "Per-entry length cap is applied but the count cap is missing, so a URL with thousands of short keys still renders thousands of rows"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "serialise-roundtrip-and-defaults",
+          "label": "Serialisation, default omission, round-trip",
+          "ruleStatement": "serialiseUrlState/withUrlState must produce percent-encoded query strings that omit defaults and round-trip through the parser. 10 = round-trip equality is asserted for a property-style set of states including edge values; 8 = round-trip asserted for a representative handful; minScore = defaults omitted, non-defaults present, and parse(serialise(s)) equals s for at least one state carrying every key.",
+          "passCriteria": [
+            "serialise of a state holding only defaults returns the empty string, and withUrlState then returns the path with no '?'",
+            "withUrlState returns path + '?' + query only when the query is non-empty (no trailing '?')",
+            "A test asserts parse(serialise(state)) deep-equals state for a state with filter text, multiple open keys, and page/pageSize set",
+            "URLSearchParams (or encodeURIComponent) does the encoding: a filter containing & \" < and a space appears percent-encoded in the output, not raw",
+            "Keys holding their default value are absent from the output string, checked by asserting the exact query string"
+          ],
+          "failureExamples": [
+            "The open list is joined with a literal ',' appended to a manually built string, so a flag key containing a comma round-trips as two keys",
+            "page=1 (the default) is emitted, so every link carries ?page=1 and 'clean URLs stay clean' silently regresses",
+            "Round-trip test only uses a simple alphanumeric filter, so the truncation cap interaction (a filter at exactly the cap) is never round-tripped"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "versions-path-migrated",
+          "label": "versionsPath builds through the module",
+          "ruleStatement": "views/version-list-page.ts must no longer hand-roll a '?page=' string. 10 = no string concatenation of query params remains anywhere in that file and the existing version-pager tests pass unchanged; 8 = versionsPath delegates and pager output is equivalent; minScore = delegation present and existing pager behaviour unchanged for page 1 and page N.",
+          "passCriteria": [
+            "grep for \"?page=\" and \"'?' +\" in version-list-page.ts returns no hits",
+            "versionsPath calls the state module's serialise/withUrlState helper",
+            "Existing version-paging tests and e2e version links still pass with no expectation edits, or any edit is a strictly equivalent URL",
+            "The href emitted by versionsPath is still wrapped in escapeHtml at the attribute site"
+          ],
+          "failureExamples": [
+            "versionsPath now goes through the module but drops pageSize when it was present, so paging with a non-default page size resets to the default on the next page click",
+            "The helper is used but the result is no longer escapeHtml-wrapped because the old call site did the escaping inline",
+            "Page 1 link changes from '/path' to '/path?page=1', breaking a test that asserted the bare path"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "branch-coverage-in-phase",
+          "label": "Every new branch tested in this phase",
+          "ruleStatement": "The co-located test file must exercise every branch of url-state.ts so the 100% coverage gate passes in this phase, not a later one. 10 = coverage report shows 100% on the file and each test is a named, intention-revealing case; 8 = 100% with some grouped cases; minScore = the coverage command reports 100% branch for url-state.ts.",
+          "passCriteria": [
+            "Running the repo's coverage command reports 100% line/branch/function/statement for packages/dashboard/src/infrastructure/url-state.ts",
+            "There is an explicit test for each of: missing key, present key, over-long filter, over-long open entry, duplicate open entries, over-count open entries, empty open entries",
+            "There is a test asserting the 400 error for a non-numeric page, asserting the status and message, not just that it threw",
+            "No istanbul ignore comment or coverage-config exclusion is added to reach the number"
+          ],
+          "failureExamples": [
+            "Coverage is 100% on lines but a ternary default (e.g. `params.get('filter') ?? ''`) has an untaken branch, failing the branch threshold",
+            "The thrown-error test uses expect(fn).toThrow() with no assertion on status code, so a 500 would pass",
+            "A /* c8 ignore next */ is added over the clamp branch instead of testing the boundary"
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "Most likely failure is a branch left untested in the clamp logic or a loosened page parse \u2014 re-run coverage on url-state.ts alone and add boundary cases at exactly the filter-length and open-count caps."
+    },
+    {
+      "id": "server-side-flag-filter-function",
+      "order": 1,
+      "name": "Add server-side flag filter function",
+      "goal": "Add a pure function that takes the list of flags read from a snapshot plus the filter text and returns only the flags that match, reproducing exactly the matching rules the browser script performs today.",
+      "rationale": "Today filtering happens only in the browser: the server sends every flag and a small script hides the rows that do not match, so the filtered view cannot be bookmarked or survive a form submit. Moving the match rule into a plain, separately testable function is the prerequisite for the server deciding which rows to render, and keeps the rule out of HTML-building code where it would be awkward to test.",
+      "filesAffected": [
+        "packages/dashboard/src/application/filter-flags.ts",
+        "packages/dashboard/test/application/filter-flags.test.ts",
+        "packages/dashboard/src/infrastructure/views/scripts/app.js"
+      ],
+      "changes": [
+        "Create packages/dashboard/src/application/filter-flags.ts exporting filterFlags(flags, filterText) that returns flags unchanged when filterText is empty after trimming.",
+        "Reproduce the browser rule exactly: lowercase the filter text, split it on whitespace into terms, and keep a flag only when EVERY term appears as a plain substring (not word-boundary) of the haystack flag.key + ' ' + flag.type + ' ' + (flag.enabled ? 'on' : 'off'), lowercased \u2014 the same string the view puts in each row's data-search attribute.",
+        "Add a short comment recording the two known quirks this rule keeps on purpose: the term 'on' also matches 'off', and 'on' also matches a key containing 'config'. Keeping them means no behaviour change for existing users.",
+        "Take no dependency on any infrastructure module (the repository's lint rules forbid application code importing infrastructure), so this function receives the already-parsed filter text as a plain string argument.",
+        "Add test/application/filter-flags.test.ts (application tests live under test/, not co-located) covering: empty and whitespace-only filter, single term matching key, matching type, matching 'on' and 'off', multi-term AND behaviour, case-insensitivity, no-match returning an empty array, and the two documented quirks."
+      ],
+      "boundedContext": "Flag Filter",
+      "layer": "application",
+      "blastRadius": "small",
+      "inputs": [
+        "The browser filter rule in views/scripts/app.js (terms AND, lowercased substring)",
+        "SnapshotContents.flags shape from src/application/browse-environment.ts",
+        "The data-search haystack built in views/snapshot-contents.ts"
+      ],
+      "expectedResult": "packages/dashboard/src/application/filter-flags.ts exporting filterFlags, with a test file proving it matches the current browser behaviour including the two documented quirks.",
+      "dependsOn": [],
+      "compensation": "Delete filter-flags.ts and its test; nothing renders through it yet.",
+      "rubric": [
+        {
+          "id": "haystack-parity-with-browser",
+          "label": "Haystack matches the data-search string",
+          "ruleStatement": "filterFlags must match against exactly the same string the view puts in data-search: key + ' ' + type + ' ' + ('on'|'off'), lowercased. 10 = the haystack is built from a shared expression or the test asserts parity against the view's data-search output for the same flag; 8 = the string is character-identical by inspection and tested per component; minScore = all three components present in the right order and lowercased.",
+          "passCriteria": [
+            "The haystack expression contains the flag key, the flag type, and the literal 'on' or 'off' derived from the enabled boolean, separated by single spaces",
+            "A test filters by a substring that spans the boundary between key and type (e.g. the last char of the key plus a space plus the first char of the type) and it matches",
+            "Both haystack and filter text are lowercased before comparison; a test filters an uppercase term against a lowercase key and matches",
+            "Matching is plain substring, not word-boundary: a test filters a term that sits mid-word inside a key and matches"
+          ],
+          "failureExamples": [
+            "The haystack joins with ', ' or omits the type, so a filter that worked in the browser now returns nothing for type searches",
+            "Only the filter text is lowercased and the key is assumed already lowercase, so a flag key with capitals stops matching",
+            "The enabled flag is rendered as 'true'/'false' instead of 'on'/'off', silently changing which terms match"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "documented-quirks-preserved",
+          "label": "Known quirks kept on purpose and pinned by tests",
+          "ruleStatement": "The two behaviour quirks \u2014 term 'on' also matching 'off', and 'on' matching a key containing 'config' \u2014 must be preserved and locked by tests plus a comment saying they are intentional. 10 = comment names both quirks and each has its own named test asserting the surprising result; 8 = both tested and commented together; minScore = both quirks pass a test.",
+          "passCriteria": [
+            "A test asserts that filtering 'on' returns a flag whose state is off",
+            "A test asserts that filtering 'on' returns a flag whose key contains 'config'",
+            "A comment in filter-flags.ts states these are deliberate no-behaviour-change quirks, not bugs",
+            "No substring-boundary or whole-word guard has been added that would suppress either quirk"
+          ],
+          "failureExamples": [
+            "A developer 'fixes' the off/on overlap with a word-boundary regex, so existing users' saved filter URLs now return different rows",
+            "The quirks are commented but not tested, so the next refactor removes them without any test failing",
+            "The 'config' quirk test uses a key containing 'on' directly, so it does not actually pin the 'config' case"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "multi-term-and-empty-semantics",
+          "label": "AND across whitespace terms, pass-through on empty",
+          "ruleStatement": "Multiple whitespace-separated terms must all match (AND), and an empty or whitespace-only filter must return the input flags. 10 = pass-through returns the flags in original order with no copy-related surprise and multi-space/tab input is covered; 8 = AND and empty cases both tested; minScore = AND semantics and empty pass-through both hold.",
+          "passCriteria": [
+            "A test with two terms where each matches a different flag returns neither flag (AND, not OR)",
+            "A test with two terms both matching one flag returns that flag",
+            "filterFlags(flags, '') and filterFlags(flags, '   ') both return all flags in the same order",
+            "A filter with repeated internal spaces or a tab produces no empty term that matches everything or nothing unexpectedly",
+            "A no-match filter returns an empty array, not undefined or the full list"
+          ],
+          "failureExamples": [
+            "split(' ') is used instead of a whitespace regex, so 'foo  bar' yields an empty term; if empty terms are then treated as non-matching, every double-spaced filter returns nothing",
+            "The empty-filter case returns a new array via .filter(() => true) which is correct but a trimmed-only check is missing, so a tab-only filter splits into a term and filters everything out",
+            "OR is implemented via .some, so a two-term filter widens results instead of narrowing"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "application-layer-purity",
+          "label": "No infrastructure dependency and no app.js logic growth",
+          "ruleStatement": "filter-flags.ts must be a pure application-layer function taking parsed text as a string, and app.js must not gain new logic in this phase. 10 = zero imports beyond types and the lint layer rule passes with no exception entry; 8 = no infrastructure import; minScore = no import from src/infrastructure and no added branching in app.js.",
+          "passCriteria": [
+            "filter-flags.ts has no import from any path under src/infrastructure",
+            "The filter text arrives as a plain string parameter, not as a URL, Request or URLSearchParams",
+            "The repo's lint run passes with no new eslint-disable or import/no-restricted-paths exception",
+            "git diff of views/scripts/app.js in this phase shows no new conditionals or functions"
+          ],
+          "failureExamples": [
+            "The function takes URLSearchParams for convenience, pulling an infrastructure concept into the application layer and tripping the layer lint rule",
+            "The haystack is imported from views/snapshot-contents.ts to guarantee parity \u2014 correct instinct, wrong direction, since it makes application depend on infrastructure",
+            "A small helper is added to app.js to share the term-splitting, adding logic to a file outside the coverage gate"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "test-file-location-and-coverage",
+          "label": "Test under test/application at full coverage",
+          "ruleStatement": "The test must live at packages/dashboard/test/application/filter-flags.test.ts (not co-located) and drive the file to 100% coverage in this phase. 10 = 100% coverage with each listed case as its own named test; 8 = 100% coverage; minScore = coverage command reports 100% for filter-flags.ts and the test is in the test/ tree.",
+          "passCriteria": [
+            "The test file path is packages/dashboard/test/application/filter-flags.test.ts",
+            "Coverage report shows 100% line/branch/function/statement for src/application/filter-flags.ts",
+            "Tests exist for: empty filter, whitespace filter, key match, type match, 'on' match, 'off' match, multi-term AND, case-insensitivity, no match",
+            "No coverage exclusion or ignore pragma was added"
+          ],
+          "failureExamples": [
+            "The test is co-located next to the source, so it is picked up by the wrong project config and the application test suite reports zero tests for this file",
+            "Coverage is 100% on statements but the enabled ? 'on' : 'off' ternary has one untaken side because every fixture flag is enabled",
+            "Tests are collapsed into one table-driven case, so a regression report cannot say which rule broke"
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "The usual miss is an unexercised 'off' branch or a split(' ') instead of a whitespace regex \u2014 add a disabled-flag fixture and a double-space filter test and both problems surface."
+    },
+    {
+      "id": "render-filtered-flag-list",
+      "order": 2,
+      "name": "Filter the flag list on the server",
+      "goal": "Make the environment page render only the flags matching the filter text in the URL, submit the filter through a plain GET form that works without JavaScript, and keep the existing in-browser instant filtering as a convenience layer on top of the already-filtered list.",
+      "rationale": "This is what makes a filtered flag list a real, shareable page: the address bar reflects what is on screen, the page works with JavaScript switched off, and a bookmarked filtered URL reopens the same view. The browser's instant filtering stays on top of it so nobody loses the filter-as-you-type they have today.",
+      "filesAffected": [
+        "packages/dashboard/src/infrastructure/views/environment-page.ts",
+        "packages/dashboard/src/infrastructure/views/snapshot-contents.ts",
+        "packages/dashboard/src/infrastructure/http-server.ts",
+        "packages/dashboard/src/infrastructure/views/scripts/app.js",
+        "packages/dashboard/e2e/flag-list.spec.ts"
+      ],
+      "changes": [
+        "In the environment page request handler, parse the URL state with parseUrlState and pass the filter text down to the page view; apply filterFlags to the flag list before it reaches the flag-list rendering so filtered-out rows are not emitted at all.",
+        "Wrap the existing filter input in <form method=\"get\"> whose action is the environment path, remove its hidden attribute so it is usable without JavaScript, keep its aria-label text unchanged (an end-to-end test locates it by that label), set its value to the current filter text via escapeHtml, and add a visible submit button.",
+        "Carry the rest of the URL state through that GET form as hidden inputs built from the state module, so submitting the filter does not discard the other query keys.",
+        "Render the existing 'No flags match.' message from the server whenever there are flags in the snapshot but none survive the filter, instead of relying on the script to unhide it; an unmatched filter must render this empty state, never an error page.",
+        "Apply the filter only on the editable environment-page path \u2014 the shared flag rendering is reused by the single-version page, which must keep showing every flag \u2014 by passing the filtered list in rather than filtering inside the shared renderer.",
+        "KEEP the live-filter block in views/scripts/app.js as progressive enhancement: it now hides rows within the already server-filtered set rather than within the full list. The filter input is no longer server-rendered `hidden`, so the script must stop unhiding it and must not fight the server-rendered value or the server-rendered empty state. Add no new logic to app.js beyond that adjustment.",
+        "Extend e2e/flag-list.spec.ts to cover BOTH flows: (a) the server flow \u2014 fill the searchbox, submit, assert on the count of RENDERED [data-flag] rows (filtered rows are absent, not merely hidden), the empty-state message for a no-match term, and that the URL carries the filter so the page is bookmarkable; and (b) the retained instant flow \u2014 typing without submitting still narrows the visible rows. Keep the existing visibility-based assertions for (b).",
+        "Add unit tests for every new branch in the changed view modules (filter present/absent, match/no-match empty state, filter value escaping including quotes) and a request-level test that GET with a filter query renders only the matching rows."
+      ],
+      "boundedContext": "Flag Filter",
+      "layer": "interface",
+      "blastRadius": "medium",
+      "inputs": [
+        "parseUrlState and withUrlState from the state module (phase url-state-contract-module)",
+        "filterFlags from phase server-side-flag-filter-function",
+        "Current filter input markup and empty-state markup in views/environment-page.ts",
+        "Existing e2e seed of 3 flags in e2e/support/fixtures.ts"
+      ],
+      "expectedResult": "The environment page's flag list is filtered server-side from the URL's filter parameter through a no-JavaScript GET form, with the in-browser instant filter retained on top of it.",
+      "dependsOn": [
+        "url-state-contract-module",
+        "server-side-flag-filter-function"
+      ],
+      "compensation": "Restore the hidden filter input and app.js's original unhiding behaviour, drop the GET form and the server-side filtering call, and revert flag-list.spec.ts to its visibility-only assertions.",
+      "rubric": [
+        {
+          "id": "rows-absent-not-hidden",
+          "label": "Filtered-out rows are not emitted",
+          "ruleStatement": "With a filter in the URL, the server-rendered HTML must contain only matching [data-flag] rows; non-matching rows must be absent from the response body, not hidden by CSS or script. 10 = a request-level test asserts both the count of rendered rows and the absence of a specific non-matching key anywhere in the body; 8 = count asserted; minScore = a request-level test proves a non-matching flag's key does not appear in the flag list markup.",
+          "passCriteria": [
+            "A GET with ?filter=<term> returns HTML whose [data-flag] occurrence count equals the number of matching flags",
+            "The non-matching flag's key does not appear inside the flag list section of the response body",
+            "No `hidden` attribute or display:none is used on the server to suppress a non-matching row",
+            "The e2e spec asserts on rendered row count after submitting the form, not on visibility, for the server flow"
+          ],
+          "failureExamples": [
+            "The server filters the list used for the row loop but a separate summary/count line is still computed from the unfiltered list, so the header says '3 flags' above 1 row",
+            "Rows are rendered then marked hidden to keep the script simple, so the bookmarked URL still ships every flag's rollout data to the client",
+            "The e2e test asserts toBeVisible on the surviving row, which passes identically before and after the change and therefore proves nothing"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "get-form-works-without-js",
+          "label": "No-JavaScript GET form",
+          "ruleStatement": "The filter input must sit in a <form method=\"get\"> that submits to the environment path, be visible without JavaScript, echo the current filter via escapeHtml, and carry the rest of the URL state as hidden inputs. 10 = a JS-disabled e2e or a raw-HTML assertion proves submit-and-render works and no other query key is dropped; 8 = form markup and hidden inputs asserted in unit tests; minScore = form present with method=get, no hidden attribute, value echoed, and at least the open-rows/page state carried as hidden inputs.",
+          "passCriteria": [
+            "The rendered markup contains <form method=\"get\"> (case-insensitive) wrapping the filter input, with an action pointing at the environment path",
+            "The filter input no longer carries the `hidden` attribute in server output",
+            "Its aria-label text is byte-identical to before (the existing e2e locator still finds it with no spec change to the label)",
+            "A visible submit button is rendered inside the form",
+            "A test submits with page/pageSize/open already in the URL and asserts those values reappear as hidden inputs and survive into the resulting URL"
+          ],
+          "failureExamples": [
+            "The form is added but hidden inputs are built from a fresh empty state, so filtering from page 3 of version history silently jumps back to page 1",
+            "The aria-label is reworded while adding the button, breaking the existing e2e locator and prompting a spec edit that hides the regression",
+            "The input keeps `hidden` because the script unhides it, so the page is still unusable without JavaScript"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "server-rendered-empty-state",
+          "label": "No-match empty state from the server",
+          "ruleStatement": "When the snapshot has flags but none match, the server must render the existing 'No flags match.' message with a 200, never an error page and never an unhidden-by-script message. 10 = tests distinguish the three cases (no flags in snapshot, flags but none match, some match) with the right markup for each; 8 = no-match case tested for message plus 200; minScore = a request-level test asserts status 200 and the message text for a no-match filter.",
+          "passCriteria": [
+            "GET with a filter matching nothing returns status 200 and the exact existing 'No flags match.' text in the body",
+            "That message is present in the raw HTML without any script execution",
+            "A snapshot with zero flags renders its own pre-existing empty state, distinct from the no-match message",
+            "When at least one flag matches, the no-match message is absent from the body"
+          ],
+          "failureExamples": [
+            "The no-match message is always rendered and only hidden when rows exist, so it appears alongside matching rows for anyone with JavaScript off",
+            "The zero-flags and no-match states are collapsed into one message, changing the copy users see for a brand-new environment",
+            "A no-match filter is treated as a bad request and returns 400"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "single-version-page-unfiltered",
+          "label": "Shared renderer still shows all flags elsewhere",
+          "ruleStatement": "Filtering must be applied by the caller, so the single-version page that reuses the flag renderer keeps rendering every flag. 10 = a test on the single-version page asserts the full flag count with a filter present in the URL; 8 = the shared renderer takes a pre-filtered list and no filterFlags call exists inside it; minScore = no filterFlags call inside snapshot-contents.ts and the single-version page's existing flag-count expectations unchanged.",
+          "passCriteria": [
+            "grep for filterFlags in views/snapshot-contents.ts returns no hits",
+            "The environment page handler is where filterFlags is called, on the list it passes down",
+            "A test requests the single-version page with ?filter=<term that matches one flag> and asserts all flags still render",
+            "Existing single-version-page tests pass with no expectation edits"
+          ],
+          "failureExamples": [
+            "filterFlags is called inside the shared renderer because it is the one place that has the flags, silently filtering the version-history view as well",
+            "The filter is threaded into the shared renderer as an optional parameter defaulting to '' \u2014 works today, but any caller passing the parsed state wholesale re-introduces the leak",
+            "The single-version page is never tested with a filter query, so the leak ships undetected"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "filter-value-escaping",
+          "label": "Filter text escaped in attributes and encoded in URLs",
+          "ruleStatement": "Filter text reaching markup must be escapeHtml-wrapped, and filter text reaching a URL must be percent-encoded via the state module. 10 = tests assert the escaped output for a payload containing a double quote, '<', and '&' in both the input value attribute and any generated href/action; 8 = value attribute escaping tested with a quote payload; minScore = a test proves a filter of `\" onfocus=x` does not produce an unescaped attribute break.",
+          "passCriteria": [
+            "A test sets filter to `\"><script>alert(1)</script>` and asserts the raw response contains no unescaped `<script` inside the flag list or the input value",
+            "The input's value attribute uses escapeHtml around the filter text",
+            "Any href or form action built with the filter goes through the state module's serialiser (percent-encoded) and is then escapeHtml-wrapped",
+            "A test asserts a filter containing & renders as &amp; in the attribute and %26 in the URL"
+          ],
+          "failureExamples": [
+            "The value attribute is escaped but the hidden input carrying the filter forward is written with raw interpolation, so the payload escapes through the hidden field",
+            "The URL is percent-encoded but not escapeHtml-wrapped, so '&' in the filter terminates the attribute-encoded entity and corrupts the link",
+            "Escaping is tested with a single quote only, missing the double-quote case that actually breaks a double-quoted attribute"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "progressive-enhancement-not-fighting-server",
+          "label": "app.js reduced to enhancement without new logic",
+          "ruleStatement": "The retained live filter must operate within the server-filtered set, stop unhiding the input, not overwrite the server-rendered value or empty state, and add no new logic to app.js. 10 = the diff to app.js is purely deletions plus the empty-state guard, and an e2e proves type-without-submit still narrows rows; 8 = unhide removed and instant filter still works; minScore = the unhide call is gone, the server value is not reset on load, and the instant-filter e2e assertion still passes.",
+          "passCriteria": [
+            "app.js no longer removes the `hidden` attribute from the filter input",
+            "On page load with ?filter=x, the input's value is still x (the script does not clear or re-derive it)",
+            "The e2e instant-flow test types into the searchbox without submitting and asserts the visible row count narrows, with the existing visibility-based assertions retained",
+            "git diff of app.js shows no new functions, no new conditionals beyond the empty-state guard, and a net line decrease or near-parity",
+            "With a server-rendered no-match message present, the script does not additionally hide or duplicate it"
+          ],
+          "failureExamples": [
+            "The script re-runs its filter on load against the now-filtered DOM and, finding its own state empty, hides every row so a bookmarked filtered URL looks empty once JS loads",
+            "The script keeps toggling the 'No flags match.' node, so the server-rendered message flickers or is hidden when it should show",
+            "New term-splitting logic is added to app.js to match the server function, putting untested logic outside the coverage gate"
+          ],
+          "minScore": 7
+        }
+      ],
+      "healerHint": "The most likely break is app.js re-running its own filter on load and emptying a server-filtered page \u2014 verify a bookmarked ?filter= URL still shows rows with JavaScript enabled before grading anything else."
+    },
+    {
+      "id": "render-open-flag-rows-from-url",
+      "order": 3,
+      "name": "Open flag rows named in the URL",
+      "goal": "Make each expandable flag row on the environment page render already expanded when its flag key appears in the URL's list of open rows, while keeping the existing rule that a row with a rejected draft always opens.",
+      "rationale": "Each flag is an expandable disclosure row, and today the browser decides what is expanded, so every page load and every form submit collapses everything and the user has to click their row open again. Letting the URL say which rows are expanded makes a deep-linked, expanded row bookmarkable and is the change that removes those repeated re-open clicks.",
+      "filesAffected": [
+        "packages/dashboard/src/infrastructure/views/snapshot-contents.ts",
+        "packages/dashboard/src/infrastructure/views/environment-page.ts",
+        "packages/dashboard/src/infrastructure/views/snapshot-contents.test.ts",
+        "packages/dashboard/src/infrastructure/views/environment-page.test.ts"
+      ],
+      "changes": [
+        "Pass the parsed list of open flag keys from the environment page down to the flag-row renderer as an explicit parameter.",
+        "Change the flag row's open decision to: open when the row's key is in the URL's open list OR when it already had to be open because it carries an edit draft \u2014 the draft rule must still win, so an inline validation error is never hidden.",
+        "Put a plain link inside each flag row's heading (the <summary>) whose href is the environment path with this row's key added to \u2014 or, when the row is already open, removed from \u2014 the URL's open list via the state module, preserving the current filter text. It is an ordinary link that reloads the page; the native expand/collapse widget is NOT replaced, so the row still toggles instantly for anyone with JavaScript while the link is what makes the state shareable and submit-surviving.",
+        "Percent-encode flag keys through the state module's serialiser and wrap the produced URL in escapeHtml so a key containing quotes or ampersands cannot break out of the attribute.",
+        "Leave the nested panels inside a row (rollout rules, segment attach) out of the URL contract; note in a comment that end-to-end tests still click those nested summaries open deliberately.",
+        "Add tests for all four combinations of (key in URL open list yes/no) x (draft present yes/no), plus a test that a flag key containing quotes is escaped in the generated link."
+      ],
+      "boundedContext": "Open/Closed State",
+      "layer": "interface",
+      "blastRadius": "medium",
+      "inputs": [
+        "parseUrlState/withUrlState from phase url-state-contract-module",
+        "Existing per-draft open rule in views/snapshot-contents.ts",
+        "escapeHtml from views/escape.ts"
+      ],
+      "expectedResult": "Flag rows on the environment page render expanded or collapsed according to the URL's open-rows parameter, with the existing draft-forces-open behaviour preserved.",
+      "dependsOn": [
+        "url-state-contract-module"
+      ],
+      "compensation": "Revert the flag-row open decision to the draft-only rule and remove the state-carrying summary links; the URL parameter is then simply ignored.",
+      "rubric": [
+        {
+          "id": "open-decision-truth-table",
+          "label": "Open decision: URL OR draft, draft always wins",
+          "ruleStatement": "A row renders open when its key is in the URL open list OR it carries an edit draft; the draft rule must never be overridden. 10 = all four combinations are asserted as separate named tests on the rendered `open` attribute, including a row with a draft whose key is absent from the open list; 8 = four combinations covered; minScore = a row with a draft and not in the open list still renders open.",
+          "passCriteria": [
+            "Test: key in open list, no draft -> <details> carries the open attribute",
+            "Test: key not in open list, no draft -> no open attribute",
+            "Test: key not in open list, draft present -> open attribute present",
+            "Test: key in open list, draft present -> open attribute present (and rendered once, not duplicated)",
+            "The open list is received as an explicit parameter by the row renderer, not read from a module-level or global value"
+          ],
+          "failureExamples": [
+            "The condition is written as `openKeys.includes(key)` replacing the old draft check, so a 422 rejected draft renders collapsed and the user never sees the validation error",
+            "The open attribute is emitted as open=\"false\" when closed, which HTML treats as open",
+            "Only the two URL cases are tested because the draft case 'already had tests', but those older tests do not pass an open list and so no longer exercise the combined condition"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "toggle-link-add-remove-semantics",
+          "label": "Summary link toggles the key in the open list",
+          "ruleStatement": "Each row's summary must contain a plain link whose href adds the row's key to the open list when closed and removes it when open, preserving the current filter text. 10 = tests assert the exact href for both directions and for a row among several already-open rows; 8 = both directions asserted; minScore = closed row's href contains the key and open row's href omits it, with the filter preserved in both.",
+          "passCriteria": [
+            "For a closed row, the link href's open parameter includes that row's key alongside any keys already open",
+            "For an open row, the link href's open parameter contains the other open keys but not this row's key",
+            "When the open list becomes empty, the href omits the open parameter entirely rather than emitting open=",
+            "The href retains the current filter value (a test with a filter set asserts it is still in the link)",
+            "The native <details>/<summary> toggle is still present \u2014 the link is added inside the summary, not replacing the disclosure widget"
+          ],
+          "failureExamples": [
+            "Removing the last open key produces '?open=' which the parser then reads as one empty entry, so the row re-renders open forever",
+            "The link is built from only this row's key rather than from the current open list, so opening a second row collapses the first",
+            "A <button> or JS handler replaces the link, so the state is not shareable and the row no longer toggles without JavaScript"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "flag-key-injection-safety",
+          "label": "Flag keys safe in hrefs",
+          "ruleStatement": "Flag keys reaching the generated link must be percent-encoded by the state module and the finished URL wrapped in escapeHtml. 10 = a test uses a key containing a double quote, '&', and a space and asserts the attribute cannot be broken out of; 8 = quote payload tested; minScore = a test with a quote-containing key shows the emitted href escaped.",
+          "passCriteria": [
+            "A test renders a flag whose key is `a\"b&c` and asserts the href contains no raw double quote",
+            "The URL value is produced via the state module's serialiser (percent-encoded), not by string concatenation",
+            "The final attribute value is passed through escapeHtml",
+            "The same escaped key also appears correctly in the row's other attributes (data-flag, data-search) with no double-escaping artefacts like &amp;amp;"
+          ],
+          "failureExamples": [
+            "escapeHtml is applied to the key before serialising, so the entity text is percent-encoded and the round-trip yields a key that matches nothing",
+            "The href is escaped but a title/aria-label on the same link interpolates the key raw",
+            "Double-escaping produces &amp;amp; in the visible link and a broken open list after a click"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "nested-panels-left-alone",
+          "label": "Nested panels excluded from the contract",
+          "ruleStatement": "Rollout-rule and segment-attach nested summaries must stay outside the URL open contract, with a comment saying so, and existing e2e clicks on them must keep working. 10 = comment names the e2e dependency and a test asserts a nested summary carries no state link; 8 = nested panels untouched and commented; minScore = nested summaries render no open-list link and existing nested-panel e2e specs pass unedited.",
+          "passCriteria": [
+            "Nested <summary> elements inside a flag row contain no open-list link",
+            "A comment in snapshot-contents.ts records that nested panels are intentionally out of the contract because e2e tests click them open",
+            "Existing e2e specs that click a nested rollout or segment summary pass with no changes",
+            "The open list parser/serialiser is never fed a nested panel identifier"
+          ],
+          "failureExamples": [
+            "The state link is added generically to every <summary> in the subtree, so clicking a rollout panel reloads the page and the e2e click-then-assert sequence becomes flaky",
+            "Nested panels are given their own URL keys 'for consistency', expanding the attacker-controllable list beyond the capped flag keys",
+            "The comment is added but the nested summary inherits the parent's link markup via a shared helper"
+          ],
+          "minScore": 7
+        }
+      ],
+      "healerHint": "The classic failure is the draft-forces-open rule getting replaced rather than OR-ed in \u2014 assert the draft-present/key-absent row renders open before touching anything else."
+    },
+    {
+      "id": "echo-url-state-through-write-forms",
+      "order": 4,
+      "name": "Carry URL state through every write form",
+      "goal": "Make every form that writes a change carry the current filter text and open-row list with it, so the page the server renders back after a submit shows the same filtered, expanded view the user was looking at.",
+      "rationale": "Saving a change re-renders the page in place rather than redirecting, so anything not sent with the form is lost \u2014 the user's filter clears and their expanded row collapses. Sending the state with each form is the only way it survives a save, and passing it as a required argument to each form builder makes a forgotten form a compile error instead of a silent loss.",
+      "filesAffected": [
+        "packages/dashboard/src/infrastructure/views/feature-edit-form.ts",
+        "packages/dashboard/src/infrastructure/views/rollout-form.ts",
+        "packages/dashboard/src/infrastructure/views/segment-attach-form.ts",
+        "packages/dashboard/src/infrastructure/views/new-flag-form.ts",
+        "packages/dashboard/src/infrastructure/views/environment-page.ts",
+        "packages/dashboard/src/infrastructure/views/version-list-page.ts",
+        "packages/dashboard/src/infrastructure/http-server.ts",
+        "packages/dashboard/e2e/url-state.spec.ts",
+        "packages/dashboard/e2e/segment-picker.spec.ts",
+        "packages/dashboard/e2e/segment-upload-rollout.spec.ts"
+      ],
+      "changes": [
+        "Add a stateInputs(state) helper (mirroring the existing baseVersionInput helper that every form already threads through) that renders the current filter text and open-row list as hidden form inputs, and thread it as a REQUIRED parameter into all eight write forms: feature edit, feature delete, rollout set, rollout detach, segment attach, new flag, publish, rollback.",
+        "Also append the serialised state to each form's action URL through the state module, and replace the hand-written inline action string in feature-edit-form.ts with the shared flag path helper so the two cannot drift apart.",
+        "Give the POST request handlers that re-render the environment page \u2014 the create-flag route, the edit-flag route, publish and rollback \u2014 access to the request URL (the dispatcher already passes it; the handlers currently ignore it) and read the echoed state from the submitted form fields so the re-rendered page reapplies the filter and the open rows.",
+        "Keep the write behaviour itself untouched: the same inline 200 success / 400 invalid-input / 422 rejected responses, the same draft values, notices and per-field replay. No redirect after a POST is introduced.",
+        "Leave the segment create/edit POSTs and the merge dialog/JSON endpoints without state echo \u2014 segments are out of this horizon's scope and the merge endpoints return a fragment and JSON, not a page \u2014 and record that in a comment so a reviewer does not read it as an omission.",
+        "Add a test per form asserting the hidden state inputs and the action URL are present and escaped, plus request-level tests that a POST carrying filter and open-row fields re-renders with that filter applied and that row expanded, for each of the four page-rendering POST routes, at each of the 200 / 400 / 422 outcomes that route can produce.",
+        "Budget for test-file growth deliberately: http-server.test.ts is already ~1714 lines and this phase adds per-route, per-outcome state-echo assertions to it. Either add them under a new describe block in that file, or split the state-echo request tests into their own co-located test file \u2014 decide before writing, do not let it grow incidentally.",
+        "Add an end-to-end browser proof that open rows survive a submit: a new e2e/url-state.spec.ts that opens a flag row, applies a filter, submits the FEATURE EDIT form, and asserts on the re-rendered page that the previously open flag row is still expanded and the filter is still applied. This needs no LocalStack \u2014 the in-memory e2e fixture (e2e/support/fixtures.ts, InMemoryEnvironment) already supports the feature-edit POST path. The ROLLBACK form cannot be proven this way because openWriter().rollback is a rejecting stub in that fake, so the rollback route's state echo stays covered by http-server.test.ts only \u2014 say so in a comment in the spec rather than omitting it silently.",
+        "Retire the horizon-23 re-open workaround where it is now unnecessary: in e2e/segment-picker.spec.ts and e2e/segment-upload-rollout.spec.ts drop the FLAG-ROW re-open click (the server now renders that row open from the URL state) but KEEP the nested panel click on details.rollouts > summary, because nested rollout/segment panels are deliberately outside the URL-State contract per the deferred list. These two specs are LocalStack-backed, so note that they cannot be verified in a plain unit run."
+      ],
+      "boundedContext": "State Echo",
+      "layer": "interface",
+      "blastRadius": "medium",
+      "inputs": [
+        "parseUrlState/serialiseUrlState from phase url-state-contract-module",
+        "The server-side filter rendering and open-row rendering this phase must reproduce on re-render (phases render-filtered-flag-list and render-open-flag-rows-from-url)",
+        "Existing baseVersionInput hidden-field pattern in views/feature-edit-form.ts",
+        "Existing e2e fixture e2e/support/fixtures.ts (InMemoryEnvironment, expandFlag helper) and the horizon-23 re-open workaround in segment-picker.spec.ts / segment-upload-rollout.spec.ts"
+      ],
+      "expectedResult": "All eight write forms send the current filter and open-row state, the four page-rendering POST routes re-render with that state applied, with a test per form and per outcome, and one Playwright spec proving in a real browser that an open flag row and the applied filter survive an edit submit.",
+      "dependsOn": [
+        "render-filtered-flag-list",
+        "render-open-flag-rows-from-url"
+      ],
+      "compensation": "Drop the stateInputs parameter from the form builders, stop reading the echoed fields in the POST handlers, delete e2e/url-state.spec.ts and restore the flag-row re-open click in the two LocalStack-backed specs; forms return to their previous actions and the state is simply lost on submit, as before.",
+      "rubric": [
+        {
+          "id": "no-redirect-inline-rerender-preserved",
+          "label": "Inline re-render with 200/400/422 and field replay intact",
+          "ruleStatement": "Adding state echo must not change write behaviour: every write POST still re-renders inline with its existing 200/400/422 status, the same notices, draft values and field-granular replay, with no redirect introduced. 10 = existing write tests pass with zero expectation edits and a test asserts no Location header on any of the four page-rendering POST routes; 8 = existing tests pass unedited; minScore = no 3xx response or Location header from any write POST, and the per-field replay tests still pass.",
+          "passCriteria": [
+            "For each of the four page-rendering POST routes, a test asserts the response status is 200/400/422 as before and that there is no Location header and no 302/303",
+            "Existing tests covering draft value replay per field pass without any edit to their expectations",
+            "The same notice text appears in the same place after a successful write as before this phase",
+            "grep for redirect/Location in the changed handlers returns no new occurrences",
+            "A 400 response still re-renders the submitted draft values rather than a cleared form"
+          ],
+          "failureExamples": [
+            "Reading the echoed state is added at the top of the handler and a parse failure on a hand-edited hidden field throws, turning a would-be 422 re-render into a 400 or 500",
+            "The handler is refactored to redirect with the state in the query 'because that is cleaner', discarding draft values on every invalid submit",
+            "Field-granular replay still works for the edit form but the new-flag form's draft values are rebuilt from the echoed state instead of the submitted body, so one field silently resets"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "all-eight-forms-required-parameter",
+          "label": "State threaded as a required parameter into all eight forms",
+          "ruleStatement": "stateInputs must be threaded as a required (not optional/defaulted) parameter into all eight write forms, so a forgotten form is a type error. 10 = the parameter is non-optional in every signature, tsc passes, and a test per form asserts the hidden inputs are present; 8 = all eight forms take it, required, with tests; minScore = all eight forms render the hidden state inputs and no signature uses an optional or default for the state parameter.",
+          "passCriteria": [
+            "All eight forms \u2014 feature edit, feature delete, rollout set, rollout detach, segment attach, new flag, publish, rollback \u2014 render hidden inputs carrying the filter text and open-row list",
+            "No form builder declares the state parameter as optional (`state?`) or with a default value",
+            "A unit test per form asserts the hidden input names and values",
+            "feature-edit-form.ts no longer contains a hand-written inline action string; it uses the shared flag path helper (grep shows no literal path concatenation)",
+            "Each form's action URL carries the serialised state and the attribute is escapeHtml-wrapped"
+          ],
+          "failureExamples": [
+            "Six forms are updated and the parameter is made optional so the remaining two compile, losing state on publish and rollback without any test failing",
+            "The rollout detach form is treated as 'not a real write' and skipped, so detaching a segment collapses the user's view",
+            "The action URL gets the state but the hidden inputs are omitted, so a browser that submits the form still works while a form re-render path that rebuilds the action loses it (or vice versa) \u2014 only one of the two channels is present"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "echoed-state-reapplied-on-rerender",
+          "label": "POST re-render applies the echoed filter and open rows",
+          "ruleStatement": "Each of the four page-rendering POST routes must read the echoed form fields and re-render with that filter applied and those rows expanded, at every status it can return. 10 = a test matrix covers each route x each of its 200/400/422 outcomes asserting both filtered rows and the expanded row; 8 = each route tested at its success and one failure status; minScore = for each of the four routes, one test proves the filter is applied and the named row is open in the POST response body.",
+          "passCriteria": [
+            "A POST to the create-flag route with filter and open fields returns a body containing only matching [data-flag] rows",
+            "The same response shows the echoed flag key's <details> carrying the open attribute",
+            "The edit-flag, publish and rollback routes each have an equivalent test",
+            "For a route that can return 400 and 422, the filter and open state are applied in those responses too, not only on 200",
+            "The handlers take the state from the submitted body, and a request with no state fields still renders the unfiltered default view"
+          ],
+          "failureExamples": [
+            "State is reapplied on the 200 path only, so the one case that matters most \u2014 an invalid submit the user must correct \u2014 still dumps them into an unfiltered, collapsed page",
+            "The handler reads the state from the request URL instead of the body, so it works in tests that happen to include the query string and fails for a real form POST to a bare action",
+            "The open row is expanded but the filter is applied to the wrong list, so the edited flag is itself filtered out of the response the user is reading"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "documented-scope-exclusions",
+          "label": "Deliberate exclusions recorded",
+          "ruleStatement": "Segment create/edit POSTs and the merge dialog/JSON endpoints must be left without state echo, with a comment marking it deliberate. 10 = the comment names each excluded endpoint and its reason (out of horizon scope; returns fragment/JSON, not a page); 8 = a comment marks the exclusion; minScore = those endpoints are unchanged and an explanatory comment exists.",
+          "passCriteria": [
+            "The segment create and segment edit POST handlers are unchanged in this phase's diff",
+            "The merge dialog and JSON endpoints are unchanged and still return their fragment/JSON content type",
+            "A comment at the exclusion point states these are intentionally without state echo and why",
+            "No stateInputs call is added to any form rendered by those endpoints"
+          ],
+          "failureExamples": [
+            "stateInputs is applied uniformly to every form builder in the views directory, so a hidden filter field lands inside the merge dialog fragment and pollutes its JSON-driven flow",
+            "The exclusion happens but is undocumented, so a later reviewer 'completes' the work and breaks the fragment endpoints",
+            "The comment is placed in an unrelated file where nobody reading the segment handler will see it"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "echo-field-hardening-and-coverage",
+          "label": "Echoed fields treated as untrusted, every branch tested",
+          "ruleStatement": "Hidden state fields arrive from the client and must be re-parsed through the state module's clamping/escaping path, with 100% coverage on the new branches in this phase. 10 = a test submits an over-long filter and an over-count open list via form fields and asserts the same caps as the URL path, plus a quote payload proving escaping; 8 = fields re-parsed through the module with a cap test; minScore = state fields go through the module's parser (not used raw) and coverage is 100% on changed files.",
+          "passCriteria": [
+            "A POST whose hidden open field lists 500 keys renders no more rows/links than the module's count cap",
+            "A POST whose hidden filter field is 10,000 characters is truncated to the same cap as the GET path",
+            "A POST whose hidden filter field contains `\"><script>` produces no unescaped script text in the re-rendered page",
+            "The coverage command reports 100% line/branch/function/statement for every file changed in this phase, with no new ignore pragmas",
+            "The hidden inputs' own values are escapeHtml-wrapped when re-emitted into the next render"
+          ],
+          "failureExamples": [
+            "Form fields are trusted because 'the server wrote them', so the caps apply to URLs but not to POST bodies and the amplification guard is bypassable",
+            "The re-emitted hidden input value is interpolated raw on the re-render path, so the payload survives one round trip and lands unescaped",
+            "Coverage passes overall but a newly added `?? ''` on the body lookup has an untaken branch because every test supplies the field"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "open-rows-survive-submit-e2e",
+          "label": "Browser proof that open rows survive a submit",
+          "ruleStatement": "The Playwright suite must contain at least one spec proving the horizon's headline behaviour: after a write submit, the previously open flag row is still expanded and the filter is still applied. 10 = a single deterministic spec asserts both the expanded row and the applied filter after a feature-edit submit, runs on the in-memory fixture with no LocalStack, and comments why the rollback form is excluded; 8 = both assertions present in one spec; minScore = one Playwright assertion proves the previously open flag row is still expanded after an edit submit.",
+          "passCriteria": [
+            "An e2e spec opens a specific flag row, applies a filter, submits the feature-edit form, and then asserts that same row is still expanded (e.g. the details element for that flag key has the open state) on the re-rendered page",
+            "The same spec asserts the filter is still applied after the submit \u2014 the searchbox still holds the filter text and only matching [data-flag] rows are rendered",
+            "The spec runs against the existing in-memory e2e fixture (InMemoryEnvironment) and requires no LocalStack",
+            "A comment in the spec records that the ROLLBACK form's state echo cannot be proven end-to-end because openWriter().rollback is a rejecting stub in that fixture, and is covered by http-server.test.ts instead",
+            "The spec passes with the repository's existing playwright config (retries:0), with no added retry, sleep or timeout bump"
+          ],
+          "failureExamples": [
+            "The spec asserts the row is expanded before the submit only, so it passes identically with the old collapse-everything behaviour and proves nothing",
+            "The proof is written against a LocalStack-backed spec, so it cannot run in the default suite and the headline behaviour stays unverified in CI",
+            "The row-open assertion uses toBeVisible on the summary element, which is visible whether the details is open or closed",
+            "The rollback form is quietly dropped from the plan with no note, so a reviewer cannot tell whether it is untested or intentionally request-level only",
+            "Flakiness is papered over by adding retries or a fixed wait instead of asserting on the re-rendered markup"
+          ],
+          "minScore": 7
+        }
+      ],
+      "healerHint": "The likeliest regression is state being reapplied only on the 200 path or a redirect creeping in \u2014 test one 400 and one 422 POST per route for filter-applied-and-row-open plus absence of a Location header."
+    },
+    {
+      "id": "add-sticky-section-nav",
+      "order": 5,
+      "name": "Add sticky section navigation strip",
+      "goal": "Add a small navigation strip to the dashboard pages that stays visible while scrolling and jumps to the page's main sections.",
+      "rationale": "The environment page is long \u2014 current snapshot, flag list, version history \u2014 and a user scrolled to the bottom has no quick way back to another section. A strip of in-page links that stays pinned as the page scrolls fixes that. It is purely markup and styling and depends on nothing else in this horizon.",
+      "filesAffected": [
+        "packages/dashboard/src/infrastructure/views/section-nav.ts",
+        "packages/dashboard/src/infrastructure/views/section-nav.test.ts",
+        "packages/dashboard/src/infrastructure/views/styles/section-nav.css",
+        "packages/dashboard/src/infrastructure/views/stylesheet.ts",
+        "packages/dashboard/src/infrastructure/views/environment-page.ts"
+      ],
+      "changes": [
+        "Create views/section-nav.ts rendering a <nav aria-label=\"Sections\"> with links to the existing heading anchors already present in the markup (#current-heading, #flags-heading, #versions-heading) \u2014 no new ids are needed.",
+        "Build each link's href through the URL state module so clicking a section link keeps the current filter text and open rows rather than resetting the view.",
+        "Create a NEW small per-feature stylesheet views/styles/section-nav.css (roughly 15-30 lines, matching the existing per-feature sheets such as rollout.css and segment-attach.css) holding only this component's styles; do not add these rules to any existing stylesheet.",
+        "Register 'section-nav.css' in the STYLE_FILES list in stylesheet.ts after components.css, following that file's stated ordering comment (tokens, then layout, then components that use both).",
+        "Make the strip stick to the top while scrolling, and pick a top offset and stacking order that do not overlap the existing sticky update banner (which sits at top 0.5rem with stacking order 10).",
+        "Render the nav near the top of the environment page body, and add tests asserting the links, their labels, their state-carrying hrefs and that the stylesheet list includes the new file."
+      ],
+      "boundedContext": "Section Nav",
+      "layer": "interface",
+      "blastRadius": "small",
+      "inputs": [
+        "Existing heading ids current-heading / flags-heading / versions-heading in views/environment-page.ts",
+        "STYLE_FILES list and its ordering comment in views/stylesheet.ts",
+        "The existing sticky update banner's top offset and stacking order"
+      ],
+      "expectedResult": "A sticky section navigation strip renders on the environment page, styled by its own new section-nav.css registered in STYLE_FILES.",
+      "dependsOn": [
+        "url-state-contract-module"
+      ],
+      "compensation": "Remove the nav render call, delete section-nav.ts/.css and their test, and remove the STYLE_FILES entry so no dead stylesheet reference remains.",
+      "rubric": [
+        {
+          "id": "nav-markup-and-existing-anchors",
+          "label": "Accessible nav pointing at existing heading ids",
+          "ruleStatement": "section-nav.ts must render a <nav aria-label=\"Sections\"> whose links target the already-present #current-heading, #flags-heading and #versions-heading, adding no new ids. 10 = a test asserts each link's label and target and also asserts those ids still exist in the environment page output; 8 = links and labels asserted; minScore = the nav renders with the aria-label and three links whose fragments match the existing ids exactly.",
+          "passCriteria": [
+            "Rendered markup contains <nav aria-label=\"Sections\">",
+            "Three links exist whose hrefs end in #current-heading, #flags-heading, #versions-heading (spelled exactly as in environment-page.ts)",
+            "No new id attributes are added to the environment page in this phase's diff",
+            "Each link has human-readable text, not a bare fragment string",
+            "A test asserts the three target ids are present in the environment page render, so a renamed heading breaks a test"
+          ],
+          "failureExamples": [
+            "Link fragments are guessed as #current, #flags, #versions, so every nav link scrolls nowhere and no test catches it because only the nav module is tested in isolation",
+            "The nav is rendered but aria-label is omitted or reworded, leaving two unlabelled navs on the page for a screen reader",
+            "New ids are added next to the existing ones, so the page now has duplicate anchors for the same section"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "links-carry-url-state",
+          "label": "Section links preserve filter and open rows",
+          "ruleStatement": "Each nav href must be built through the URL state module so clicking it keeps the current filter and open-row list. 10 = a test asserts the full expected href (path + encoded state + fragment) for a state carrying a filter and two open keys, and asserts a bare path with no '?' when the state is default; 8 = state-carrying href asserted; minScore = the href includes the serialised state and the fragment in the correct order, with no '?' when the state is empty.",
+          "passCriteria": [
+            "With a filter and open keys set, each nav href contains the encoded filter and open values followed by the '#...' fragment",
+            "With default state, the href is the path plus fragment only, with no '?'",
+            "The query is produced by the state module's serialiser, not string concatenation (grep shows no '?filter=' literal)",
+            "The fragment comes after the query string, never before it",
+            "The href attribute is escapeHtml-wrapped, and a test with a filter containing & and a double quote asserts it"
+          ],
+          "failureExamples": [
+            "The fragment is appended before the query, producing '#flags-heading?filter=x' so the filter becomes part of the fragment and is lost",
+            "An empty state still yields '?#flags-heading', an ugly URL that also differs from the canonical bookmarkable form",
+            "The state is percent-encoded but not escapeHtml-wrapped, so an '&' in the filter corrupts the attribute"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "own-stylesheet-registered-in-order",
+          "label": "New per-feature stylesheet, correctly registered",
+          "ruleStatement": "Styles must live in a new views/styles/section-nav.css of roughly 15-30 lines and be registered in STYLE_FILES immediately after components.css per that file's ordering comment, with no rules added to existing sheets. 10 = the file matches the size and shape of rollout.css/segment-attach.css, the ordering comment's rationale is respected, and a test asserts the list contents and position; 8 = new file created and registered after components.css with a test; minScore = the file exists, is registered, and no existing stylesheet gained section-nav rules.",
+          "passCriteria": [
+            "packages/dashboard/src/infrastructure/views/styles/section-nav.css exists and is between roughly 15 and 30 lines",
+            "'section-nav.css' appears in STYLE_FILES in stylesheet.ts positioned after components.css",
+            "git diff shows no section-nav selectors added to components.css, layout.css, tokens or any other existing sheet",
+            "A test asserts STYLE_FILES includes 'section-nav.css' and that it comes after components.css in the array",
+            "Requesting the served stylesheet returns the nav rules (the file is actually reachable, not just listed)"
+          ],
+          "failureExamples": [
+            "The file is created and registered but placed before the tokens sheet, so its var(--...) references resolve to nothing and the strip renders unstyled",
+            "The test asserts only that the array contains the entry, so a later reordering that breaks cascade goes unnoticed",
+            "Two or three rules are quietly added to components.css for the sticky offset because that is where the banner rules live"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "sticky-without-banner-overlap",
+          "label": "Sticky positioning clears the update banner",
+          "ruleStatement": "The strip must be position:sticky with a top offset and z-index chosen so it never overlaps or is covered by the existing sticky update banner at top 0.5rem / z-index 10. 10 = the offset is derived from the banner's height with a comment naming the banner as the constraint, and the z-index relationship is explicit; 8 = a non-overlapping offset and a stated z-index; minScore = position:sticky present with a top offset greater than the banner's and a z-index that does not equal it.",
+          "passCriteria": [
+            "section-nav.css sets position: sticky and an explicit top offset",
+            "The top offset is larger than 0.5rem, clearing the banner's position",
+            "A z-index is set and is not the same value as the banner's 10, so stacking is deterministic",
+            "A comment in the CSS names the update banner as the reason for the chosen offset",
+            "Scrolling the environment page (manually or in the e2e run) shows both banner and nav visible, neither clipping the other"
+          ],
+          "failureExamples": [
+            "top: 0 and no z-index are used, so the nav and the banner sit on top of each other whenever the banner is showing \u2014 invisible in tests because the banner only renders after an update",
+            "The nav is given z-index 10, matching the banner, so which one wins depends on DOM order and changes when the nav is moved",
+            "An offset is hard-coded in px while the banner uses rem, so the two diverge at a non-default root font size"
+          ],
+          "minScore": 7
+        },
+        {
+          "id": "nav-tests-at-full-coverage",
+          "label": "Nav module fully covered in this phase",
+          "ruleStatement": "section-nav.test.ts must drive section-nav.ts to 100% coverage in this phase and assert the nav's presence in the environment page, not only in isolation. 10 = 100% coverage plus an environment-page test asserting the nav renders near the top of the body; 8 = 100% coverage of the module with a page-level presence test; minScore = coverage command reports 100% for section-nav.ts and one test asserts the nav appears in the environment page output.",
+          "passCriteria": [
+            "Coverage report shows 100% line/branch/function/statement for views/section-nav.ts",
+            "A test asserts the nav element appears in the environment page render",
+            "A test covers the default-state href branch and the state-carrying href branch separately",
+            "No coverage ignore pragma or config exclusion was added for the new files"
+          ],
+          "failureExamples": [
+            "The module is tested in isolation only, so the nav is never actually wired into environment-page.ts and the page ships without it while coverage is green",
+            "A default-parameter branch on the state argument is never exercised because every test passes a full state, failing the branch threshold",
+            "The CSS file is added but the environment-page snapshot test is updated wholesale, hiding that the nav landed at the bottom of the body"
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "The most common miss is a nav that is fully unit-tested but never rendered into environment-page.ts, or whose fragment is appended before the query string \u2014 assert the nav's presence in the page render and the exact full href."
+    }
+  ],
+  "successCriteria": [
+    "Done when: (1) a single URL-State contract module in packages/dashboard owns the query-string keys (filter text, open flag keys, and the existing version page/pageSize) \u2014 no flag-list paging key is added \u2014 parses them with the established strict-parse/HttpError(400) style for the numeric keys and leniently for the rest, caps and deduplicates the lenient inputs, and re-serialises them through one helper consistent with flagPath/versionsPath; (2) GET of THE ENVIRONMENT PAGE renders filter text and flag-row open/closed state purely from the query string with no JS required, and copying that URL into a fresh browser reproduces the same rendered state \u2014 the flag page, the versions page and collapsible page-sections are explicitly NOT covered and stay deferred; (3) every write POST (feature edit, feature delete, rollout set/remove, segment attach, new flag, publish, rollback) still re-renders inline with 200/400/422 with draft values, notices and field-granular replay behaviour unchanged, and each such form echoes the URL state so the re-rendered page preserves filter and open rows; (4) the flag list is filtered server-side with documented matching semantics reproducing today's browser rule including its two known quirks, the client-side live filter in app.js is RETAINED as progressive enhancement over the already-filtered set (not removed), and flag-list.spec.ts covers both the server submit-and-render flow and the retained instant filtering; flag paging is recorded as deliberately not built; (5) a sticky Section Nav renders on the environment page with links that carry the URL state, styled via a per-feature sheet registered in STYLE_FILES; (6) pnpm verify is green with 100% line/branch/function/statement coverage over packages/*/src/**/*.ts, lint/layer rules clean, and the Playwright suite (including at least one spec proving bookmarkability and open-rows-survive-submit) passes with retries:0.",
+    "Add query-string state module for dashboard URLs: packages/dashboard/src/infrastructure/url-state.ts exists with parse and serialise functions and a co-located test file at 100% branch coverage, with versionsPath now building its query through it.",
+    "Add server-side flag filter function: packages/dashboard/src/application/filter-flags.ts exporting filterFlags, with a test file proving it matches the current browser behaviour including the two documented quirks.",
+    "Filter the flag list on the server: The environment page's flag list is filtered server-side from the URL's filter parameter through a no-JavaScript GET form, with the in-browser instant filter retained on top of it.",
+    "Open flag rows named in the URL: Flag rows on the environment page render expanded or collapsed according to the URL's open-rows parameter, with the existing draft-forces-open behaviour preserved.",
+    "Carry URL state through every write form: All eight write forms send the current filter and open-row state, the four page-rendering POST routes re-render with that state applied, with a test per form and per outcome, and one Playwright spec proving in a real browser that an open flag row and the applied filter survive an edit submit.",
+    "Add sticky section navigation strip: A sticky section navigation strip renders on the environment page, styled by its own new section-nav.css registered in STYLE_FILES."
+  ],
+  "deferred": [
+    "Redirect-after-POST / POST-redirect-GET for any write handler \u2014 explicitly rejected by the user; inline 200/400/422 re-render with draft values and field-granular replay must not change.",
+    "Any change to edit, publish, rollback or replay semantics, including the unresolved 200+422 concurrent-replay race \u2014 this horizon moves UI state, not write behaviour.",
+    "Segment List filtering, paging or URL state \u2014 only flags and versions are in the contract; segments stay as horizon 23/24 left them.",
+    "Version-index or bucket-listing shortcuts \u2014 the horizon-24 decision that version history is paged arithmetically from the Current Pointer stands.",
+    "New client-side behaviour in app.js \u2014 app.js is outside the coverage gate, so logic moves to the server rather than growing there.",
+    "Fixing the double snapshot read per environment-page render (browseEnvironment + listPublishedSegments) \u2014 a known read-cost discovery, but a separate performance concern.",
+    "Retiring the dead listReferencedSegments module and other recorded tech debt \u2014 unrelated cleanup that would dilute this horizon's diff.",
+    "Visual redesign, theming or responsive rework of the dashboard beyond the sticky Section Nav's own per-feature stylesheet.",
+    "Authentication, authorization or sharing semantics for bookmarkable URLs \u2014 the dashboard's existing Origin/Host localhost guard is unchanged.",
+    "URL state on the flag page and the versions page, and collapsible page-level sections \u2014 the success bar was deliberately narrowed to the environment page at the alignment checkpoint so the horizon can pass its own bar.",
+    "Removing the client-side live filter from app.js \u2014 the user chose to keep it as progressive enhancement over the server-filtered list, so no UX regression and no loss of its existing e2e coverage.",
+    "Make the page-level 'Flags' and 'Version history' blocks collapsible and drive their open/closed state from the URL \u2014 failed the 'is it needed now?' gate: discovery found these sections are plain always-expanded blocks with no disclosure markup at all, so this is a new feature (markup + CSS + tests), not a relocation of existing state, and the per-flag row openness is what actually removes the repeated re-open clicks.",
+    "Server-side flag paging with a page key for the flag list \u2014 failed the 'is there evidence we need it?' gate: no written justification exists anywhere in the repo, all flags already arrive in one snapshot read, and the end-to-end seed has 3 flags. No flag-paging key is added to the contract module either; adding one later is a small additive change.",
+    "Put the nested rollout-rules and segment-attach panels inside a flag row into the URL contract \u2014 failed the 'smallest thing that works' gate: it multiplies the URL's open-id list and the branch count in the most test-heavy views for a marginal gain; the end-to-end tests keep their explicit nested-panel click.",
+    "Enlarge the end-to-end seed with extra flags to exercise filtering and paging harder \u2014 failed the 'is it needed now?' gate: the concurrent-edits spec spreads the same seed in four places and asserts on its published feature map, so growing it means unrelated spec churn for no new coverage of this horizon's behaviour.",
+    "Have the browser script rewrite the address bar (history.replaceState) when it force-opens a row for a carried-over edit \u2014 failed the 'does it earn its cost?' gate: it means new logic in the one file outside the coverage gate. The client force-open stays an additive override, accepting that the URL can lag the visible state in that one case.",
+    "Centralise the remaining scattered path helpers (environmentPath in views/escape.ts, segmentPath, segmentListPath, flagPath) into one module alongside url-state.ts \u2014 only versionsPath and feature-edit-form's inline action are folded in this horizon; the rest is unrelated churn."
+  ]
+}

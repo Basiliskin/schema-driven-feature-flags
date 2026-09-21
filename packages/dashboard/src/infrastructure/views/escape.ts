@@ -10,3 +10,6 @@ export const escapeHtml = (value: unknown): string =>
   String(value).replace(/[&<>"']/g, (char) => ENTITIES[char] as string);
 
 export const environmentPath = (environment: string): string => `/env/${encodeURIComponent(environment)}`;
+
+export const flagPath = (environment: string, key: string): string =>
+  `${environmentPath(environment)}/features/${encodeURIComponent(key)}`;

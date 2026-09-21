@@ -1,5 +1,6 @@
 import type { FlagDefinitionView } from '../../application/browse-environment.js';
 import { escapeHtml } from './escape.js';
+import type { WriteFormContext } from './state-fields.js';
 
 interface RolloutView {
   readonly percentage: number;
@@ -41,8 +42,7 @@ const renderSegmentKeys = (
   keys: readonly string[],
   ruleIndex: number,
   rollout: RolloutView | undefined,
-  action: string,
-  baseVersionInput: string,
+  form: WriteFormContext,
 ): string => {
   if (keys.length === 0) return '';
   const index = String(ruleIndex);
@@ -50,7 +50,7 @@ const renderSegmentKeys = (
   return `<ul class="rule-segments">
 <li class="rule-segment">Segments ${keys.map((key) => `<code>${escapeHtml(key)}</code>`).join(' ')}
 <span class="badge badge-segment">${escapeHtml(percentage)}% of members</span>
-<form method="post" action="${escapeHtml(action)}">${baseVersionInput}
+<form method="post" action="${escapeHtml(form.action)}">${form.baseVersionInput}${form.stateInputs}
 <input type="hidden" name="ruleIndex" value="${escapeHtml(index)}">
 <button type="submit" class="button-secondary" name="field" value="detachSegment">Detach</button>
 </form>
@@ -58,7 +58,7 @@ const renderSegmentKeys = (
 </ul>`;
 };
 
-const renderRuleRollout = (rule: unknown, ruleIndex: number, action: string, baseVersionInput: string): string => {
+const renderRuleRollout = (rule: unknown, ruleIndex: number, form: WriteFormContext): string => {
   const rollout = readRollout(rule);
   const index = String(ruleIndex);
   const remove =
@@ -67,8 +67,8 @@ const renderRuleRollout = (rule: unknown, ruleIndex: number, action: string, bas
       : `<button type="submit" class="button-secondary" name="field" value="removeRollout">Remove</button>`;
   return `<li class="rule-rollout">
 <div class="rule-head"><span class="rule-label">Rule ${String(ruleIndex + 1)}</span>${renderRolloutBadge(rollout)}</div>
-${renderSegmentKeys(segmentKeysOf(rule), ruleIndex, rollout, action, baseVersionInput)}
-<form method="post" action="${escapeHtml(action)}">${baseVersionInput}
+${renderSegmentKeys(segmentKeysOf(rule), ruleIndex, rollout, form)}
+<form method="post" action="${escapeHtml(form.action)}">${form.baseVersionInput}${form.stateInputs}
 <div class="form-row">
 <input type="hidden" name="ruleIndex" value="${escapeHtml(index)}">
 <label>Percentage <input type="number" name="percentage" min="0" max="100" step="0.01" value="${escapeHtml(String(rollout?.percentage ?? 0))}"></label>
@@ -84,11 +84,9 @@ ${renderSegmentKeys(segmentKeysOf(rule), ruleIndex, rollout, action, baseVersion
  * One row per rule, each holding its own rollout form and, when the rule targets a segment, its own
  * Detach form. Both carry that rule's index, so the two controls on a row always address the same rule.
  */
-export const renderRolloutForms = (flag: FlagDefinitionView, action: string, baseVersionInput: string): string => {
+export const renderRolloutForms = (flag: FlagDefinitionView, form: WriteFormContext): string => {
   if (flag.rules.length === 0) return '';
-  const rows = flag.rules
-    .map((rule, ruleIndex) => renderRuleRollout(rule, ruleIndex, action, baseVersionInput))
-    .join('\n');
+  const rows = flag.rules.map((rule, ruleIndex) => renderRuleRollout(rule, ruleIndex, form)).join('\n');
   return `<details class="rollouts"><summary>Rollout</summary>
 <div class="stack">
 <ul class="rollout-list">

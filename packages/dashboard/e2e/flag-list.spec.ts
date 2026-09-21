@@ -24,6 +24,28 @@ test.describe('flag list', () => {
     await filter.fill('nothing-like-this');
     await expect(page.getByText('No flags match.')).toBeVisible();
   });
+
+  test('filters on the server when the form is submitted, and the URL reproduces the view', async ({ page, openEnvironment }) => {
+    await openEnvironment();
+    const rows = page.locator('[data-flag]');
+    await expect(rows).toHaveCount(3);
+
+    await page.getByRole('searchbox', { name: /Filter flags/ }).fill('dark');
+    await page.getByRole('button', { name: 'Filter' }).click();
+
+    await expect(rows).toHaveCount(1);
+    await expect(page.locator('[data-flag="dark-mode"]')).toBeVisible();
+    expect(new URL(page.url()).searchParams.get('filter')).toBe('dark');
+
+    await page.reload();
+    await expect(rows).toHaveCount(1);
+    await expect(page.getByRole('searchbox', { name: /Filter flags/ })).toHaveValue('dark');
+
+    await page.getByRole('searchbox', { name: /Filter flags/ }).fill('nothing-like-this');
+    await page.getByRole('button', { name: 'Filter' }).click();
+    await expect(rows).toHaveCount(0);
+    await expect(page.getByText('No flags match.')).toBeVisible();
+  });
 });
 
 test.describe('publish dialog', () => {

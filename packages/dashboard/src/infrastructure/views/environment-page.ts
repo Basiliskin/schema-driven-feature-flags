@@ -1,11 +1,15 @@
 import type { EnvironmentView, SnapshotMetadata } from '../../application/browse-environment.js';
+import { filterFlags } from '../../application/filter-flags.js';
 import type { PublishedSegmentsView } from '../../application/list-published-segments.js';
+import { NO_URL_STATE, withUrlState, type DashboardUrlState } from '../url-state.js';
 import { environmentPath, escapeHtml } from './escape.js';
 import type { EditDraft } from './feature-edit-form.js';
 import { renderPage, renderRawJson, renderTimestamp, type Notice } from './layout.js';
 import { renderNewFlagForm, type CreateDraft } from './new-flag-form.js';
+import { CURRENT_SECTION, FLAGS_SECTION, VERSIONS_SECTION, renderSectionNav, type SectionLink } from './section-nav.js';
 import { segmentListPath } from './segment-list-page.js';
 import { renderSnapshotContents } from './snapshot-contents.js';
+import { stateInputs } from './state-fields.js';
 import { renderVersionItem, versionsPath } from './version-list-page.js';
 
 export interface EnvironmentPageState {
@@ -18,6 +22,8 @@ export interface EnvironmentPageState {
   /** An edit was rejected because someone published first; the page offers to review what changed since. */
   /** `key` names the flag whose edit was rejected; absent when the rejected change was a pasted snapshot. */
   readonly conflict?: { readonly since: number; readonly key?: string };
+  /** The query string this page was asked for; absent renders the page as if no query state were set. */
+  readonly urlState?: DashboardUrlState;
 }
 
 type PublishedView = Extract<EnvironmentView, { status: 'published' }>;
@@ -70,43 +76,48 @@ ${details}
 </section>`;
 };
 
+// The filter itself is the input's own value, so only the rest of the state is carried in hidden fields.
+const renderFilterForm = (environment: string, urlState: DashboardUrlState): string =>
+  `<form class="flag-filter-form" method="get" action="${escapeHtml(environmentPath(environment))}">${stateInputs({ ...urlState, filter: '' })}<input type="search" class="flag-filter" data-filter="flag-list" name="filter" value="${escapeHtml(urlState.filter)}" placeholder="Filter flags…" aria-label="Filter flags by key, type or on/off"><button type="submit" class="button-secondary">Filter</button></form>`;
+
 const renderFlags = (view: PublishedView, state: EnvironmentPageState): string => {
   const { current } = view;
   if (current.status !== 'available') return '';
   const { editDraft, createDraft } = state;
+  const urlState = state.urlState ?? NO_URL_STATE;
+  const { contents } = current;
   const context = {
     environment: view.environment,
     baseVersion: view.currentVersion,
+    urlState,
     publishedSegments: state.publishedSegments ?? { status: 'unavailable' as const },
   };
-  const flags = renderSnapshotContents(current.contents, {
-    ...context,
-    ...(editDraft === undefined ? {} : { draft: editDraft }),
-  });
-  const newFlag =
-    current.contents.status === 'valid'
-      ? `\n${renderNewFlagForm({ ...context, ...(createDraft === undefined ? {} : { draft: createDraft }) })}`
-      : '';
-  // Revealed by the page script; without JavaScript every flag simply stays listed.
-  const filter =
-    current.contents.status === 'valid' && current.contents.flags.length > 0
-      ? `<input type="search" class="flag-filter" data-filter="flag-list" placeholder="Filter flags…" aria-label="Filter flags by key, type or on/off" hidden>`
-      : '';
+  // The filter is applied here rather than inside the shared renderer, which the single-version page reuses unfiltered.
+  const matching = contents.status === 'valid' ? filterFlags(contents.flags, urlState.filter) : [];
+  const noMatch = contents.status === 'valid' && contents.flags.length > 0 && matching.length === 0;
+  const editable = { ...context, ...(editDraft === undefined ? {} : { draft: editDraft }) };
+  const flags = noMatch
+    ? '<ul class="flag-list"></ul>'
+    : renderSnapshotContents(contents.status === 'valid' ? { ...contents, flags: matching } : contents, editable, urlState);
+  const newFlag = contents.status === 'valid' ? `\n${renderNewFlagForm({ ...context, ...(createDraft === undefined ? {} : { draft: createDraft }) })}` : '';
+  const filterable = contents.status === 'valid' && contents.flags.length > 0;
+  const filter = filterable ? renderFilterForm(view.environment, urlState) : '';
+  // The message stays in the markup while rows match, because the in-browser instant filter reveals it without a reload.
+  const noMatchMessage = filterable ? `\n<p class="muted" data-filter-empty${noMatch ? '' : ' hidden'}>No flags match.</p>` : '';
   return `<section class="section" aria-labelledby="flags-heading">
 <div class="section-head"><h2 id="flags-heading">Flags</h2>${filter}</div>
 <div class="stack">
-${flags}
-<p class="muted" data-filter-empty hidden>No flags match.</p>${newFlag}
+${flags}${noMatchMessage}${newFlag}
 </div>
 </section>`;
 };
 
-const renderVersions = (view: PublishedView): string => `<section class="section" aria-labelledby="versions-heading">
+const renderVersions = (view: PublishedView, urlState: DashboardUrlState): string => `<section class="section" aria-labelledby="versions-heading">
 <div class="section-head"><h2 id="versions-heading">Version history</h2><a href="${escapeHtml(versionsPath(view.environment))}">View all versions</a></div>
 <ol class="timeline" reversed>
 ${[...view.versions]
   .reverse()
-  .map((entry) => renderVersionItem(view, entry))
+  .map((entry) => renderVersionItem({ ...view, urlState }, entry))
   .join('\n')}
 </ol>
 </section>`;
@@ -114,12 +125,12 @@ ${[...view.versions]
 // A modal dialog keeps the raw-JSON editor out of the way until it is asked for. It opens on load when
 // a publish was rejected, so the operator lands back on their draft; without JavaScript it renders inline.
 // On a conflict the review dialog opens first, and offers to return to this draft from there.
-const renderPublishDialog = (view: EnvironmentView, state: EnvironmentPageState): string => `<dialog id="publish-dialog" class="publish-dialog" aria-labelledby="publish-heading"${state.draft === undefined || state.conflict !== undefined ? '' : ' data-open-on-load'}>
+const renderPublishDialog = (view: EnvironmentView, state: EnvironmentPageState, urlState: DashboardUrlState): string => `<dialog id="publish-dialog" class="publish-dialog" aria-labelledby="publish-heading"${state.draft === undefined || state.conflict !== undefined ? '' : ' data-open-on-load'}>
 <div class="dialog-head"><h2 id="publish-heading">Publish a new version</h2>
 <form method="dialog"><button type="submit" class="button-secondary" aria-label="Close">Close</button></form></div>
 <p class="muted">Starts from the current snapshot. <code>version</code>, <code>previousVersion</code> and <code>createdAt</code> are set when you publish.</p>
-<form method="post" action="${escapeHtml(`${environmentPath(view.environment)}/publish`)}" class="stack">
-${view.status === 'published' ? `<input type="hidden" name="baseVersion" value="${String(view.currentVersion)}">\n` : ''}<label for="snapshot">Snapshot JSON</label>
+<form method="post" action="${escapeHtml(withUrlState(`${environmentPath(view.environment)}/publish`, urlState))}" class="stack">
+${stateInputs(urlState)}${view.status === 'published' ? `<input type="hidden" name="baseVersion" value="${String(view.currentVersion)}">\n` : ''}<label for="snapshot">Snapshot JSON</label>
 <textarea id="snapshot" name="snapshot" rows="16" required spellcheck="false">${escapeHtml(state.draft ?? prefill(view))}</textarea>
 <div class="actions"><button type="submit">Publish</button></div>
 </form>
@@ -148,18 +159,30 @@ const renderUpdateWatch = (view: PublishedView, conflict: EnvironmentPageState['
 </dialog>`;
 };
 
+// The nav only offers sections the page actually rendered, so a link never points at a missing anchor.
+const renderPublished = (view: PublishedView, state: EnvironmentPageState, urlState: DashboardUrlState): string => {
+  const flags = renderFlags(view, state);
+  const sections: SectionLink[] = [CURRENT_SECTION, ...(flags === '' ? [] : [FLAGS_SECTION]), VERSIONS_SECTION];
+  return `${renderUpdateWatch(view, state.conflict)}
+${renderSectionNav(view.environment, urlState, sections)}
+${renderCurrentCard(view)}
+${flags}
+${renderVersions(view, urlState)}`;
+};
+
 export const renderEnvironmentPage = (view: EnvironmentView, state: EnvironmentPageState = {}): string => {
+  const urlState = state.urlState ?? NO_URL_STATE;
   const summary =
     view.status === 'empty'
       ? '<section class="card card-current"><p>Nothing has been published to this environment yet.</p></section>'
-      : `${renderUpdateWatch(view, state.conflict)}\n${renderCurrentCard(view)}\n${renderFlags(view, state)}\n${renderVersions(view)}`;
+      : renderPublished(view, state, urlState);
   return renderPage(
     view.environment,
     `<div class="page-head page-head-actions"><div><p class="eyebrow">Environment</p><h1>Environment ${escapeHtml(view.environment)}</h1></div>
 <a href="${escapeHtml(segmentListPath(view.environment))}">Segments</a>
 <button type="button" data-open-dialog="publish-dialog" hidden>Publish new version</button></div>
 ${summary}
-${renderPublishDialog(view, state)}`,
+${renderPublishDialog(view, state, urlState)}`,
     state.notices,
   );
 };

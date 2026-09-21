@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { NO_URL_STATE } from '../url-state.js';
 import type { VersionPage } from '../../application/list-version-page.js';
 import { renderEnvironmentPage } from './environment-page.js';
 import { renderVersionItem, renderVersionListPage, versionsPath } from './version-list-page.js';
@@ -79,7 +80,7 @@ describe('the version history page', () => {
 
 describe('the shared version item', () => {
   it('renders the same rollback form the environment page uses', () => {
-    const item = renderVersionItem({ environment: 'production', currentVersion: 3 }, { version: 2, metadata });
+    const item = renderVersionItem({ environment: 'production', currentVersion: 3, urlState: NO_URL_STATE }, { version: 2, metadata });
 
     const environmentPage = renderEnvironmentPage({
       environment: 'production',
@@ -95,11 +96,38 @@ describe('the shared version item', () => {
 
   it('leaves out an empty reason', () => {
     const item = renderVersionItem(
-      { environment: 'production', currentVersion: 3 },
+      { environment: 'production', currentVersion: 3, urlState: NO_URL_STATE },
       { version: 2, metadata: { ...metadata, reason: '' } },
     );
 
     expect(item).not.toContain('A reason');
     expect(item).toContain('someone ·');
+  });
+});
+
+describe('the URL state the rollback form carries', () => {
+  it('sends it with the restore, in the form and in its action', () => {
+    const item = renderVersionItem(
+      { environment: 'production', currentVersion: 3, urlState: { filter: 'dark', openFlags: ['a&b'], page: 1, pageSize: 20 } },
+      { version: 2, metadata },
+    );
+
+    expect(item).toContain('action="/env/production/rollback?filter=dark&amp;open=a%26b"');
+    expect(item).toContain('<input type="hidden" name="filter" value="dark">');
+    expect(item).toContain('<input type="hidden" name="open" value="a&amp;b">');
+  });
+
+  it('carries the page being viewed, so restoring from page 2 of the history comes back to page 2', () => {
+    const html = renderVersionListPage(page({ page: 2, pageSize: 5, hasNewer: true }));
+
+    expect(html).toContain('action="/env/production/rollback?page=2&amp;pageSize=5"');
+    expect(html).toContain('<input type="hidden" name="page" value="2">');
+  });
+
+  it('leaves the form free of hidden state on the first page of the default size', () => {
+    const html = renderVersionListPage(page());
+
+    expect(html).toContain('action="/env/production/rollback"');
+    expect(html).not.toContain('name="page" value=');
   });
 });

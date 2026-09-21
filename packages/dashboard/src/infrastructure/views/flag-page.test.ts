@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { EnvironmentView, FlagDefinitionView, SnapshotContents } from '../../application/browse-environment.js';
 import type { PublishedSegmentsView } from '../../application/list-published-segments.js';
 import { renderEnvironmentPage } from './environment-page.js';
-import { flagPath, renderFlagPage } from './flag-page.js';
+import { flagPath } from './escape.js';
+import { renderFlagPage } from './flag-page.js';
 
 const NO_SEGMENTS: PublishedSegmentsView = { status: 'listed', rows: [] };
 

@@ -1,7 +1,15 @@
-import { request as httpRequest, type OutgoingHttpHeaders } from 'node:http';
 import { connect } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SnapshotWriter } from '../application/publish-snapshot.js';
+import {
+  call,
+  fakes,
+  form,
+  publishError,
+  snapshotText,
+  VALID,
+  type Fakes,
+} from '../../test/support/dashboard-harness.js';
 import {
   decodeAttachValue,
   isAllowedHost,
@@ -10,59 +18,6 @@ import {
   type DashboardPorts,
   type RunningDashboard,
 } from './http-server.js';
-
-const snapshotText = (features: Record<string, unknown>) =>
-  JSON.stringify({
-    schemaVersion: 1,
-    environment: 'production',
-    version: 1,
-    createdAt: '2026-09-19T06:00:00.000Z',
-    createdBy: 'test',
-    previousVersion: null,
-    reason: 'test',
-    features,
-  });
-
-const VALID = snapshotText({
-  'new-dashboard': { type: 'boolean', enabled: true },
-  'checkout-limits': { type: 'config', enabled: false, default: { max: 3 } },
-});
-
-
-const publishError = (reason: string) => Object.assign(new Error(reason), { name: 'S3PublishError', reason });
-
-interface Fakes {
-  readonly ports: DashboardPorts;
-  readonly writer: { publish: ReturnType<typeof vi.fn>; rollback: ReturnType<typeof vi.fn> };
-  readonly openWriter: ReturnType<typeof vi.fn>;
-}
-
-const fakes = (overrides: Partial<DashboardPorts> = {}, writer: Partial<SnapshotWriter> = {}): Fakes => {
-  const fakeWriter = {
-    publish: vi.fn(writer.publish ?? (() => Promise.resolve(4))),
-    rollback: vi.fn(writer.rollback ?? ((_env: string, version: number) => Promise.resolve(version))),
-  };
-  const openWriter = vi.fn(() => fakeWriter);
-  return {
-    writer: fakeWriter,
-    openWriter,
-    ports: {
-      readCurrentVersion: () => Promise.resolve(3),
-      fetchSnapshotText: () => Promise.resolve(VALID),
-      listPublishedSegments: () => Promise.resolve({ status: 'listed', segments: [] }),
-      publishSegment: () => Promise.reject(new Error('not used here')),
-      readSegmentVersion: () => Promise.resolve(null),
-      openWriter,
-      ...overrides,
-    },
-  };
-};
-
-interface Reply {
-  readonly status: number;
-  readonly headers: Record<string, string | string[] | undefined>;
-  readonly body: string;
-}
 
 let running: RunningDashboard | undefined;
 
@@ -76,30 +31,7 @@ const start = async (ports: DashboardPorts, logError: (error: unknown) => void =
   return running;
 };
 
-const call = (
-  dashboard: RunningDashboard,
-  method: string,
-  path: string,
-  options: { body?: string; headers?: OutgoingHttpHeaders; sameOrigin?: boolean } = {},
-): Promise<Reply> =>
-  new Promise((resolve, reject) => {
-    const headers: OutgoingHttpHeaders = {
-      ...(options.body === undefined ? {} : { 'content-type': 'application/x-www-form-urlencoded' }),
-      ...(options.sameOrigin === false ? {} : { origin: dashboard.url }),
-      ...options.headers,
-    };
-    const outgoing = httpRequest(new URL(path, dashboard.url), { method, headers }, (incoming) => {
-      const chunks: Buffer[] = [];
-      incoming.on('data', (chunk: Buffer) => chunks.push(chunk));
-      incoming.on('end', () => {
-        resolve({ status: incoming.statusCode ?? 0, headers: incoming.headers, body: Buffer.concat(chunks).toString() });
-      });
-    });
-    outgoing.on('error', reject);
-    outgoing.end(options.body);
-  });
 
-const form = (fields: Record<string, string>) => new URLSearchParams(fields).toString();
 
 describe('startDashboardServer', () => {
   it('listens on the loopback address only', async () => {
@@ -1710,5 +1642,85 @@ describe('attaching and detaching segments', () => {
 
     expect(reply.status).toBe(422);
     expect(openWriter).not.toHaveBeenCalled();
+  });
+});
+
+describe('the server-side flag filter', () => {
+  const flagList = (body: string): string => {
+    const list = /<ul class="flag-list">([\s\S]*?)<\/ul>/.exec(body);
+    if (list === null) throw new Error('the page rendered no flag list');
+    return list[1] as string;
+  };
+
+  const rowCount = (body: string): number => (flagList(body).match(/data-flag="/g) ?? []).length;
+
+  it('renders only the matching rows and leaves the others out of the markup', async () => {
+    const dashboard = await start(fakes().ports);
+
+    const all = await call(dashboard, 'GET', '/env/production');
+    const filtered = await call(dashboard, 'GET', '/env/production?filter=checkout');
+
+    expect(rowCount(all.body)).toBe(2);
+    expect(filtered.status).toBe(200);
+    expect(rowCount(filtered.body)).toBe(1);
+    expect(flagList(filtered.body)).toContain('data-flag="checkout-limits"');
+    expect(flagList(filtered.body)).not.toContain('new-dashboard');
+    expect(filtered.body).toContain('<p class="muted" data-filter-empty hidden>No flags match.</p>');
+  });
+
+  it('answers a filter that matches nothing with 200 and the no-match message, not the flagless one', async () => {
+    const dashboard = await start(fakes().ports);
+
+    const reply = await call(dashboard, 'GET', '/env/production?filter=nothing-like-this');
+
+    expect(reply.status).toBe(200);
+    expect(reply.body).toContain('No flags match.');
+    expect(reply.body).not.toContain('This snapshot defines no flags.');
+    expect(rowCount(reply.body)).toBe(0);
+  });
+
+  it('keeps the flagless snapshot on its own empty state when a filter is present', async () => {
+    const flagless = await start(fakes({ fetchSnapshotText: () => Promise.resolve(snapshotText({})) }).ports);
+
+    const reply = await call(flagless, 'GET', '/env/production?filter=anything');
+
+    expect(reply.body).toContain('This snapshot defines no flags.');
+    expect(reply.body).not.toContain('No flags match.');
+  });
+
+  it('leaves the single-version page unfiltered', async () => {
+    const dashboard = await start(fakes().ports);
+
+    const reply = await call(dashboard, 'GET', '/env/production/versions/2?filter=checkout');
+
+    expect(reply.status).toBe(200);
+    expect(reply.body).toContain('<td data-label="Flag"><code>checkout-limits</code></td>');
+    expect(reply.body).toContain('<td data-label="Flag"><code>new-dashboard</code></td>');
+  });
+
+  it('submits through a GET form that echoes the filter and carries the rest of the query state', async () => {
+    const dashboard = await start(fakes().ports);
+
+    const reply = await call(dashboard, 'GET', '/env/production?filter=checkout&page=3&pageSize=25&open=new-dashboard');
+
+    expect(reply.body).toContain('<form class="flag-filter-form" method="get" action="/env/production">');
+    expect(reply.body).toContain('<input type="hidden" name="open" value="new-dashboard">');
+    expect(reply.body).toContain('<input type="hidden" name="page" value="3">');
+    expect(reply.body).toContain('<input type="hidden" name="pageSize" value="25">');
+    expect(reply.body).toContain('name="filter" value="checkout"');
+    expect(reply.body).not.toContain('name="filter" value="checkout" hidden');
+    expect(reply.body).toContain('aria-label="Filter flags by key, type or on/off"');
+    expect(reply.body).toContain('<button type="submit" class="button-secondary">Filter</button>');
+  });
+
+  it('escapes a filter that tries to break out of the value attribute', async () => {
+    const dashboard = await start(fakes().ports);
+    const payload = '"><script>alert(1)</script>';
+
+    const reply = await call(dashboard, 'GET', `/env/production?filter=${encodeURIComponent(payload)}`);
+
+    expect(reply.status).toBe(200);
+    expect(reply.body).toContain('value="&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;"');
+    expect(reply.body).not.toContain('<script>alert(1)</script>');
   });
 });

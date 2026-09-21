@@ -1,6 +1,7 @@
 import type { PublishedSegmentRow, PublishedSegmentsView } from '../../application/list-published-segments.js';
 import type { FlagDefinitionView } from '../../application/browse-environment.js';
 import { escapeHtml } from './escape.js';
+import type { WriteFormContext } from './state-fields.js';
 
 /** The attach fields of a rejected submission, echoed back so the operator keeps their choice. */
 export interface AttachDraft {
@@ -8,9 +9,7 @@ export interface AttachDraft {
   readonly segmentValue?: string;
 }
 
-export interface AttachContext {
-  readonly action: string;
-  readonly baseVersionInput: string;
+export interface AttachContext extends WriteFormContext {
   /** Every segment published in the Environment — the only keys the form offers. */
   readonly segments: PublishedSegmentsView;
   readonly draft?: AttachDraft;
@@ -46,7 +45,7 @@ export const renderSegmentAttachForm = (flag: FlagDefinitionView, context: Attac
   }
   const options = segments.rows.map((row) => renderOption(row, draft?.segmentKey)).join('');
   return wrap(`<form method="post" action="${escapeHtml(context.action)}" class="stack">
-${context.baseVersionInput}
+${context.baseVersionInput}${context.stateInputs}
 <label>Segment <select name="segmentKey" required><option value="" disabled${segments.rows.some((row) => row.segmentKey === draft?.segmentKey) ? '' : ' selected'}>Choose a segment…</option>${options}</select></label>
 <p class="muted">Each segment is listed with the member attribute it was published with; members are matched on it.</p>
 ${renderValueControl(flag, draft)}

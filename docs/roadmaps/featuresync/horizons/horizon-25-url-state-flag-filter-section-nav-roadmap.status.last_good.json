@@ -1,0 +1,113 @@
+{
+  "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-25-url-state-flag-filter-section-nav-roadmap.json",
+  "roadmapTask": "Horizon 25 of the FeatureSync dashboard: put the dashboard's UI state (flag filter text and which flag rows are open) in the URL query string rendered server-side so a page is bookmarkable and survives a form submit; build the server-side flag filter on top of that contract while keeping the in-browser instant filter as progressive enhancement; and add a sticky Section Nav. Write POSTs keep re-rendering inline with 200/400/422 and draft values \u2014 redirect-after-POST is rejected.",
+  "createdAt": "2026-09-21T09:42:32.520824Z",
+  "updatedAt": "2026-09-21T10:05:28.930158Z",
+  "roadmapRevision": 0,
+  "phases": [
+    {
+      "phaseId": "url-state-contract-module",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-21T09:42:32.520824Z",
+      "baseRef": "9346e68b1fd6580a95b7fb6eecc03f01892380ff",
+      "baseDirty": true,
+      "notes": "Changed: packages/dashboard/src/infrastructure/url-state.ts (new), url-state.test.ts (new), views/version-list-page.ts, http-server.ts. Adds the DashboardUrlState contract owning 'filter'/'open'/'page'/'pageSize' with a strict page parse (HttpError 400, existing messages) and lenient capped filter/open parsing, plus serialiseUrlState/withUrlState that omit defaults and percent-encode; versionsPath now builds through it and carries a non-default pageSize on pager links. http-server.ts is unplanned but in-scope: it now imports parsePageNumber/PAGE_MESSAGE/PAGE_SIZE_MESSAGE from the module instead of keeping a duplicate copy, which the rubric's own failure example names. Dirty-at-start paths (docs/roadmaps/featuresync/**) are not this phase's. | VERIFIED: pnpm verify green; graded overallPass with no 10 demoted. Compensation if this phase must be undone: delete url-state.ts and url-state.test.ts, restore versionsPath's '?page=' concatenation in views/version-list-page.ts, and restore http-server.ts's local parsePageNumber/PAGE_MESSAGE/PAGE_SIZE_MESSAGE (git diff 9346e68 shows this phase's change). Not needed this time. Playwright e2e was not run: it is outside pnpm verify and no e2e spec references version-paging URLs (grep).",
+      "unplannedFiles": [
+        "packages/dashboard/src/infrastructure/http-server.ts"
+      ],
+      "completedAt": "2026-09-21T09:55:59.816619Z",
+      "gateRun": "pnpm verify (builds core/nestjs/aws/cli/dashboard + pnpm typecheck + eslint --max-warnings=0 + vitest run --coverage at 100% thresholds): pass",
+      "gradeResult": {
+        "phaseId": "url-state-contract-module",
+        "dimensionScores": [
+          {
+            "dimensionId": "key-grammar-and-strictness-split",
+            "score": 10,
+            "pass": true,
+            "evidence": "http-server.ts's duplicate parse was deleted rather than matched: parsePageNumber and both 400 messages now exist once, in url-state.ts, so divergent messages are structurally impossible. parseUrlState reads exactly the four owned keys; lenient path cannot throw; open='' yields []."
+          },
+          {
+            "dimensionId": "bounded-lenient-inputs",
+            "score": 10,
+            "pass": true,
+            "evidence": "MAX_FILTER_LENGTH/MAX_OPEN_KEY_LENGTH/MAX_OPEN_KEYS are exported, documented constants; all four clamps present with both ordering traps avoided (trim-slice-trim; dedupe via Set before the count break), and boundaries tested on both sides of each cap."
+          },
+          {
+            "dimensionId": "serialise-roundtrip-and-defaults",
+            "score": 8,
+            "pass": true,
+            "evidence": "Defaults omitted, exact query strings and percent-encoding asserted, round-trip asserted for a full state and for a filter exactly at the cap. Short of 10: a representative handful rather than a property-style set, and 'open' is comma-joined so a flag key containing a comma would round-trip as two keys."
+          },
+          {
+            "dimensionId": "versions-path-migrated",
+            "score": 10,
+            "pass": true,
+            "evidence": "No query concatenation left in version-list-page.ts; versionsPath is one withUrlState call, hrefs stay escapeHtml-wrapped, and beyond bare delegation it threads view.pageSize into both pager links so a non-default page size survives a page click - the exact failure the rubric names. Existing paging expectations pass unedited."
+          },
+          {
+            "dimensionId": "branch-coverage-in-phase",
+            "score": 9,
+            "pass": true,
+            "evidence": "pnpm verify exits 0 under the repo's 100% line/branch/function/statement thresholds with no ignore comment or config exclusion; every named clamp and key case has its own test and the 400 tests assert status and message. Not a 10: the status assertions use try/catch without expect.assertions, so a non-throwing regression would skip the status check."
+          }
+        ],
+        "overallPass": true
+      }
+    },
+    {
+      "phaseId": "server-side-flag-filter-function",
+      "status": "awaiting-verification",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-21T10:03:50.159252Z",
+      "baseRef": "9346e68b1fd6580a95b7fb6eecc03f01892380ff",
+      "baseDirty": true,
+      "notes": "Changed: packages/dashboard/src/application/filter-flags.ts (new), test/application/filter-flags.test.ts (new). filterFlags(flags, filterText) is a pure generic application function reproducing app.js exactly: trim+lowercase+split(/\\s+/)+filter(Boolean), AND across terms via String.includes over the haystack key+' '+type+' '+(enabled?'on':'off') lowercased - the same string snapshot-contents.ts puts in data-search. Empty/whitespace filter returns the input array unchanged. No import from src/infrastructure; filter text arrives as a plain string. views/scripts/app.js was NOT touched (git diff empty), as the phase requires. 1 amendment (see amendments[]): the contract's stated quirk was factually wrong. Targeted run: filter-flags.ts at 100% line/branch/function/statement; eslint clean on both new files. Full pnpm verify is VERIFY's job.",
+      "amendments": [
+        {
+          "at": "2026-09-21T10:05:28.930158Z",
+          "by": "execute",
+          "reason": "The contract told me to comment that \"the term 'on' also matches 'off'\". That is false: 'off' does not contain 'on'. The repo's real rule (app.js indexOf over key+' '+type+' '+on|off) produces one quirk mechanism, not two: 'on' is a substring of 'config' and of keys like 'onboarding', which is WHY filtering 'on' returns flags that are off. Amended so the comment and tests state the true mechanism; the goal, the rubric and the 'two documented quirks' deliverable are unchanged and still met.",
+          "grounding": "Verified mechanically: 'legacy boolean off'.includes('on') is false, 'pricing-config config off'.includes('on') is true. The roadmap's own discovery row (app.js live filter - exact semantics) carries the same incorrect claim.",
+          "before": {
+            "changes": [
+              "Add a short comment recording the two known quirks this rule keeps on purpose: the term 'on' also matches 'off', and 'on' also matches a key containing 'config'. Keeping them means no behaviour change for existing users."
+            ]
+          },
+          "after": {
+            "changes": [
+              "Add a short comment recording the quirk this rule keeps on purpose: 'on' matches any flag whose key or type merely contains those letters (every 'config' flag, any key like 'onboarding'), so filtering 'on' also returns flags that are off. Note explicitly that 'off' does not contain 'on' - the overlap runs one way. Keeping it means no behaviour change for existing users."
+            ]
+          }
+        }
+      ],
+      "unplannedFiles": []
+    },
+    {
+      "phaseId": "render-filtered-flag-list",
+      "status": "not-started",
+      "attempts": 0,
+      "compensationInvoked": false
+    },
+    {
+      "phaseId": "render-open-flag-rows-from-url",
+      "status": "not-started",
+      "attempts": 0,
+      "compensationInvoked": false
+    },
+    {
+      "phaseId": "echo-url-state-through-write-forms",
+      "status": "not-started",
+      "attempts": 0,
+      "compensationInvoked": false
+    },
+    {
+      "phaseId": "add-sticky-section-nav",
+      "status": "not-started",
+      "attempts": 0,
+      "compensationInvoked": false
+    }
+  ]
+}

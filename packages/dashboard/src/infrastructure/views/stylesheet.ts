@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 // Order matters: tokens first, then layout, then the components that use both.
-const STYLE_FILES = ['base.css', 'layout.css', 'forms.css', 'components.css', 'tables.css', 'rollout.css', 'segments.css', 'segment-list.css', 'segment-create.css', 'segment-attach.css'] as const;
+export const STYLE_FILES = ['base.css', 'layout.css', 'forms.css', 'components.css', 'tables.css', 'rollout.css', 'segments.css', 'segment-list.css', 'segment-create.css', 'segment-attach.css', 'section-nav.css'] as const;
 
 /** All style files joined into one sheet; plain concatenation, so there is no build tool. */
 export const STYLESHEET = STYLE_FILES.map((file) =>

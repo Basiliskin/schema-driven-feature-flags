@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { NO_URL_STATE, type DashboardUrlState } from '../url-state.js';
 import type { EnvironmentView, FlagDefinitionView, SnapshotContents, SnapshotVersionView } from '../../application/browse-environment.js';
 import { renderEnvironmentPage } from './environment-page.js';
+import { flagPath } from './escape.js';
 import { renderFeatureEditForm, type EditContext } from './feature-edit-form.js';
 import { renderSnapshotContents } from './snapshot-contents.js';
 import { renderVersionPage } from './version-page.js';
@@ -17,6 +19,7 @@ const CONFIG: FlagDefinitionView = {
 const CONTEXT: EditContext = {
   environment: 'production',
   baseVersion: 7,
+  urlState: NO_URL_STATE,
   publishedSegments: {
     status: 'listed',
     rows: [{ segmentKey: 'beta-testers', version: 2, attribute: { status: 'known', memberAttribute: 'userId' }, usage: { status: 'unused' } }],
@@ -391,5 +394,40 @@ describe('renderVersionPage', () => {
     });
     expect(invalid).toContain('<li>features: bad</li>');
     expect(invalid).not.toContain('version-json');
+  });
+});
+
+const VIEWED: DashboardUrlState = { filter: 'dark mode', openFlags: ['new-dashboard', 'a&b'], page: 2, pageSize: 5 };
+const VIEWED_INPUTS =
+  '<input type="hidden" name="filter" value="dark mode">' +
+  '<input type="hidden" name="open" value="new-dashboard,a&amp;b">' +
+  '<input type="hidden" name="page" value="2">' +
+  '<input type="hidden" name="pageSize" value="5">';
+
+describe('the URL state every write form carries', () => {
+  const rendered = renderFeatureEditForm(CONFIG, { ...CONTEXT, urlState: VIEWED });
+
+  it('puts the state in the edit form and in the delete form, so either one comes back to the same view', () => {
+    const forms = rendered.split('<form method="post"').slice(1);
+    const editing = forms.filter((body) => body.includes('name="field" value="enabled"') || body.includes('value="delete"'));
+
+    expect(editing).toHaveLength(2);
+    for (const body of editing) expect(body).toContain(VIEWED_INPUTS);
+  });
+
+  it('also appends the state to each action URL, escaped as an attribute', () => {
+    expect(rendered).toContain(
+      'action="/env/production/features/checkout-limits?filter=dark%20mode&amp;open=new-dashboard%2Ca%26b&amp;page=2&amp;pageSize=5"',
+    );
+  });
+
+  it('builds that action with the shared flag path helper rather than its own concatenation', () => {
+    expect(renderFeatureEditForm(CONFIG, { ...CONTEXT, environment: 'a/b' })).toContain(
+      `action="${flagPath('a/b', CONFIG.key)}"`,
+    );
+  });
+
+  it('leaves every form free of hidden state when the page was asked for without a query string', () => {
+    expect(renderFeatureEditForm(CONFIG, CONTEXT)).not.toContain('name="filter"');
   });
 });

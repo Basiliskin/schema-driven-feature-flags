@@ -1,0 +1,364 @@
+{
+  "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-25-url-state-flag-filter-section-nav-roadmap.json",
+  "roadmapTask": "Horizon 25 of the FeatureSync dashboard: put the dashboard's UI state (flag filter text and which flag rows are open) in the URL query string rendered server-side so a page is bookmarkable and survives a form submit; build the server-side flag filter on top of that contract while keeping the in-browser instant filter as progressive enhancement; and add a sticky Section Nav. Write POSTs keep re-rendering inline with 200/400/422 and draft values — redirect-after-POST is rejected.",
+  "createdAt": "2026-09-21T09:42:32.520824Z",
+  "updatedAt": "2026-09-21T13:35:46Z",
+  "roadmapRevision": 0,
+  "phases": [
+    {
+      "phaseId": "url-state-contract-module",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-21T09:42:32.520824Z",
+      "baseRef": "9346e68b1fd6580a95b7fb6eecc03f01892380ff",
+      "baseDirty": true,
+      "notes": "Changed: packages/dashboard/src/infrastructure/url-state.ts (new), url-state.test.ts (new), views/version-list-page.ts, http-server.ts. Adds the DashboardUrlState contract owning 'filter'/'open'/'page'/'pageSize' with a strict page parse (HttpError 400, existing messages) and lenient capped filter/open parsing, plus serialiseUrlState/withUrlState that omit defaults and percent-encode; versionsPath now builds through it and carries a non-default pageSize on pager links. http-server.ts is unplanned but in-scope: it now imports parsePageNumber/PAGE_MESSAGE/PAGE_SIZE_MESSAGE from the module instead of keeping a duplicate copy, which the rubric's own failure example names. Dirty-at-start paths (docs/roadmaps/featuresync/**) are not this phase's. | VERIFIED: pnpm verify green; graded overallPass with no 10 demoted. Compensation if this phase must be undone: delete url-state.ts and url-state.test.ts, restore versionsPath's '?page=' concatenation in views/version-list-page.ts, and restore http-server.ts's local parsePageNumber/PAGE_MESSAGE/PAGE_SIZE_MESSAGE (git diff 9346e68 shows this phase's change). Not needed this time. Playwright e2e was not run: it is outside pnpm verify and no e2e spec references version-paging URLs (grep).",
+      "unplannedFiles": [
+        "packages/dashboard/src/infrastructure/http-server.ts"
+      ],
+      "completedAt": "2026-09-21T09:55:59.816619Z",
+      "gateRun": "pnpm verify (builds core/nestjs/aws/cli/dashboard + pnpm typecheck + eslint --max-warnings=0 + vitest run --coverage at 100% thresholds): pass",
+      "gradeResult": {
+        "phaseId": "url-state-contract-module",
+        "dimensionScores": [
+          {
+            "dimensionId": "key-grammar-and-strictness-split",
+            "score": 10,
+            "pass": true,
+            "evidence": "http-server.ts's duplicate parse was deleted rather than matched: parsePageNumber and both 400 messages now exist once, in url-state.ts, so divergent messages are structurally impossible. parseUrlState reads exactly the four owned keys; lenient path cannot throw; open='' yields []."
+          },
+          {
+            "dimensionId": "bounded-lenient-inputs",
+            "score": 10,
+            "pass": true,
+            "evidence": "MAX_FILTER_LENGTH/MAX_OPEN_KEY_LENGTH/MAX_OPEN_KEYS are exported, documented constants; all four clamps present with both ordering traps avoided (trim-slice-trim; dedupe via Set before the count break), and boundaries tested on both sides of each cap."
+          },
+          {
+            "dimensionId": "serialise-roundtrip-and-defaults",
+            "score": 8,
+            "pass": true,
+            "evidence": "Defaults omitted, exact query strings and percent-encoding asserted, round-trip asserted for a full state and for a filter exactly at the cap. Short of 10: a representative handful rather than a property-style set, and 'open' is comma-joined so a flag key containing a comma would round-trip as two keys."
+          },
+          {
+            "dimensionId": "versions-path-migrated",
+            "score": 10,
+            "pass": true,
+            "evidence": "No query concatenation left in version-list-page.ts; versionsPath is one withUrlState call, hrefs stay escapeHtml-wrapped, and beyond bare delegation it threads view.pageSize into both pager links so a non-default page size survives a page click - the exact failure the rubric names. Existing paging expectations pass unedited."
+          },
+          {
+            "dimensionId": "branch-coverage-in-phase",
+            "score": 9,
+            "pass": true,
+            "evidence": "pnpm verify exits 0 under the repo's 100% line/branch/function/statement thresholds with no ignore comment or config exclusion; every named clamp and key case has its own test and the 400 tests assert status and message. Not a 10: the status assertions use try/catch without expect.assertions, so a non-throwing regression would skip the status check."
+          }
+        ],
+        "overallPass": true
+      }
+    },
+    {
+      "phaseId": "server-side-flag-filter-function",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-21T10:03:50.159252Z",
+      "baseRef": "9346e68b1fd6580a95b7fb6eecc03f01892380ff",
+      "baseDirty": true,
+      "notes": "Changed: packages/dashboard/src/application/filter-flags.ts (new), test/application/filter-flags.test.ts (new). filterFlags(flags, filterText) is a pure generic application function reproducing app.js exactly: trim+lowercase+split(/\\s+/)+filter(Boolean), AND across terms via String.includes over the haystack key+' '+type+' '+(enabled?'on':'off') lowercased - the same string snapshot-contents.ts puts in data-search. Empty/whitespace filter returns the input array unchanged. No import from src/infrastructure; filter text arrives as a plain string. views/scripts/app.js was NOT touched (git diff empty), as the phase requires. 1 amendment (see amendments[]): the contract's stated quirk was factually wrong. Targeted run: filter-flags.ts at 100% line/branch/function/statement; eslint clean on both new files. Full pnpm verify is VERIFY's job. | VERIFIED: pnpm verify green; graded overallPass with 1 amendment and no 10 demoted. Known weakness carried forward: the haystack parity test does not assert against the view's real data-search output, so the two expressions can drift independently - phase 3 renders through this function and is the place that would catch it. Compensation if undone: delete filter-flags.ts and its test; nothing renders through it yet.",
+      "amendments": [
+        {
+          "at": "2026-09-21T10:05:28.930158Z",
+          "by": "execute",
+          "reason": "The contract told me to comment that \"the term 'on' also matches 'off'\". That is false: 'off' does not contain 'on'. The repo's real rule (app.js indexOf over key+' '+type+' '+on|off) produces one quirk mechanism, not two: 'on' is a substring of 'config' and of keys like 'onboarding', which is WHY filtering 'on' returns flags that are off. Amended so the comment and tests state the true mechanism; the goal, the rubric and the 'two documented quirks' deliverable are unchanged and still met.",
+          "grounding": "Verified mechanically: 'legacy boolean off'.includes('on') is false, 'pricing-config config off'.includes('on') is true. The roadmap's own discovery row (app.js live filter - exact semantics) carries the same incorrect claim.",
+          "before": {
+            "changes": [
+              "Add a short comment recording the two known quirks this rule keeps on purpose: the term 'on' also matches 'off', and 'on' also matches a key containing 'config'. Keeping them means no behaviour change for existing users."
+            ]
+          },
+          "after": {
+            "changes": [
+              "Add a short comment recording the quirk this rule keeps on purpose: 'on' matches any flag whose key or type merely contains those letters (every 'config' flag, any key like 'onboarding'), so filtering 'on' also returns flags that are off. Note explicitly that 'off' does not contain 'on' - the overlap runs one way. Keeping it means no behaviour change for existing users."
+            ]
+          }
+        }
+      ],
+      "unplannedFiles": [],
+      "completedAt": "2026-09-21T12:20:41.606444Z",
+      "gateRun": "pnpm verify (builds core/nestjs/aws/cli/dashboard + pnpm typecheck + eslint --max-warnings=0 + vitest run --coverage at 100% thresholds): pass",
+      "gradeResult": {
+        "phaseId": "server-side-flag-filter-function",
+        "dimensionScores": [
+          {
+            "dimensionId": "haystack-parity-with-browser",
+            "score": 8,
+            "pass": true,
+            "evidence": "The haystack is character-identical to snapshot-contents.ts's data-search expression and both sides are lowercased; mid-word and uppercase-term matching are pinned. Short of 10: no shared expression and no test asserting parity against the view's real data-search output, and the boundary criterion is only nominally met - 'banner b' splits into two AND terms, and a boundary-spanning single term is unmatchable under this rule."
+          },
+          {
+            "dimensionId": "documented-quirks-preserved",
+            "score": 10,
+            "pass": true,
+            "evidence": "Each quirk has its own named test: 'on' returning a disabled flag via key 'onboarding-banner', and the config case via 'pricing-config config off' whose only 'on' sits inside 'config' - avoiding the rubric's named failure of smuggling an 'on'-bearing key. Beyond a 9: a negative control asserts 'off' does NOT match an enabled flag, pinning the direction the original plan wording got backwards."
+          },
+          {
+            "dimensionId": "multi-term-and-empty-semantics",
+            "score": 9,
+            "pass": true,
+            "evidence": "terms.every gives AND; both-terms-one-flag and terms-on-different-flags covered, no-match returns an empty array, empty and whitespace/tab-only inputs return the input unchanged, and runs of whitespace are covered via split(/\\s+/).filter(Boolean). All criteria met, nothing observable beyond them."
+          },
+          {
+            "dimensionId": "application-layer-purity",
+            "score": 10,
+            "pass": true,
+            "evidence": "Zero import statements of any kind, not merely none from src/infrastructure; FilterableFlag is declared locally rather than pulled from the view layer, so parity is reached without the inverted dependency the rubric warns about. Lint clean with no disable or restricted-paths exception; app.js diff empty."
+          },
+          {
+            "dimensionId": "test-file-location-and-coverage",
+            "score": 9,
+            "pass": true,
+            "evidence": "Test sits under test/application/, not co-located; filter-flags.ts at 100% on all four metrics with both ternary sides exercised by enabled and disabled fixtures; all nine listed cases are separate named tests; no ignore pragma or exclusion."
+          }
+        ],
+        "overallPass": true
+      }
+    },
+    {
+      "phaseId": "render-filtered-flag-list",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-21T12:38:48Z",
+      "baseRef": "9346e68b1fd6580a95b7fb6eecc03f01892380ff",
+      "baseDirty": true,
+      "notes": "Changed by this phase: views/environment-page.ts, views/scripts/app.js, views/styles/components.css, http-server.ts (environment GET route only), plus tests views/environment-page.test.ts, http-server.test.ts, e2e/flag-list.spec.ts. The environment GET route now parses the query string with parseUrlState and passes it as EnvironmentPageState.urlState; renderFlags calls filterFlags on contents.flags and hands the PRE-FILTERED list to renderSnapshotContents, so non-matching rows are absent from the response body. snapshot-contents.ts was deliberately NOT touched (no filterFlags inside the shared renderer), so the single-version page stays unfiltered - asserted by a request-level test with ?filter=. The filter input is now inside <form class=\"flag-filter-form\" method=\"get\" action=\"/env/<env>\">, no longer `hidden`, name=\"filter\", value escapeHtml-echoed, aria-label byte-identical, with a visible Filter button; carriedStateFields() rebuilds open/page/pageSize as hidden inputs via serialiseUrlState so defaults are omitted for free. app.js changed by exactly one deletion (input.hidden = false); no new logic. TWO READINGS TO CHECK AT GRADING: (1) the rubric passCriterion \"the environment page handler is where filterFlags is called\" - I read handler as the environment page renderer (environment-page.ts), the caller of the shared renderer, because 4+ POST routes also render this page and the no-match state is a view concern; the ruleStatement bar (\"applied by the caller\", \"no filterFlags inside the shared renderer\") is met exactly. (2) the passCriterion \"when at least one flag matches, the no-match message is absent from the body\" is UNREACHABLE alongside the retained instant filter: app.js only toggles that node`s hidden attribute and may gain no new logic, so it must exist while rows match. Implemented as: node emitted only when the snapshot has flags at all, `hidden` when rows match, unhidden on a server no-match - so the flagless empty state is genuinely free of it. No href carries the filter yet (phase 4/5 territory), so the \"%26 in the URL\" criterion is covered by a serialiseUrlState assertion rather than a rendered link. components.css is unplanned: a 4-line .flag-filter-form flex rule so the new submit button sits beside the input. Local checks (VERIFY still owns the gates): pnpm typecheck exit 0; pnpm vitest run --coverage exit 0 at 100% statements/branches/functions/lines; eslint --max-warnings=0 on packages/dashboard exit 0; playwright e2e/flag-list.spec.ts 4/4 passed in a real browser, including the healerHint case (reload of a bookmarked ?filter= URL still shows the matching row with JS enabled). Dirty-at-start and NOT this phase: docs/roadmaps/featuresync/**, views/version-list-page.ts, url-state.ts(+test), filter-flags.ts(+test) - all phase 1-2. Compensation if undone: revert the six packages/ files above to 9346e68 state for environment-page.ts/app.js/components.css, restore the environment GET handler to its no-url-state form, and drop the appended test blocks. | VERIFIED: pnpm verify green (build all packages + typecheck + eslint --max-warnings=0 + vitest --coverage at 100% thresholds, exit 0) and the full Playwright suite 12/12 exit 0. Graded overallPass with no 10 demoted (both 10s named an above-a-9 observable). Both flagged rubric tensions were judged by the grader, not waived: single-version-page-unfiltered scored 8 - the ruleStatement bar is met and snapshot-contents.ts is provably clean, but filterFlags sits in views/environment-page.ts rather than the route handler the passCriterion names; server-rendered-empty-state scored 8 - passCriterion 4 is literally unmet because the no-match node is emitted hidden whenever the snapshot has flags, which the grader accepted as forced by the retained instant filter (app.js only toggles that attribute and gained no logic) and harmless to a JS-off reader since hidden is an HTML attribute. Both above minScore 7; no override was used or needed. Compensation is known and NOT invoked: revert environment-page.ts, app.js and components.css to 9346e68, restore the environment GET handler to its no-url-state form, and drop the appended test blocks (git diff 9346e68 shows this phase, mixed with phases 1-2 in http-server.ts only).",
+      "unplannedFiles": [
+        "packages/dashboard/src/infrastructure/views/styles/components.css",
+        "packages/dashboard/src/infrastructure/views/environment-page.test.ts",
+        "packages/dashboard/src/infrastructure/http-server.test.ts"
+      ],
+      "completedAt": "2026-09-21T12:46:57Z",
+      "gradeResult": {
+        "phaseId": "render-filtered-flag-list",
+        "dimensionScores": [
+          {
+            "dimensionId": "rows-absent-not-hidden",
+            "score": 10,
+            "pass": true,
+            "evidence": "http-server.test.ts extracts the <ul class=\"flag-list\"> section and counts data-flag occurrences inside it: 2 unfiltered vs 1 for ?filter=checkout, plus flagList(filtered).not.toContain('new-dashboard'); no hidden/display:none is used server-side on rows. The e2e asserts rows 3 to 1 after submitting the form, not visibility. Above a 9: it pins the unfiltered baseline count in both the unit and e2e tests so the assertions provably fail against the pre-change renderer, and scopes the absence assertion to the extracted flag-list section."
+          },
+          {
+            "dimensionId": "get-form-works-without-js",
+            "score": 9,
+            "pass": true,
+            "evidence": "renderFilterForm emits <form class=\"flag-filter-form\" method=\"get\" action=\"/env/production\"> with name=\"filter\", escapeHtml-echoed value, byte-identical aria-label, no hidden attribute (asserted by regex), and a visible submit button. carriedStateFields rebuilds open/page/pageSize via serialiseUrlState; a request-level test with page=3&pageSize=25&open=new-dashboard asserts all three reappear as hidden inputs. Short of 10: no test follows the submitted request and asserts those three keys survive into the resulting URL."
+          },
+          {
+            "dimensionId": "server-rendered-empty-state",
+            "score": 8,
+            "pass": true,
+            "evidence": "All three cases covered at request level: no-match filter gives 200 + 'No flags match.' and not the flagless message; a flagless snapshot with a filter gives its own empty state and no no-match message; a matching filter keeps the message hidden. PassCriterion 4 ('absent from the body when at least one flag matches') is literally unmet - the node is emitted hidden whenever the snapshot has flags. The implementer's argument holds: app.js only toggles that node's hidden attribute and gained no logic, and hidden is an HTML attribute not script, so a JS-off reader never sees it beside matching rows. An unmet criterion caps this below 9."
+          },
+          {
+            "dimensionId": "single-version-page-unfiltered",
+            "score": 8,
+            "pass": true,
+            "evidence": "snapshot-contents.ts is untouched and grep for filterFlags there returns nothing; it still takes a plain contents object, so the pre-filtered list is passed down by the caller with no optional filter parameter threaded in. A request-level test hits /env/production/versions/2?filter=checkout and asserts both flags still render; existing expectations unedited. The passCriterion naming the route handler is satisfied in substance but not literally - the call sits in views/environment-page.ts. The ruleStatement bar is met; the single-version assertion is key-presence rather than the full flag count the 10 bar names."
+          },
+          {
+            "dimensionId": "filter-value-escaping",
+            "score": 9,
+            "pass": true,
+            "evidence": "A request-level test sends a script payload and asserts the escaped value attribute with no unescaped <script> anywhere in the body. The input value, the form action and every carried hidden input's name and value go through escapeHtml; the ampersand test covers failureExample 1 exactly, asserting the hidden input renders value=\"a&amp;b\" rather than raw interpolation, plus serialiseUrlState giving filter=a%20%26%20b. Short of 10: the %26 case is proved against the serialiser directly, not a rendered href carrying the filter, because no link carries it yet."
+          },
+          {
+            "dimensionId": "progressive-enhancement-not-fighting-server",
+            "score": 10,
+            "pass": true,
+            "evidence": "The app.js diff is exactly one deletion (input.hidden = false) - no new functions, no new conditionals, existing empty-state guard untouched, net -1 line. The script never reads or writes input.value on load and nothing re-runs the filter at load, so a bookmarked ?filter= URL cannot be blanked. The original instant-filter e2e is retained verbatim. Above a 9: the new e2e reloads the bookmarked ?filter=dark URL in a real browser with JS enabled and asserts both the row count and the searchbox value, directly proving failureExample 1's regression cannot occur."
+          }
+        ],
+        "overallPass": true
+      },
+      "gateRun": "pnpm verify (build core/nestjs/aws/cli/dashboard + pnpm -r typecheck + eslint . --max-warnings=0 + vitest run --coverage at 100% line/branch/function/statement): pass. pnpm exec playwright test (12 browser tests incl. both filter flows): pass."
+    },
+    {
+      "phaseId": "render-open-flag-rows-from-url",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-21T12:49:45Z",
+      "baseRef": "9346e68b1fd6580a95b7fb6eecc03f01892380ff",
+      "baseDirty": true,
+      "notes": "Changed: views/snapshot-contents.ts, views/snapshot-contents.test.ts (new), views/environment-page.ts, views/environment-page.test.ts. renderSnapshotContents takes an optional third DashboardUrlState parameter and threads it to renderFlagCard, whose open decision is now (draft for this key) OR (key in urlState.openFlags) - the draft rule is OR-ed in, never replaced. A new renderOpenToggle emits a plain <a data-open-toggle> inside the flag <summary>, next to the existing native <details> widget, whose href is withUrlState(environmentPath(env), {...urlState, openFlags}) with this key added when closed and filtered out when open, so filter/page/pageSize survive and an emptied list omits 'open=' entirely. Keys are percent-encoded by serialiseUrlState and the finished URL wrapped in escapeHtml. Nested Rollout/Attach/Edit rules/Delete summaries are untouched and a comment records that e2e specs click them. Tests: 14 new in snapshot-contents.test.ts (four-way truth table, both link directions, empty-list omission, filter preserved, disclosure widget intact, nested panels linkless, hostile key a\"b&c d) plus 3 page-level tests. Targeted run: 711 dashboard tests pass, eslint --max-warnings=0 clean on all four files, tsc -p packages/dashboard --noEmit clean. Full pnpm verify and Playwright are VERIFY's job. Known risk for VERIFY: e2e specs click '.flag-row > summary' at its centre and the new link sits at the summary's end - expected to still miss the link, unproven until Playwright runs (recorded in discoveries.md). Compensation if undone: drop the third parameter and renderOpenToggle from snapshot-contents.ts, restore the draft-only open rule, delete snapshot-contents.test.ts and the 'rows opened by the URL' describe block; the URL's open key is then simply ignored. | VERIFIED: pnpm verify green; graded overallPass, all four dimensions 10 with an earned above-a-9 clause each, no demotion applied, 0 amendments. Compensation if this phase must be undone: drop the third parameter and renderOpenToggle from views/snapshot-contents.ts, restore the draft-only open rule, delete views/snapshot-contents.test.ts and the 'rows opened by the URL' describe block in views/environment-page.test.ts (git diff 9346e68 -- those paths shows this phase's change). Not needed this time. Playwright e2e was not run: it is outside pnpm verify. The grader confirmed segment-picker.spec.ts and segment-upload-rollout.spec.ts are unedited, but the recorded risk stands - those specs click '.flag-row > summary' at its centre and the new link sits at the summary's end.",
+      "unplannedFiles": [],
+      "completedAt": "2026-09-21T12:56:13Z",
+      "gateRun": "pnpm verify (builds core/nestjs/aws/cli/dashboard + pnpm typecheck + eslint --max-warnings=0 + vitest run --coverage at 100% thresholds): pass",
+      "gradeResult": {
+        "phaseId": "render-open-flag-rows-from-url",
+        "dimensionScores": [
+          {
+            "dimensionId": "open-decision-truth-table",
+            "score": 10,
+            "pass": true,
+            "evidence": "All four combinations are separate named tests, including draft-present/key-absent which also asserts the error text renders. Implementation is `editable.draft?.key === flag.key || inUrl` - OR-ed, never replacing the draft rule - and the open list arrives as the explicit third parameter threaded to renderFlagCard, no module-level state. Beyond a 9: the both-true case asserts the open attribute appears exactly once, the closed case pins the exact '<details class=\"flag-row\">' string so an open=\"false\" regression fails, and a fifth test pins the no-urlState path."
+          },
+          {
+            "dimensionId": "toggle-link-add-remove-semantics",
+            "score": 10,
+            "pass": true,
+            "evidence": "Exact hrefs asserted both directions; the remove test is the rubric's 10-condition case of a row among several already-open rows, proving the link is built from the whole list. Emptying yields bare '/env/production' with no 'open='; the filter survives both ways. Beyond a 9: a dedicated test asserts the native <details>/<summary> disclosure is still present alongside data-open-toggle, pinning the no-JS/shareable property rather than leaving it incidental."
+          },
+          {
+            "dimensionId": "flag-key-injection-safety",
+            "score": 10,
+            "pass": true,
+            "evidence": "Hostile key 'a\"b&c d' (the full 10-level payload) renders href exactly '/env/production?open=a%22b%26c%20d' with no raw quote or ampersand. Encoding comes from serialiseUrlState/withUrlState, not concatenation, and escapeHtml wraps the finished URL; data-flag/data-search asserted with an explicit double-escape guard. Beyond a 9: a third test feeds the emitted href back through parseUrlState and asserts openFlags equals the original key, proving the escape/encode ORDER round-trips."
+          },
+          {
+            "dimensionId": "nested-panels-left-alone",
+            "score": 10,
+            "pass": true,
+            "evidence": "The comment names the e2e dependency explicitly and lists the excluded panels; renderOpenToggle is invoked once, inline in the flag row's own <summary>, so no shared helper can leak it downward. Beyond a 9: the test slices past '</summary>' and asserts the nested region still contains '<summary>Rollout</summary>' while containing no data-open-toggle - a positive control, not a bare absence check - and the nested-panel e2e specs were confirmed unedited."
+          }
+        ],
+        "overallPass": true
+      }
+    },
+    {
+      "phaseId": "echo-url-state-through-write-forms",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-21T13:10:00Z",
+      "baseRef": "9346e68b1fd6580a95b7fb6eecc03f01892380ff",
+      "baseDirty": true,
+      "notes": "Changed by this phase: views/state-fields.ts (new: stateInputs + WriteFormContext), views/feature-edit-form.ts, views/rollout-form.ts, views/segment-attach-form.ts, views/new-flag-form.ts, views/environment-page.ts, views/version-list-page.ts, views/flag-page.ts, views/escape.ts (flagPath moved here from flag-page.ts to avoid an import cycle), views/snapshot-contents.ts (import only), infrastructure/url-state.ts (parseUrlStateFields + NO_URL_STATE), http-server.ts (the four page-rendering POST routes + the merge-exclusion comment), segment-routes.ts (exclusion comment), e2e/url-state.spec.ts (new), e2e/segment-picker.spec.ts. | Tests: views/state-fields.test.ts (new), test/infrastructure/state-echo.test.ts (new, 16 request-level tests), test/support/dashboard-harness.ts (new, extracted out of http-server.test.ts so both request-level suites share one harness rather than duplicating it), plus per-form assertions appended to the feature-edit-form, rollout-form, segment-attach-form, environment-page, version-list-page and url-state test files. | All eight write forms (edit, delete, setRollout, detachSegment, attachSegment, new flag, publish, rollback) render the state as hidden inputs AND carry it on their action URL. urlState is a REQUIRED field of EditContext, NewFlagContext and VersionListContext, which is what caught flag-page.ts. The four page-rendering POST routes re-read it from the body through parseUrlStateFields, which applies the same caps as the URL path but falls back on a tampered page value instead of throwing, so a rejected write stays a 422 re-render rather than becoming a 400 error page. | FOR VERIFY, two rubric criteria with no reachable case, judged rather than waived: (1) the publish route answers 200 or 422 only, because a draft that does not parse is a rejection and not invalidInput, so its 400 case does not exist; the 422 test asserts the draft is re-rendered instead. (2) The rollback route answers a malformed version with the error page, not this page, so it too has only 200 and 422 here. Every other route/outcome pair is covered. | 1 amendment, see amendments[]. | Local checks (VERIFY still owns the gates): tsc --noEmit clean; eslint --max-warnings=0 clean; vitest run --coverage 1626 tests passing at 100% statements/branches/functions/lines; Playwright 13/13 against a running LocalStack, including the modified segment-picker.spec.ts and the new url-state.spec.ts. | Dirty-at-start and NOT this phase: docs/roadmaps/featuresync/**, e2e/flag-list.spec.ts, src/application/filter-flags.ts(+test), views/scripts/app.js, views/styles/components.css. | Compensation if undone: revert the view and route files to 9346e68, delete state-fields.ts(+test), state-echo.test.ts, dashboard-harness.ts (folding its helpers back into http-server.test.ts), url-state.spec.ts, restore flagPath to flag-page.ts, and restore the re-open click in segment-picker.spec.ts; the state is then simply lost on submit, as before. | VERIFY 2026-09-21: gates green (see gateRun). Graded 9/9/10/9/10/9 against the phase own rubric, overallPass true, no dimension below minScore; both 10s carried an earned above-the-bar clause, so no mechanical 10->9 demotion applied. Compensation is recorded and invocable as written (revert the listed files to 9346e68, delete state-fields.ts+test, state-echo.test.ts, dashboard-harness.ts, url-state.spec.ts, restore flagPath to flag-page.ts and the re-open click in segment-picker.spec.ts); not needed this time.",
+      "unplannedFiles": [
+        "packages/dashboard/src/infrastructure/views/state-fields.ts",
+        "packages/dashboard/src/infrastructure/views/state-fields.test.ts",
+        "packages/dashboard/src/infrastructure/views/escape.ts",
+        "packages/dashboard/src/infrastructure/views/flag-page.ts",
+        "packages/dashboard/src/infrastructure/views/flag-page.test.ts",
+        "packages/dashboard/src/infrastructure/views/snapshot-contents.ts",
+        "packages/dashboard/src/infrastructure/views/feature-edit-form.test.ts",
+        "packages/dashboard/src/infrastructure/views/rollout-form.test.ts",
+        "packages/dashboard/src/infrastructure/views/segment-attach-form.test.ts",
+        "packages/dashboard/src/infrastructure/views/snapshot-contents.test.ts",
+        "packages/dashboard/src/infrastructure/views/environment-page.test.ts",
+        "packages/dashboard/src/infrastructure/views/version-list-page.test.ts",
+        "packages/dashboard/src/infrastructure/url-state.ts",
+        "packages/dashboard/src/infrastructure/url-state.test.ts",
+        "packages/dashboard/src/infrastructure/segment-routes.ts",
+        "packages/dashboard/src/infrastructure/http-server.test.ts",
+        "packages/dashboard/test/support/dashboard-harness.ts",
+        "packages/dashboard/test/infrastructure/state-echo.test.ts"
+      ],
+      "amendments": [
+        {
+          "at": "2026-09-21T13:40:00Z",
+          "by": "execute",
+          "reason": "The contract told this phase to drop a flag-row re-open click from BOTH LocalStack specs. segment-upload-rollout.spec.ts has no such click: its two .flag-row/.rollouts clicks are the initial open before the submit, and its post-submit assertion uses toHaveText, which does not require the row to be open. Only segment-picker.spec.ts carried the workaround, so that file is left untouched.",
+          "grounding": "grep of both specs, plus a full Playwright run: 13/13 pass with segment-upload-rollout.spec.ts unchanged.",
+          "before": {
+            "filesAffected": [
+              "packages/dashboard/e2e/segment-upload-rollout.spec.ts"
+            ]
+          },
+          "after": {
+            "filesAffected": []
+          }
+        }
+      ],
+      "completedAt": "2026-09-21T16:25:00Z",
+      "gradeResult": {
+        "phaseId": "keep-best-scoring-blueprint",
+        "dimensionScores": [
+          {
+            "dimensionId": "earlier-turn-can-win",
+            "score": 9,
+            "pass": true,
+            "evidence": "passResultFromDeltas returns best?.blueprint and best?.criticOutput from the same ScoredTurn, never the accumulator's last value; pass-selection suite pins a 5-delta ladder where critic_2 beats critic_3 and asserts blueprint === healOne AND criticOutput is the chosen turn's, plus the exact result key set and an unchanged last-best ladder. Not 10: warnings stays a run-level sum rather than turn-consistent."
+          },
+          {
+            "dimensionId": "turn-to-blueprint-alignment",
+            "score": 10,
+            "pass": true,
+            "evidence": "Only critics push candidates and the fold carries `read`, so critic_1 scores the input and critic_{i+1} scores heal_i, stated in the comment above the loop. Above the bar: the pairing is proven in BOTH directions on one delta list (as-built critic_1 wins; same list with critic_1 demoted returns heal_2's blueprint), ruling out a constant-blueprint false pass a one-direction assertion would let through."
+          },
+          {
+            "dimensionId": "trailing-unscored-heal-excluded",
+            "score": 8,
+            "pass": true,
+            "evidence": "Candidates push only on pass-critic ticks so a trailing heal is structurally excluded; the comment beside the fold says why and names `read` as the fallback. Test asserts blueprint !== healTwo and === healOne with turnScores length 2. Short of 10: the cap-exhausted case is exercised only on a sequence ending in a critic, and the all-filtered degenerate case is prevented by code reading but not pinned by test."
+          },
+          {
+            "dimensionId": "deterministic-tiebreak",
+            "score": 9,
+            "pass": true,
+            "evidence": "bestScoringTurn is an explicit fold, not Array.sort: fewer failingCount, then strictly greater summedScore, equality keeps the incumbent (earliest by construction); the doc comment spells the three levels out and says the last is explicit rather than left to sort stability. Tests pin level two and a full tie. Held at 9: dimensionScoresOf skips issues with an undefined score, so a severity-based pass's unscored turn sums to 0 and loses every tie — uncovered."
+          },
+          {
+            "dimensionId": "score-list-exposed-for-persistence",
+            "score": 10,
+            "pass": true,
+            "evidence": "PassTurnScore/PassTurnDimensionScore in types.ts and readonly turnScores on PassRunSuccess, additively (typecheck green; one test double was the only fallout); every scored turn is listed, not just the winner. Above the bar: the whole list is asserted with one deep toEqual over both entries — turnIndex, iteration, failingCount and ordered dimension id/score pairs — so ordering and the turn-index field are pinned exactly rather than spot-checked."
+          }
+        ],
+        "overallPass": true
+      },
+      "gateRun": "pnpm verify (build + tsc --noEmit + eslint --max-warnings=0 + vitest run --coverage): pass, exit 0 — 69 files / 1626 tests; coverage 100% statements 2433/2433, branches 1563/1563, functions 583/583, lines 2146/2146. playwright test (all 5 specs, retries:0): pass, 13/13, including the new e2e/url-state.spec.ts on the in-memory fixture and the 3 LocalStack-backed specs. NOTE: the first pnpm verify run failed on @featuresync/core test/infrastructure/file-snapshot-source.test.ts > segments > pushes a bundle when watching (vi.waitFor 1000ms, 0 calls). packages/core is untouched by this phase and clean against 9346e68, so the failure is pre-existing and load-dependent: the test passes in isolation, passes when the whole file runs alone, and the full pnpm verify re-run was green. Logged in blockers.md rather than patched here, since fixing another package flaky watcher test is outside this phase."
+    },
+    {
+      "phaseId": "add-sticky-section-nav",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-21T13:28:00Z",
+      "baseRef": "9346e68b1fd6580a95b7fb6eecc03f01892380ff",
+      "baseDirty": true,
+      "notes": "Changed: views/section-nav.ts (new), views/section-nav.test.ts (new), views/styles/section-nav.css (new, 26 lines), views/stylesheet.ts (STYLE_FILES now exported and gains section-nav.css last, after components.css), views/stylesheet.test.ts (new, unplanned test file asserting registration order and that the served sheet carries the rules), views/environment-page.ts (new renderPublished helper renders the nav between the update banner and the current card, offering only the sections that actually rendered), views/environment-page.test.ts (nav presence, exact state-carrying hrefs, anchors-exist, and the no-flags-section branch). A sticky strip of links to #current-heading/#flags-heading/#versions-heading whose hrefs are built through withUrlState so the filter and open rows survive the jump. Tree was already dirty from phases 1-5, so environment-page.ts/.test.ts do not show in the diff-against-baseRef for this phase although this phase changed them. | VERIFY: three reds fixed at the source before the gates went green — the new test used status \"unavailable\" instead of the real \"not-available\"; spreading publishedView(2) lost its narrowing, so that test helper now returns Extract<EnvironmentView,{status:\"published\"}>; that narrowing made two pre-existing as-Extract casts in the same file redundant and eslint no-unnecessary-type-assertion flagged them, so they were removed. Graded 10/9/9/9/9 against minScores 7/7/7/7/8, overallPass true, no dimension re-scored for unearned evidence. Compensation not needed; if it ever is, it is: remove the renderSectionNav call and the renderPublished helper from environment-page.ts, delete section-nav.ts/.test.ts and styles/section-nav.css, and drop the section-nav.css entry from STYLE_FILES so no dead stylesheet reference remains.",
+      "unplannedFiles": [
+        "packages/dashboard/src/infrastructure/views/stylesheet.test.ts"
+      ],
+      "completedAt": "2026-09-21T13:35:46Z",
+      "gradeResult": {
+        "phaseId": "add-sticky-section-nav",
+        "dimensionScores": [
+          {
+            "dimensionId": "nav-markup-and-existing-anchors",
+            "score": 10,
+            "pass": true,
+            "evidence": "nav aria-label=\"Sections\" with fragments current-heading/flags-heading/versions-heading matching the existing ids at environment-page.ts:57,108,116; no new ids. Above a 9: a test asserts the flags link is dropped when the snapshot is not-available, so the nav can never point at an unrendered anchor."
+          },
+          {
+            "dimensionId": "links-carry-url-state",
+            "score": 9,
+            "pass": true,
+            "evidence": "renderLink builds withUrlState(environmentPath(env), urlState) + '#' + fragment, escapeHtml-wrapped; tests assert the bare default href with no '?', the state-carrying href with query before fragment, and an escaping case. No '?filter=' literal."
+          },
+          {
+            "dimensionId": "own-stylesheet-registered-in-order",
+            "score": 9,
+            "pass": true,
+            "evidence": "styles/section-nav.css is 26 lines, registered last in STYLE_FILES after components.css; no .section-nav selectors in any other sheet; stylesheet.test.ts asserts relative position and that STYLESHEET contains the rules. Short of 10: position asserted relatively, not the full list."
+          },
+          {
+            "dimensionId": "sticky-without-banner-overlap",
+            "score": 9,
+            "pass": true,
+            "evidence": "position: sticky; top: 3.25rem; z-index: 9, with a comment naming the update banner (top 0.5rem, z-index 10) as the constraint; rem units like the banner. e2e 13/13. Not a 10: the offset is a hand-computed constant, not a shared token."
+          },
+          {
+            "dimensionId": "nav-tests-at-full-coverage",
+            "score": 9,
+            "pass": true,
+            "evidence": "pnpm verify exit 0 at the repo-wide 100% thresholds (statements 2445/2445, branches 1565/1565), no file below threshold, no ignore pragma added. Default-state and state-carrying href branches covered separately; page-level test asserts the nav renders before the current-snapshot heading."
+          }
+        ],
+        "overallPass": true
+      },
+      "gateRun": "pnpm verify (build + typecheck + eslint --max-warnings=0 + vitest run --coverage at 100% line/branch/function/statement thresholds): pass. pnpm --filter @featuresync/dashboard test:e2e (Playwright, retries:0): pass, 13 passed."
+    }
+  ]
+}

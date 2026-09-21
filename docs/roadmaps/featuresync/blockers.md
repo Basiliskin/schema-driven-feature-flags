@@ -74,3 +74,12 @@
 - 2026-09-20 | horizon 23 | Is horizon 22's orphaned-object cleanup still wanted at all, or has horizon 23's decision to list the <env>/segments/ prefix changed its premise (a prefix listing now makes orphans visible)?
 - 2026-09-20 | horizon 23 | Does the segment picker on the new-flag form need the same 'unknown attribute' state as the attach form, and can a segment with no stored memberAttribute be attached at create time at all?
 - 2026-09-21 | horizon 23 | setRollout/removeRollout on a schemaVersion 1 snapshot still fail via the snapshot contract, while attachSegment now auto-upgrades — is that asymmetry intended?
+- 2026-09-21 | horizon 25 | Does the retained app.js force-open path visibly fight server-rendered row openness in a real browser, and is the resulting URL-vs-DOM divergence acceptable or does it need a fix?
+- 2026-09-21 | horizon 25 | Does the retained client-side live filter, layered over an already server-filtered set, confuse operators — typing narrows rows while the URL still shows the old filter, and clearing — see horizon-25 roadmap.md
+- 2026-09-21 | horizon 25 | Are the page-level 'Flags' and 'Version history' blocks actually wanted as collapsible disclosures, or was the complaint only ever about per-flag rows collapsing after a POST?
+- 2026-09-21 | horizon 25 | What does URL state mean on the flag page and versions page, where there is no flag list to filter — is the 'open' key meaningful there, or do they only need paging keys plus lossless state pass-through?
+- 2026-09-21 | horizon 25 | Is there any real evidence a flag list grows large enough to need paging, given no written justification exists and the e2e seed has three flags?
+- 2026-09-21 | horizon 25 | Does the 200+422 concurrent-replay race become more reachable now every write form round-trips extra query state, and did CI show new flakiness at retries:0?
+- 2026-09-21 | horizon 25 | Can the browser e2e suite move off the InMemoryEnvironment fake onto LocalStack fixtures, which is what e2e coverage of the rollback POST's state echo would need?
+- 2026-09-21 | horizon 25 | Where should the growing set of path helpers live, now that only versionsPath was folded into the contract module and four others stay scattered?
+- 2026-09-21 | horizon 25 | @featuresync/core file-snapshot-source.test.ts "pushes a bundle when watching" fails under full-monorepo load (vi.waitFor 1000ms, 0 calls) but passes alone — real fs.watch flake or a too-tight timeout?

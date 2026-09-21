@@ -1,11 +1,9 @@
 import type { EnvironmentView, FlagDefinitionView } from '../../application/browse-environment.js';
 import type { PublishedSegmentsView } from '../../application/list-published-segments.js';
+import { NO_URL_STATE } from '../url-state.js';
 import { environmentPath, escapeHtml } from './escape.js';
 import { renderFeatureEditForm } from './feature-edit-form.js';
 import { renderPage } from './layout.js';
-
-export const flagPath = (environment: string, key: string): string =>
-  `${environmentPath(environment)}/features/${encodeURIComponent(key)}`;
 
 interface CurrentFlag {
   readonly flag: FlagDefinitionView;
@@ -37,6 +35,8 @@ export const renderFlagPage = (
 ${renderFeatureEditForm(found.flag, {
       environment: view.environment,
       baseVersion: found.currentVersion,
+      // The single-flag page has no flag list to filter and no sibling rows to open, so it carries no URL state.
+      urlState: NO_URL_STATE,
       publishedSegments,
     })}
 </section>`,

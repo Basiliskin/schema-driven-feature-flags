@@ -34,6 +34,7 @@ import { STYLESHEET, STYLESHEET_PATH } from './views/stylesheet.js';
 import { renderVersionPage } from './views/version-page.js';
 import { renderVersionListPage } from './views/version-list-page.js';
 import { HttpError, MAX_BODY_BYTES, decodeSegment, readForm, send, type Route } from './http-primitives.js';
+import { PAGE_MESSAGE, PAGE_SIZE_MESSAGE, parsePageNumber, parseUrlState, parseUrlStateFields } from './url-state.js';
 import { matchSegmentRoute } from './segment-routes.js';
 
 export type DashboardPorts = EditFeaturePorts & SegmentUploadPorts & ListPublishedSegmentsPorts;
@@ -113,15 +114,6 @@ const parseVersion = (value: string | null | undefined): number => {
   return Number(value);
 };
 
-/** A page number or size from the query string; absent falls back, anything else is a tampered or mistyped URL. */
-const parsePageNumber = (value: string | null, fallback: number, message: string): number => {
-  if (value === null) return fallback;
-  if (!/^[1-9]\d{0,8}$/.test(value)) throw new HttpError(400, message);
-  return Number(value);
-};
-
-const PAGE_MESSAGE = 'The page must be a positive integer.';
-const PAGE_SIZE_MESSAGE = 'The page size must be a positive integer.';
 
 const outcomeNotices = (outcome: WriteOutcome): Notice[] => {
   if (outcome.kind === 'failure') return [{ kind: 'error', message: outcome.message, details: outcome.issues }];
@@ -327,6 +319,7 @@ function createDashboardRequestHandler(
       const state = {
         notices: outcomeNotices(outcome),
         publishedSegments: segments,
+        urlState: parseUrlStateFields(fields),
         ...(outcome.kind === 'failure' ? draftState(fields, outcome.message, outcome.issues) : {}),
         ...(parsed.ok && outcome.kind === 'failure' && outcome.conflict !== undefined
           ? { conflict: { since: outcome.conflict.since, key: parsed.edit.key } }
@@ -355,9 +348,10 @@ function createDashboardRequestHandler(
     if (segments.length === 2) {
       return {
         method: 'GET',
-        handle: async (_request, response) => {
+        handle: async (_request, response, url) => {
           send(response, 200, renderEnvironmentPage(await browseEnvironment(ports, environment), {
             publishedSegments: await listPublishedSegments(ports, environment),
+            urlState: parseUrlState(url.searchParams),
           }));
         },
       };
@@ -387,6 +381,8 @@ function createDashboardRequestHandler(
         },
       };
     }
+    // The two merge endpoints below carry no filter/open state on purpose: they answer with an HTML fragment
+    // and with JSON, not with a page, so there is no view for the state to restore.
     // POST only because a draft can be large; it reads snapshots and writes nothing.
     if (segments.length === 3 && segments[2] === 'merge') {
       return {
@@ -427,6 +423,7 @@ function createDashboardRequestHandler(
           const state = {
             notices: outcomeNotices(outcome),
             publishedSegments: await listPublishedSegments(ports, environment),
+            urlState: parseUrlStateFields(fields),
             ...(outcome.kind === 'failure' ? { draft } : {}),
             ...(outcome.kind === 'failure' && outcome.conflict !== undefined ? { conflict: outcome.conflict } : {}),
           };
@@ -438,12 +435,13 @@ function createDashboardRequestHandler(
       return {
         method: 'POST',
         handle: async (request, response) => {
-          const version = parseVersion((await readForm(request)).get('version'));
-          const outcome = await rollbackSnapshot(ports, environment, version);
+          const fields = await readForm(request);
+          const outcome = await rollbackSnapshot(ports, environment, parseVersion(fields.get('version')));
           const view = await browseEnvironment(ports, environment);
           send(response, writeStatus(outcome), renderEnvironmentPage(view, {
             notices: outcomeNotices(outcome),
             publishedSegments: await listPublishedSegments(ports, environment),
+            urlState: parseUrlStateFields(fields),
           }));
         },
       };

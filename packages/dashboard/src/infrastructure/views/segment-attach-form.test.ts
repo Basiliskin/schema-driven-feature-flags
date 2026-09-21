@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { NO_URL_STATE } from '../url-state.js';
 import type { FlagDefinitionView } from '../../application/browse-environment.js';
 import type { PublishedSegmentRow, PublishedSegmentsView } from '../../application/list-published-segments.js';
 import { renderFeatureEditForm, type EditContext } from './feature-edit-form.js';
@@ -31,6 +32,7 @@ const render = (of: FlagDefinitionView, context: Partial<AttachContext> = {}): s
   renderSegmentAttachForm(of, {
     action: '/env/production/features/checkout',
     baseVersionInput: BASE_VERSION_INPUT,
+    stateInputs: '',
     segments: BETA_AND_VIPS,
     ...context,
   });
@@ -134,7 +136,7 @@ describe('renderSegmentAttachForm', () => {
 
 describe('the flag editor', () => {
   it('treats a missing published-segment list as unreadable rather than as an empty one', () => {
-    const context: EditContext = { environment: 'production', baseVersion: 7 };
+    const context: EditContext = { environment: 'production', baseVersion: 7, urlState: NO_URL_STATE };
     const html = renderFeatureEditForm(flag('boolean'), context);
     expect(html).toContain('Attach a segment');
     expect(html).toContain('could not be read');
@@ -144,6 +146,7 @@ describe('the flag editor', () => {
     const context: EditContext = {
       environment: 'production',
       baseVersion: 7,
+      urlState: NO_URL_STATE,
       publishedSegments: BETA_AND_VIPS,
       draft: { key: 'checkout', segmentKey: 'vips', message: 'No such segment', issues: [] },
     };
@@ -157,6 +160,7 @@ describe('the flag editor', () => {
     const context: EditContext = {
       environment: 'production',
       baseVersion: 7,
+      urlState: NO_URL_STATE,
       publishedSegments: BETA_AND_VIPS,
       draft: { key: 'checkout', segmentKey: 'beta-testers', message: 'Rejected', issues: [] },
     };
@@ -169,5 +173,13 @@ describe('the stylesheet', () => {
     expect(STYLESHEET).toContain('.segment-attach');
     expect(STYLESHEET).toContain('.rule-segment');
     expect(STYLESHEET).toContain('.badge-segment');
+  });
+});
+
+describe('the URL state the attach form carries', () => {
+  it('submits it beside the base version, so attaching keeps the view the operator was on', () => {
+    const html = render(flag('boolean'), { stateInputs: '<input type="hidden" name="open" value="checkout">' });
+
+    expect(html).toContain('<input type="hidden" name="open" value="checkout">');
   });
 });
