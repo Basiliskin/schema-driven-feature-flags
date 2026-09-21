@@ -94,6 +94,3 @@ export const INVALID_PERCENTAGE_MESSAGE =
 
 export const INVALID_SEGMENT_KEY_MESSAGE = (segmentKey: string): string =>
   `"${segmentKey}" is not a valid Segment Key; use 1-64 letters, digits, "-" or "_", starting with a letter or digit.`;
-
-export const SEGMENT_NEEDS_SCHEMA_VERSION_2_MESSAGE = (key: string): string =>
-  `"${key}" lives in a schemaVersion 1 snapshot, which cannot carry segment rules; publish the environment at schemaVersion 2 first.`;

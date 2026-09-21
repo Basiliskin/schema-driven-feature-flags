@@ -1,6 +1,7 @@
 import type { FlagDefinitionView, SnapshotContents } from '../../application/browse-environment.js';
 import { escapeHtml } from './escape.js';
 import { renderFeatureEditForm, type EditContext } from './feature-edit-form.js';
+import { flagPath } from './flag-page.js';
 
 const rulesLabel = (count: number): string => `${String(count)} ${count === 1 ? 'rule' : 'rules'}`;
 
@@ -17,7 +18,7 @@ const renderFlagCard = (flag: FlagDefinitionView, editable: EditContext): string
   const open = editable.draft?.key === flag.key ? ' open' : '';
   return `<li class="card flag" data-flag="${escapeHtml(flag.key)}" data-search="${escapeHtml(`${flag.key} ${flag.type} ${flag.enabled ? 'on' : 'off'}`.toLowerCase())}">
 <details class="flag-row"${open}>
-<summary><span class="flag-key">${escapeHtml(flag.key)}</span>${renderFlagBadges(flag)}<span class="flag-summary muted">${rulesLabel(flag.ruleCount)}</span></summary>
+<summary><span class="flag-key"><a href="${escapeHtml(flagPath(editable.environment, flag.key))}">${escapeHtml(flag.key)}</a></span>${renderFlagBadges(flag)}<span class="flag-summary muted">${rulesLabel(flag.ruleCount)}</span></summary>
 <p class="muted">Default <code>${escapeHtml(JSON.stringify(flag.defaultValue))}</code> · ${rulesLabel(flag.ruleCount)}</p>
 ${renderFeatureEditForm(flag, editable)}
 </details>

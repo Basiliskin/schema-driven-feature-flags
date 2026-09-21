@@ -1,40 +1,45 @@
-# Next horizon brief — horizon 24 (after horizon 23: Segment List and picker-based attach)
+# Next horizon brief — horizon 25 (after horizon 24: version paging and flag URLs)
 
 ## Recommended scope
-One horizon, roughly the size of horizon 23 or slightly smaller, dedicated to the single remaining headline feature: creating a flag with one or more segments already attached, each with its own rollout percentage, landing in a single published snapshot version through the existing create/CAS/replay path. That is realistically a domain phase (widen the create FlagEdit and applyFlagEdit to emit a rules array, generalize the schemaVersion-2 guard), an application phase (createFeature emitting rules, extended CreateDraft echo-back), an interface phase (repeated segment+percentage rows in renderNewFlagForm fed by the listPublishedSegments contract shipped in horizon 23, plus the create form parser), and one Playwright proof in the existing LocalStack CI job, with unit tests carrying the 100% coverage threshold since integration and e2e contribute none. Resolving the bucketBy/salt question is a prerequisite inside this horizon, not a separate one. Everything else — attaching with a rollout in one step on the edit path, segment deletion/archival/GC, segment metadata beyond memberAttribute, auto-upgrading v1 snapshots, and horizon 22's orphaned-object cleanup — should stay out; pulling any of them in is what would make this horizon slip, and the rule-index ambiguity blocker is not made worse by the create path (create produces deterministic indices 0..N-1) so it need not be solved here.
+Treat the next horizon as one cohesive URL-state horizon: establish the shared query-string contract (user item 3), build the server-side flag filter and any flag paging on top of it (item 4), and land the sticky Section Nav (item 5) as a small tail phase. That is deliberately more than horizon 24 carried, because items 3 and 4 cannot be separated — item 4's semantics are defined by item 3's contract — but the weight is not in the feature logic, it is in the round-trip: every write form (feature edit, rollout, segment attach, new flag, publish dialog, rollback) has to carry or redirect the state, and the POST handlers currently re-render inline rather than redirecting, so whichever mechanism is chosen touches roughly six view modules plus the three POST handlers in http-server.ts. Budget real phases for the two test surfaces that this work breaks rather than extends: flag-list.spec.ts's live-filter spec must be rewritten against a submit-and-render flow, and the 100% branch/line/function/statement coverage gate over hand-written HTML means every new clamp, echo and open/closed branch needs its test in the same phase it is written. Expect a phase count in the six-to-eight range, and resist folding anything else in — no segment-list filtering or paging, no changes to edit/publish/rollback/replay semantics, no new app.js logic, and no version-index or bucket-listing shortcuts. If the horizon starts to overflow, item 5 is the clean thing to drop: it is markup and CSS only and depends on nothing the other two produce.
 
 ## Unknowns
-- Should creating a flag with segments widen the existing 'create' FlagEdit kind (preserving canReplayEdit's create-specific replay rule for free) or introduce a new kind, and if widened, does the create replay rule ('replays iff key absent in the BASE snapshot') still hold when the create also carries rules?
-- Where do bucketBy and salt come from when the operator only enters a rollout percentage at create time — reuse the rollout form's defaults (bucketBy='userId', salt=''), derive salt from the flag/segment key, or ask the operator? Note salt='' would fail rolloutSchema's min(1).
-- Should a rollout percentage be optional per attached segment at create time (rule with no rollout = 100%), or required for every attached segment?
-- Should attachSegment itself gain an optional rollout (making attach-then-setRollout one round trip), or does per-segment rollout exist only on the create path?
-- How should the schemaVersion-1 rejection guard in applyFlagEdit generalize — keyed on 'the edit produces a segment rule' rather than edit.kind === 'attachSegment' — and what error message does a create-with-segments against a v1 snapshot surface?
-- What is the exact HTML form encoding for repeated segment rows in renderNewFlagForm (segmentKey[]/percentage[] vs indexed names), and how does the existing form-field parser in http-server.ts handle repeated field names today?
-- What does CreateDraft echo back after a failed create — are partially filled segment rows preserved, and in what order?
-- Can a create-with-segments be submitted when the environment has no published segments, and what does the form render then?
-- Is horizon 22's orphaned-object cleanup still wanted at all, or has horizon 23's decision to list the <env>/segments/ prefix changed its premise (a prefix listing now makes orphans visible)?
-- Does the segment picker on the new-flag form need the same 'unknown attribute' state as the attach form, and can a segment with no stored memberAttribute be attached at create time at all?
-
-## Research
-- Read packages/dashboard/src/domain/flag-edit.ts end to end: the create branch of applyFlagEdit, touchedFields (exhaustive over Exclude<FlagEdit,{kind:'create'}>), canReplayEdit's create special case, and the SEGMENT_NEEDS_SCHEMA_VERSION_2 guard condition.
-- Read packages/dashboard/src/application/edit-feature.ts: the FlagEdit (9 kinds) and FlagEditFailure (11 kinds) exhaustive switches in describeEdit and editFailure, to count exactly what a widened create touches.
-- Read packages/core/src/domain/rule.ts rolloutSchema and confirm bucketBy/salt are required and salt has min(1) — this decides whether an empty-salt default is even publishable.
-- Read packages/dashboard/src/infrastructure/views/new-flag-form.ts and parseCreateForm + createDraftOf in http-server.ts to see how form fields are parsed and echoed, and whether repeated field names are supported by the existing parser.
-- Read packages/dashboard/src/application/create-feature.ts to see the emitted feature object that today has no rules key.
-- Inspect the shipped horizon-23 artifacts before planning: the listPublishedSegments port and use case, and createS3SegmentLister — the create form's picker should consume the same contract rather than a second source.
-- Run `pnpm verify` (build, typecheck, lint, vitest --coverage) on a clean tree to confirm horizon 23 landed green and the 100% coverage threshold is the starting baseline.
-- Grep for FIELD_MESSAGE and any test asserting its exact string, since adding parsers to EDIT_PARSERS changes that message automatically.
-- Read packages/dashboard/e2e/support/localstack-fixtures.ts and the new segment-picker spec to see what seeding helpers already exist for a create-with-segments browser proof.
-- Check whether any snapshot in the repo's fixtures or example environments is still schemaVersion 1, to size the v1 rejection path realistically.
+- Which query-string keys, with what spelling and value grammar, make up the URL-state contract (filter text, open-section ids, flag page number, version page number), and which are shared across the environment page, flag page and versions page versus local to one page?
+- How does URL state survive a POST, given that editRoute, publish and rollback re-render inline with 200/400/422 instead of redirecting — by echoing state as hidden fields in every write form, by putting the query string on each form's action URL, or by converting those handlers to POST-redirect-GET?
+- If POST-redirect-GET is chosen, what happens to the current inline error rendering (400/422 with draft values and notices preserved) and to the field-granular replay behaviour that depends on re-rendering with the submitted draft in hand?
+- Does "per-section open/closed state" mean the two page-level <section> blocks (Flags, Versions) only, or also every per-flag <details class="flag-row"> and the nested rollout/segment panels? The horizon-23 goal of not reopening rows after submit only works if the per-flag details are included.
+- How does server-rendered open/closed state coexist with app.js, which already forces details.open = true for rows touched by carried-over edits — does the client keep that behaviour, or lose it once the server owns openness?
+- Is the client-side live filter kept as progressive enhancement over an already server-filtered set, or removed outright? The answer decides whether data-search/data-filter stay and whether flag-list.spec.ts is rewritten or deleted.
+- What is the flag filter's matching semantics server-side — today the client matches a data-search string of "key type on|off" lowercased; does the server reproduce that exact composite match, or narrow to key-prefix matching?
+- What flag page size, and does flag paging interact with the filter (filter-then-page, totals over the filtered set) or page-then-filter?
+- Is per-flag paging even meaningful given flags all live inside one snapshot document that is already fully read — i.e. is item 4's paging a render-cost win or purely a UI/scroll win?
+- What should the sticky Section Nav contain on pages other than the environment page, and does "Versions" point at the on-page bounded list or at the /env/<env>/versions route?
+- Does the e2e seed environment (3 flags, 1 version) still exercise filtering and paging meaningfully, or does the fixture need more seeded flags/versions first?
+- How much branch surface do filter echo + open/closed state add to the view modules, and can the 100% coverage gate still be met without the view test files ballooning?
 
 ## Decisions needed
-- Widen the existing 'create' FlagEdit kind versus adding a new edit kind for create-with-segments — this determines whether replay/CAS semantics are inherited or reimplemented.
-- Where bucketBy and salt come from for a create-time rollout, and whether the rollout form's current defaults (including salt='') are acceptable or must change.
-- Whether rollout percentage becomes part of the attachSegment edit itself, or stays a separate setRollout addressed by rule index (the existing index-ambiguity blocker).
-- Whether the schemaVersion-1 guard is restated as a general 'this edit introduces a segment rule' rule, or keeps enumerating edit kinds.
-- How many segments a single create may attach (unbounded repeated rows versus a fixed small maximum), and whether rows are added server-side-only or need client JS in app.js.
-- Whether horizon 22's orphaned-object cleanup is revived, rewritten against the now-available prefix listing, or formally retired.
-- Whether auto-upgrading schemaVersion 1 snapshots to 2 is finally taken on, or stays a standing deferral.
+- Whether write POSTs become redirect-after-POST or keep inline re-rendering with state echoed through hidden form fields — the single choice that determines item 3's cost and whether the horizon-23 reopen-the-row workaround can be retired.
+- Whether to introduce the shared query-string/URL-state module horizon 24 deliberately deferred as premature, once three or more pages read the same keys.
+- Whether the client-side live filter is removed, kept as enhancement, or replaced — and correspondingly whether flag-list.spec.ts is rewritten, retargeted or deleted.
+- The scope of "open/closed state": page sections only, or per-flag details rows and nested panels too — and how to encode that compactly in a URL without an unbounded key list.
+- Whether item 4's paging applies to flags within the current snapshot at all, or whether filtering alone satisfies the intent.
+- Whether the Section Nav is environment-page-only or a shared layout element.
+- Whether the e2e seed fixture is enlarged, and if so whether existing specs' bare-URL assumptions and exact counts get rewritten in the same horizon.
+- How much of items 3, 4 and 5 ships in one horizon versus splitting item 5 off.
+
+## Research
+- Read http-server.ts end to end — the dispatch()/match() 4-segment guard, branch ordering (features before segments before versions), the parseVersion/parseBaseVersion strict-regex + HttpError(400) style, and the three POST handlers that re-render inline.
+- Read views/scripts/app.js lines ~31-50 (the [data-filter] live filter) and ~284-305 (carried-over-edit replay setting details.open = true) — the existing client-side owner of both mechanisms items 3 and 4 move to the server.
+- Read e2e/flag-list.spec.ts (asserts live visible-row counts), e2e/support/fixtures.ts (InMemoryEnvironment.ports(), expandFlag()), and segment-upload-rollout.spec.ts where the flag row and rollouts panel are reopened by hand after a submit.
+- Re-read horizon 24's shipped routes as they actually landed: version-list-page.ts and flag-page.ts (their versionsPath/flagPath helpers set the precedent any URL-state helper must match), and the page/pageSize query parsing it added — that is the seed of the URL-state contract, not a blank slate.
+- Read snapshot-contents.ts to see how renderFlagCard emits the flag link and whether renderSnapshotContents takes a pre-sliced contents value — flag paging must slice at the same seam.
+- Read every write form module and count the form actions needing query-state echoing; that is the real blast radius of item 3.
+- Read stylesheet.ts STYLE_FILES and views/styles/ (per-feature sheets are 12-23 lines each) — item 5's CSS follows that pattern.
+- Re-read decisions.md and discoveries.md for the horizon-18 app.js coverage decision and the horizon-10 no-listing rule.
+- Check vitest.config.ts thresholds and the size of http-server.test.ts (~1593 lines) before deciding whether new route logic lands there or in a new module.
 
 ## Artifacts to inspect
-packages/dashboard/src/domain/flag-edit.ts; packages/dashboard/src/application/edit-feature.ts; packages/dashboard/src/infrastructure/http-server.ts; packages/dashboard/src/infrastructure/views/new-flag-form.ts; packages/dashboard/src/infrastructure/views/rollout-form.ts; packages/dashboard/src/infrastructure/views/segment-attach-form.ts; packages/dashboard/src/infrastructure/views/environment-page.ts; packages/dashboard/src/application/list-referenced-segments.ts; packages/dashboard/src/application/ports.ts; packages/aws/src/infrastructure/s3-segment-lister.ts; packages/aws/src/domain/segment-pointer.ts; packages/core/src/domain/rule.ts; packages/core/src/domain/snapshot.ts; packages/dashboard/e2e/support/localstack-fixtures.ts; packages/dashboard/integration/dashboard-segments.localstack.test.ts; vitest.config.ts; docs/roadmaps/featuresync/horizons/horizon-22-orphaned-object-cleanup-roadmap.json
+packages/dashboard/src/infrastructure/: http-server.ts, http-primitives.ts, views/environment-page.ts, views/snapshot-contents.ts, views/scripts/app.js, views/feature-edit-form.ts, views/rollout-form.ts, views/segment-attach-form.ts, views/new-flag-form.ts, views/layout.ts, views/stylesheet.ts, views/styles/, views/segment-list-page.ts, views/version-page.ts · packages/dashboard/src/application/browse-environment.ts · packages/dashboard/e2e/{flag-list,segment-upload-rollout}.spec.ts, e2e/support/fixtures.ts · vitest.config.ts · docs/roadmaps/featuresync/{decisions,discoveries}.md
+
+## Note
+The previous content of this file (a brief for "create a flag with segments already attached") was superseded when the user redirected horizon 24 to dashboard navigation. That feature is still unbuilt; its open questions remain in blockers.md under horizon 23.

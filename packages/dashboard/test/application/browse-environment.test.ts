@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   browseEnvironment,
+  ENVIRONMENT_VERSION_WINDOW,
   viewSnapshotVersion,
   type BrowsePorts,
 } from '../../src/application/browse-environment.js';
@@ -60,7 +61,7 @@ describe('browseEnvironment', () => {
     expect(ports.fetchSnapshotText).not.toHaveBeenCalled();
   });
 
-  it('lists every version from 1 to current with its metadata and shows the current Flag Definitions', async () => {
+  it('lists every version with its metadata and shows the current Flag Definitions when history fits the window', async () => {
     const ports = portsWith(3, (_environment, version) => Promise.resolve(snapshotText(version)));
     const metadata = (version: number) => ({
       createdAt: '2026-09-19T06:00:00.000Z',
@@ -105,6 +106,30 @@ describe('browseEnvironment', () => {
 
     expect(view).toMatchObject({ versions: [{ version: 1 }, { version: 2 }, { version: 3, metadata: { reason: 'reason 3' } }] });
     expect(view.status === 'published' && view.versions.slice(0, 2).map((entry) => 'metadata' in entry)).toEqual([false, false]);
+  });
+
+  it('fetches exactly the window when current sits on the window boundary', async () => {
+    const ports = portsWith(ENVIRONMENT_VERSION_WINDOW, (_environment, version) => Promise.resolve(snapshotText(version)));
+
+    const view = await browseEnvironment(ports, 'production');
+
+    const expected = Array.from({ length: ENVIRONMENT_VERSION_WINDOW }, (_entry, index) => index + 1);
+    expect(view.status === 'published' && view.versions.map((entry) => entry.version)).toEqual(expected);
+    expect(ports.fetchSnapshotText.mock.calls).toEqual(expected.map((version) => ['production', version]));
+  });
+
+  it('fetches only the newest window and still resolves current by version number on a long history', async () => {
+    const ports = portsWith(500, (_environment, version) => Promise.resolve(snapshotText(version)));
+
+    const view = await browseEnvironment(ports, 'production');
+
+    const expected = [496, 497, 498, 499, 500];
+    expect(view.status === 'published' && view.versions.map((entry) => entry.version)).toEqual(expected);
+    expect(ports.fetchSnapshotText.mock.calls).toEqual(expected.map((version) => ['production', version]));
+    expect(view).toMatchObject({
+      currentVersion: 500,
+      current: { version: 500, contents: { status: 'valid', metadata: { reason: 'reason 500' } } },
+    });
   });
 
   it('lists exactly version 1 when only one version was published', async () => {

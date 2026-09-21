@@ -141,7 +141,9 @@ describe('startDashboardServer', () => {
     const page = await call(dashboard, 'GET', '/env/production');
 
     expect(page.status).toBe(200);
-    expect(page.body).toContain('<span class="flag-key">new-dashboard</span><span class="badge">boolean</span>');
+    expect(page.body).toContain(
+      '<span class="flag-key"><a href="/env/production/features/new-dashboard">new-dashboard</a></span><span class="badge">boolean</span>',
+    );
     expect(page.body).toContain('<code>{&quot;max&quot;:3}</code>');
     expect(page.body).toContain('Current snapshot · v3');
     expect(page.body).toContain('<a href="/env/production/versions/3">Version 3</a><span class="badge badge-accent">current</span>');
@@ -189,6 +191,89 @@ describe('startDashboardServer', () => {
 
     const missing = await call(dashboard, 'GET', '/env/production/versions/9');
     expect(missing.body).toContain('This version is not available in this environment.');
+  });
+
+  describe('the version history page', () => {
+    it('renders page 1 by default, newest first, with an Older link and no Newer link', async () => {
+      const dashboard = await start(fakes({ readCurrentVersion: () => Promise.resolve(45) }).ports);
+
+      const reply = await call(dashboard, 'GET', '/env/production/versions');
+
+      expect(reply.status).toBe(200);
+      expect(reply.body).toContain('<h1>production · version history</h1>');
+      expect(reply.body).toContain('<a href="/env/production/versions/45">Version 45</a>');
+      expect(reply.body).toContain('<a href="/env/production/versions?page=2">Older versions</a>');
+      expect(reply.body).not.toContain('Newer versions');
+    });
+
+    it('follows its own Older link to the next block of versions', async () => {
+      const dashboard = await start(fakes({ readCurrentVersion: () => Promise.resolve(45) }).ports);
+      const first = await call(dashboard, 'GET', '/env/production/versions');
+      const older = /<a href="([^"]+)">Older versions<\/a>/.exec(first.body);
+
+      const second = await call(dashboard, 'GET', (older?.[1] as string).replace(/&amp;/g, '&'));
+
+      expect(second.status).toBe(200);
+      expect(second.body).toContain('<a href="/env/production/versions/25">Version 25</a>');
+      expect(second.body).not.toContain('>Version 26<');
+      expect(second.body).toContain('Newer versions');
+    });
+
+    it('renders an empty-state message and reads no snapshot past the end of the history', async () => {
+      const fetchSnapshotText = vi.fn(() => Promise.resolve(VALID));
+      const dashboard = await start(fakes({ fetchSnapshotText }).ports);
+
+      const reply = await call(dashboard, 'GET', '/env/production/versions?page=99');
+
+      expect(reply.status).toBe(200);
+      expect(reply.body).toContain('There is no version history on this page.');
+      expect(fetchSnapshotText).not.toHaveBeenCalled();
+    });
+
+    it('shows the single version of a one-version environment with no pager', async () => {
+      const dashboard = await start(fakes({ readCurrentVersion: () => Promise.resolve(1) }).ports);
+
+      const reply = await call(dashboard, 'GET', '/env/production/versions');
+
+      expect(reply.body).toContain('<a href="/env/production/versions/1">Version 1</a>');
+      expect(reply.body).not.toContain('More version history');
+    });
+
+    it('honours an explicit page size', async () => {
+      const fetchSnapshotText = vi.fn(() => Promise.resolve(VALID));
+      const dashboard = await start(fakes({ readCurrentVersion: () => Promise.resolve(45), fetchSnapshotText }).ports);
+
+      const reply = await call(dashboard, 'GET', '/env/production/versions?pageSize=2');
+
+      expect(fetchSnapshotText).toHaveBeenCalledTimes(2);
+      expect(reply.body).toContain('2 per page');
+    });
+
+    it.each(['abc', '-1', '0', '1e9', '2.5', ''])('answers 400 for page %s', async (value) => {
+      const dashboard = await start(fakes().ports);
+
+      const reply = await call(dashboard, 'GET', `/env/production/versions?page=${encodeURIComponent(value)}`);
+
+      expect(reply.status).toBe(400);
+      expect(reply.body).toContain('The page must be a positive integer.');
+    });
+
+    it('answers 400 for a malformed page size', async () => {
+      const dashboard = await start(fakes().ports);
+
+      const reply = await call(dashboard, 'GET', '/env/production/versions?pageSize=abc');
+
+      expect(reply.status).toBe(400);
+      expect(reply.body).toContain('The page size must be a positive integer.');
+    });
+
+    it('does not shadow the single-version page', async () => {
+      const dashboard = await start(fakes().ports);
+
+      const reply = await call(dashboard, 'GET', '/env/production/versions/2');
+
+      expect(reply.body).toContain('<h1>production · version 2</h1>');
+    });
   });
 
   it.each(['abc', '0', '01', '-1', '1.5', '9999999999'])('answers 400 for version %s', async (version) => {
@@ -971,16 +1056,51 @@ describe('startDashboardServer', () => {
       expect(openWriter).not.toHaveBeenCalled();
     });
 
-    it('answers 405 to GET and 400 to a malformed key', async () => {
+    it('answers 405 to a verb the address does not accept and 400 to a malformed key', async () => {
       const { ports } = fakes();
       const dashboard = await start(ports);
 
-      const get = await call(dashboard, 'GET', '/env/production/features/new-dashboard');
-      expect(get.status).toBe(405);
-      expect(get.headers.allow).toBe('POST');
+      const deleted = await call(dashboard, 'DELETE', '/env/production/features/new-dashboard');
+      expect(deleted.status).toBe(405);
+      expect(deleted.headers.allow).toBe('GET, POST');
 
       const malformed = await call(dashboard, 'POST', '/env/production/features/%E0', { body: form({}) });
       expect(malformed.status).toBe(400);
+    });
+  });
+
+  describe('GET /env/:env/features/:key', () => {
+    it('renders the flag on its own page', async () => {
+      const { ports } = fakes();
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'GET', '/env/production/features/new-dashboard');
+
+      expect(reply.status).toBe(200);
+      expect(reply.headers['content-type']).toBe('text/html; charset=utf-8');
+      expect(reply.body).toContain('<h1>new-dashboard</h1>');
+      expect(reply.body).toContain('action="/env/production/features/new-dashboard"');
+    });
+
+    it('answers 404 with the error page when the snapshot does not define the key', async () => {
+      const { ports } = fakes();
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'GET', '/env/production/features/does-not-exist');
+
+      expect(reply.status).toBe(404);
+      expect(reply.headers['content-type']).toBe('text/html; charset=utf-8');
+      expect(reply.body).toContain('does-not-exist');
+    });
+
+    it('answers 404 when the environment has nothing published', async () => {
+      const { ports } = fakes({ readCurrentVersion: () => Promise.resolve(undefined) });
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'GET', '/env/production/features/new-dashboard');
+
+      expect(reply.status).toBe(404);
+      expect(reply.body).toContain('new-dashboard');
     });
   });
 
@@ -1132,7 +1252,7 @@ describe('startDashboardServer', () => {
     });
   });
 
-  it.each(['/nope', '/env', '/env/a/b', '/env/a/versions', '/env/a/versions/1/x', '/other/a'])(
+  it.each(['/nope', '/env', '/env/a/b', '/env/a/versions/1/x', '/other/a'])(
     'answers 404 for %s',
     async (path) => {
       const dashboard = await start(fakes().ports);
@@ -1145,6 +1265,7 @@ describe('startDashboardServer', () => {
     ['DELETE', '/', 'GET'],
     ['POST', '/env/production', 'GET'],
     ['POST', '/env/production/versions/1', 'GET'],
+    ['POST', '/env/production/versions', 'GET'],
     ['GET', '/env/production/publish', 'POST'],
     ['PUT', '/env/production/rollback', 'POST'],
   ])('answers 405 for %s %s with Allow: %s', async (method, path, allow) => {

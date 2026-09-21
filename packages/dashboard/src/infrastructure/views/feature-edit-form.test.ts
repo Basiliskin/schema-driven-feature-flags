@@ -201,6 +201,15 @@ describe('renderEnvironmentPage edit forms', () => {
     expect(html).toMatch(/data-flag="new-dashboard" data-search="new-dashboard boolean (on|off)"/);
   });
 
+  it('links each flag key to its own page without wrapping the row summary', () => {
+    const row = rowOf(renderEnvironmentPage(view), 'new-dashboard');
+
+    expect(row).toContain(
+      '<span class="flag-key"><a href="/env/production/features/new-dashboard">new-dashboard</a></span>',
+    );
+    expect(row).toContain('<summary><span class="flag-key">');
+  });
+
   it('puts the publish form in a dialog opened from the page header', () => {
     const html = renderEnvironmentPage(view);
     expect(html).toContain('data-open-dialog="publish-dialog"');

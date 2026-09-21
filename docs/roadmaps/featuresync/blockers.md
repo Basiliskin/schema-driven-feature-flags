@@ -73,3 +73,4 @@
 - 2026-09-20 | horizon 23 | Can a create-with-segments be submitted when the environment has no published segments, and what does the form render then?
 - 2026-09-20 | horizon 23 | Is horizon 22's orphaned-object cleanup still wanted at all, or has horizon 23's decision to list the <env>/segments/ prefix changed its premise (a prefix listing now makes orphans visible)?
 - 2026-09-20 | horizon 23 | Does the segment picker on the new-flag form need the same 'unknown attribute' state as the attach form, and can a segment with no stored memberAttribute be attached at create time at all?
+- 2026-09-21 | horizon 23 | setRollout/removeRollout on a schemaVersion 1 snapshot still fail via the snapshot contract, while attachSegment now auto-upgrades — is that asymmetry intended?

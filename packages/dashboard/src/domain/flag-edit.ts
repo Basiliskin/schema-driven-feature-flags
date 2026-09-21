@@ -55,7 +55,6 @@ export type FlagEditFailure =
   | { readonly kind: 'INVALID_RULE_INDEX'; readonly key: string; readonly ruleIndex: number }
   | { readonly kind: 'INVALID_PERCENTAGE'; readonly percentage: number }
   | { readonly kind: 'INVALID_SEGMENT_KEY'; readonly segmentKey: string }
-  | { readonly kind: 'SEGMENT_NEEDS_SCHEMA_VERSION_2'; readonly key: string }
   | { readonly kind: 'INVALID_SNAPSHOT'; readonly issues: readonly string[] };
 
 type JsonObject = Record<string, unknown>;
@@ -63,21 +62,31 @@ type JsonObject = Record<string, unknown>;
 const isObject = (value: unknown): value is JsonObject =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+const SEGMENT_CAPABLE_SCHEMA_VERSION = 2;
+
+/**
+ * A schemaVersion 1 snapshot cannot represent a segment condition, so attaching one carries the whole
+ * environment up to 2. The upgrade is additive — every valid v1 snapshot is a valid v2 snapshot — and it
+ * is recomputed on each apply, so a replayed attach upgrades whatever snapshot it lands on.
+ */
+const schemaVersionUpgradeFor = (base: unknown, edit: FlagEdit): JsonObject =>
+  edit.kind === 'attachSegment' && isObject(base) && base.schemaVersion === 1
+    ? { schemaVersion: SEGMENT_CAPABLE_SCHEMA_VERSION }
+    : {};
+
 export function applyFlagEdit(
   rawSnapshotText: string,
   edit: FlagEdit,
   meta: FlagEditMeta,
 ): Result<JsonObject, FlagEditFailure> {
   const base: unknown = JSON.parse(rawSnapshotText);
-  if (edit.kind === 'attachSegment' && isObject(base) && base.schemaVersion === 1) {
-    return { ok: false, error: { kind: 'SEGMENT_NEEDS_SCHEMA_VERSION_2', key: edit.key } };
-  }
   const features = isObject(base) && isObject(base.features) ? base.features : {};
   const nextFeatures = editFeatures(features, edit);
   if (!nextFeatures.ok) return nextFeatures;
 
   const next: JsonObject = {
     ...(base as JsonObject),
+    ...schemaVersionUpgradeFor(base, edit),
     createdBy: meta.createdBy,
     reason: meta.reason,
     features: nextFeatures.value,

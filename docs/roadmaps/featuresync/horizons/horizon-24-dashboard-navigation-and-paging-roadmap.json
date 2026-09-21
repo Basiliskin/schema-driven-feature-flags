@@ -1,0 +1,685 @@
+{
+  "task": "Make the FeatureSync dashboard comfortable to use as an environment grows: page the version history onto its own route, give each flag its own URL, and stop a page render from reading every published version. (Items 3-5 of the user's five improvements \u2014 URL-carried filter/section state, server-side flag filtering, and sticky section nav \u2014 are planned for the next horizon.)",
+  "analysis": {
+    "objective": "Make the FeatureSync dashboard scale with an environment by moving Version History to its own paged route and giving each flag its own URL, so a page render no longer reads every published version and the operator navigates instead of scrolling.",
+    "successDefinition": "Done when: (1) rendering /env/<env> reads a bounded number of Snapshot Versions (a fixed small window, not 1..currentVersion) regardless of how many versions exist, and listPublishedSegments reads exactly one snapshot per call, so a render no longer walks history twice; (2) GET /env/<env>/versions renders one Page Window of version history, with page position read from the query string and Older/Newer links that are omitted when no such page exists; (3) GET /env/<env>/features/<key> returns a Flag Page for an existing key and a 404 for an unknown one, with the existing POST /env/<env>/features/<key> edit route unchanged, and each flag in the environment list links to it; (4) BrowsePorts is NOT widened \u2014 version numbers stay derivable arithmetically from the Current Pointer; (5) repo gates stay green \u2014 pnpm verify (build, typecheck, ESLint layer boundaries, 100% line/branch/function/statement coverage over packages/*/src/**/*.ts), the integration suite and the Playwright browser suite, whose existing specs drive bare URLs and must keep passing on the new defaults.",
+    "assumptions": [
+      "Version history stays linear 1..currentVersion and addressable by key, so a page of versions is computed arithmetically from readCurrentVersion \u2014 no ListObjectsV2 on the snapshots prefix (the horizon-23 listing permission was granted for the <env>/segments/ prefix only).",
+      "The environment page's 'latest few' window is a small fixed constant (e.g. 5) chosen in the plan, not an operator-tunable setting.",
+      "listPublishedSegments' internal browseEnvironment call is the second fan-out named in discoveries.md and is reduced to the data it actually needs (the current Snapshot Version), so a render does not walk history twice.",
+      "State in the query string is carried across POSTs by the forms themselves (action/hidden fields or a redirect preserving the query), since POST handlers currently render the page directly.",
+      "The existing client-side data-filter input is replaced by, not layered on top of, the server-side filter, so one filter mechanism remains.",
+      "Query-string state is untrusted input: unknown keys, out-of-range pages and oversized q values are clamped or ignored rather than erroring.",
+      "The horizon-16 Host/Origin guard, the field-granular replay rule and all existing edit/publish semantics are unchanged by this horizon.",
+      "This horizon resolves the open horizon-10 blocker 'Is 1..current version browsing usable for many versions, or is pagination needed?' \u2014 the answer is paging."
+    ],
+    "risks": [
+      "The route matcher rejects paths with more than 4 segments (http-server.ts guard) and already binds /env/<env>/features/<key> to POST edits; adding a GET Flag Page and a paged versions route must not shadow or loosen the existing method/path dispatch.",
+      "The 100% branch-coverage gate over hand-written HTML strings (open horizon-10 blocker) gets harder as paging, filter echo and open/closed section state each add branches to the view modules \u2014 test surface may grow faster than the feature.",
+      "Server-side filter plus per-section open/closed state can combine into a large query-string surface; without a single parsed URL-state value object the parsing logic will be duplicated across environment-page, flag page and versions page.",
+      "Moving state into the URL changes the URLs the horizon-19/23 Playwright browser specs drive; those specs must be updated in the same horizon or CI goes red.",
+      "Reducing the fan-out inside listPublishedSegments touches a shared use case used by several routes (GET env, publish, rollback) and could silently change which segment keys are listed.",
+      "An extra round-trip per filter interaction (user-accepted) makes the filter feel slower on a large environment and adds one S3 read path per keystroke-submit; the plan must not compensate by re-growing app.js.",
+      "The five items are user-prioritised but not independent \u2014 items 3 and 4 both define query-string semantics, so shipping 4 before 3's URL-state contract exists would force a rewrite."
+    ],
+    "outOfScope": [
+      "Carrying the flag filter and per-section open/closed state in the query string (user item 3) \u2014 deferred to the next horizon; it needs a URL-state contract shared by three pages and touches every write form, because POST handlers re-render inline instead of redirecting.",
+      "Server-side flag filtering and flag paging (user item 4) \u2014 deferred; its query-string semantics are defined by item 3's URL-state contract, and it forces a rewrite of the flag-list browser spec that drives the live client-side filter.",
+      "Sticky Flags / Versions / Segments section navigation (user item 5) \u2014 deferred; cosmetic, and its shape depends on how the new routes settle (Segments is a separate route, not an on-page section).",
+      "Making the horizon-23 browser spec stop reopening the flag row and Rollout panel after a submit \u2014 that depends entirely on open/closed state travelling in the URL, which is deferred item 3; this horizon cannot and does not promise it.",
+      "Any new logic in packages/dashboard/src/infrastructure/views/scripts/app.js \u2014 an explicit horizon-18 decision puts it outside the coverage gate and the user chose server-side URL state instead.",
+      "Caching, memoising or otherwise persisting parsed Snapshot Versions between requests \u2014 paging removes the fan-out without introducing a cache and its invalidation.",
+      "A per-environment version index object in S3 \u2014 versions stay derivable from the Current Pointer, and horizon 23 already rejected index objects as a second source of truth.",
+      "Widening ListObjectsV2 beyond the <env>/segments/ prefix \u2014 the horizon-10 no-listing rule still binds every other prefix.",
+      "Segment list paging or filtering \u2014 the user's five items cover Flags and Versions only.",
+      "Orphaned snapshot/segment object cleanup (the superseded horizon 22) \u2014 unrelated to navigation and still parked.",
+      "The create-a-flag-with-segments-attached scope in next-horizon-brief.md \u2014 written for a different horizon and explicitly redirected by the user.",
+      "Any change to flag edit, publish, rollback, replay or conflict semantics \u2014 this horizon changes read paths and navigation only.",
+      "Authentication, multi-user sessions or server-side session storage \u2014 state lives in the URL, and the dashboard remains a localhost single-operator tool behind the Host/Origin guard.",
+      "A visual redesign of the dashboard."
+    ],
+    "domainShape": "technical",
+    "domainShapeReason": "The objective is about the dashboard's read path, routing and rendering machinery \u2014 how many S3 reads a page render costs and which URL shows what \u2014 not about flag targeting, versioning or any rule a domain expert would recognise.",
+    "ubiquitousLanguage": [
+      {
+        "term": "Environment Page",
+        "meaning": "The server-rendered page at /env/<env>; after this horizon it shows the current snapshot, a bounded page of flags and only the latest few versions."
+      },
+      {
+        "term": "Version History Page",
+        "meaning": "The new paged route (/env/<env>/versions) that renders one page of Snapshot Versions, reading only the versions on that page."
+      },
+      {
+        "term": "Flag Page",
+        "meaning": "The new deep-linkable page at /env/<env>/features/<key> rendering one flag and its edit forms, bookmarkable and shareable."
+      },
+      {
+        "term": "Page Window",
+        "meaning": "The bounded slice \u2014 of versions or of flags \u2014 a given render actually reads and emits, defined by page size and offset."
+      },
+      {
+        "term": "Snapshot Version",
+        "meaning": "One immutable published snapshot numbered 1..currentVersion, addressable by key without any bucket listing."
+      },
+      {
+        "term": "Dashboard read path",
+        "meaning": "The application-layer path that turns storage reads into an Environment Page view: browseEnvironment, listVersionPage and listPublishedSegments."
+      },
+      {
+        "term": "Dashboard routing and views",
+        "meaning": "The infrastructure layer that binds URLs to handlers and renders HTML pages: http-server.ts and the modules under views/."
+      }
+    ]
+  },
+  "discoveryFindings": [
+    {
+      "area": "HTTP routing",
+      "finding": "dispatch() builds `const url = new URL(String(request.url), 'http://localhost')` and `segments = url.pathname.split('/').filter(s => s !== '')`. match(segments, method) returns a Route or undefined; undefined -> 404, method mismatch -> 405 with an `allow` header from `route.allow ?? [route.method]`. The guard is `if (segments[0] !== 'env' || segments.length < 2 || segments.length > 4) return undefined;` \u2014 a hard cap of 4 path segments after /env. Bound today: GET / (with ?env= redirect), GET /assets/app.css, GET /assets/app.js, GET /env/<e>, GET /env/<e>/current-version (JSON), GET /env/<e>/changes (?since,&edited), POST /env/<e>/merge, POST /env/<e>/merge/apply, POST /env/<e>/publish, POST /env/<e>/rollback, POST /env/<e>/features, POST /env/<e>/features/<key>, segment routes via matchSegmentRoute (GET+POST /env/<e>/segments, GET/POST /env/<e>/segments/<key>), GET /env/<e>/versions/<n>. Note the ordering: the `features` branches are checked BEFORE matchSegmentRoute and before the versions branch.",
+      "filePath": "packages/dashboard/src/infrastructure/http-server.ts",
+      "implication": "GET /env/<e>/features/<key> currently returns 405 (not 404) because the 4-segment `features` branch returns a POST-only Route regardless of method. The plan must convert that branch into a method-dispatching route in the same style segment-routes.ts already uses (`{ method: matched, allow: ['GET','POST'], handle: handlers[matched] }`) rather than adding a new branch after it \u2014 a new branch would be unreachable. Also: /env/<e>/versions as a paged LIST route is a 3-segment path and is currently unbound (the existing versions branch is length===4), so it is additive and does not conflict; the 4-segment guard still holds for everything planned."
+    },
+    {
+      "area": "HTTP routing / query strings",
+      "finding": "The URL object with searchParams is already threaded into every handler as the third argument of Route.handle (`handle(request, response, url)`), and is already read in three places: `url.searchParams.get('env')` on /, and `since`/`edited` on /changes. There is NO generic query-string parsing, pagination, or URL-state helper anywhere in packages/dashboard/src.",
+      "filePath": "packages/dashboard/src/infrastructure/http-primitives.ts",
+      "implication": "No plumbing work is needed to reach the query string \u2014 every handler already has `url`. The plan should add one small parse helper (page/pageSize/q/open-sections) next to the existing `parseVersion`/`parseBaseVersion` validators in http-server.ts (or better, a new infrastructure module so http-server.ts, already 527 lines with a 1593-line test, does not grow further), and mirror the existing strict-regex validation style (`/^[1-9]\\d{0,8}$/`, HttpError(400,...)) instead of inventing new error handling."
+    },
+    {
+      "area": "HTTP routing / POST round-trip of query state",
+      "finding": "The POST handlers (editRoute, publish, rollback) do NOT redirect \u2014 they re-render renderEnvironmentPage inline with a 200/400/422 status. Only the home route uses `redirect()` (303).",
+      "filePath": "packages/dashboard/src/infrastructure/http-server.ts",
+      "implication": "Carrying q/section state 'across a publish' cannot rely on the browser URL: after a POST the browser URL is the POST action URL. State must therefore either be echoed as hidden form fields in every form (publish dialog, each edit form, rollback form) and re-read from the POST body, or the POST action URLs must themselves carry the query string. The plan must pick one and apply it to ALL write forms \u2014 the edit forms live in feature-edit-form.ts/rollout-form.ts/segment-attach-form.ts/new-flag-form.ts, so this touches more view modules than just environment-page.ts."
+    },
+    {
+      "area": "Application layer / browse-environment",
+      "finding": "BrowsePorts has exactly two methods: readCurrentVersion(env): Promise<number|undefined> and fetchSnapshotText(env, version): Promise<string>. browseEnvironment() reads currentVersion then does Promise.all over Array.from({length: currentVersion}) calling viewSnapshotVersion for EVERY version 1..current, returns { environment, status:'published', currentVersion, versions: VersionEntry[], current: views[currentVersion-1] }. VersionEntry = { version, metadata? } where metadata is dropped if the snapshot is missing or invalid. SnapshotVersionView is a discriminated union on status 'available'|'not-available'.",
+      "filePath": "packages/dashboard/src/application/browse-environment.ts",
+      "implication": "The N+1 read is a single Promise.all line; bounding it is a small change, but EnvironmentView.versions is a public shape consumed by the view. The plan should keep EnvironmentView shape-compatible (versions still readonly VersionEntry[], just bounded) and add a separate paged use case (e.g. listVersionPage(ports, env, page, pageSize)) computing the range arithmetically from readCurrentVersion \u2014 the analysis's assumption that history is linear 1..current and addressable by key is confirmed by the code comment and by viewSnapshotVersion fetching by version number."
+    },
+    {
+      "area": "Callers of browseEnvironment",
+      "finding": "Exactly five call sites, all in two files. http-server.ts: GET /env/<e> (uses the whole view), POST /publish, POST /rollback, and editRoute (all three re-render the full page). list-published-segments.ts: currentFlags() calls browseEnvironment and immediately discards everything except view.current.contents.flags (returns [] when empty / not-available / invalid).",
+      "filePath": "packages/dashboard/src/application/list-published-segments.ts",
+      "implication": "listPublishedSegments pays the full 1..N snapshot read just to get the current snapshot's flags \u2014 and it is called on EVERY environment render and EVERY edit POST, so today a render costs ~2N snapshot fetches. The plan should have currentFlags() call viewSnapshotVersion(ports, env, await readCurrentVersion(env)) directly instead of browseEnvironment; that is a strictly-scoped, independently testable step and should be its own phase item, not folded into the paging change."
+    },
+    {
+      "area": "Views / environment-page.ts",
+      "finding": "renderEnvironmentPage(view, state) composes renderUpdateWatch + renderCurrentCard + renderFlags + renderVersions + renderPublishDialog. renderFlags emits the filter as `<input type=\"search\" class=\"flag-filter\" data-filter=\"flag-list\" ... hidden>` \u2014 hidden by default and unhidden by app.js; the empty state is `<p class=\"muted\" data-filter-empty hidden>No flags match.</p>`. renderVersions reverses view.versions and renders every entry as an <ol class=\"timeline\" reversed> with a per-version rollback POST form. Sections already use `<section class=\"section\" aria-labelledby=\"...-heading\">` with ids flags-heading / versions-heading; the Segments link in the page head goes to a separate page (segmentListPath), NOT an on-page section.",
+      "filePath": "packages/dashboard/src/infrastructure/views/environment-page.ts",
+      "implication": "(a) Making the filter server-side means it must stop being `hidden` and become a GET <form> submitting `q` \u2014 but app.js still binds `[data-filter]`, so the plan must decide whether to keep client-side filtering as progressive enhancement over the already-filtered server set or drop the data-filter attribute (dropping it breaks the existing e2e flag-list filter spec). (b) A sticky nav for 'Flags / Versions / Segments' has no Segments section on this page \u2014 Segments is a separate route \u2014 so the nav item is a cross-page link, not an anchor; the plan must state that. (c) renderVersions must become 'latest few + link to /env/<e>/versions'."
+    },
+    {
+      "area": "Views / snapshot-contents.ts",
+      "finding": "renderSnapshotContents(contents, editable?) branches: invalid -> notice; zero flags -> muted paragraph; editable given -> <ul class=\"flag-list\"> of renderFlagCard; editable absent -> a read-only <table class=\"flag-table\"> of renderTableRow. renderFlagCard emits `<li class=\"card flag\" data-flag=\"<key>\" data-search=\"<key type on|off lowercased>\"><details class=\"flag-row\"[ open]>` and opens itself only when editable.draft?.key === flag.key. The flag key is rendered as plain text, not a link.",
+      "filePath": "packages/dashboard/src/infrastructure/views/snapshot-contents.ts",
+      "implication": "The per-flag URL is added by wrapping the .flag-key span in renderFlagCard in an <a>, and the flag page itself can reuse renderFeatureEditForm with the same EditContext \u2014 no new form plumbing. data-search must be preserved if the client filter stays. Server-side paging of flags means slicing contents.flags before renderSnapshotContents, which currently takes the whole SnapshotContents object \u2014 the plan must decide between passing a pre-sliced contents value and adding an options parameter; the former keeps the signature stable."
+    },
+    {
+      "area": "Views / standalone page precedent",
+      "finding": "version-page.ts and segment-page.ts are the two existing standalone pages. Both are a single exported render function calling renderPage(heading, body, notices?) from layout.ts, both start the body with a back-link paragraph followed by `<div class=\"page-head\"><h1>\u2026</h1></div>`, and both take a plain view object. segment-page.ts exports its own path helper `segmentPath(environment, key)`; segment-list-page.ts exports segmentListPath. escape.ts exports only escapeHtml and environmentPath.",
+      "filePath": "packages/dashboard/src/infrastructure/views/version-page.ts",
+      "implication": "New pages (flag page, versions-list page) should follow this template exactly: one module per page exporting renderXPage(view, state?) plus its own path helper (flagPath(env,key), versionsPath(env,page)) colocated in that module, back-link + page-head, notices via renderPage's third argument. Do not add path helpers to escape.ts \u2014 the convention is per-page-module."
+    },
+    {
+      "area": "Stylesheet convention",
+      "finding": "stylesheet.ts concatenates a hardcoded ordered array STYLE_FILES = [base, layout, forms, components, tables, rollout, segments, segment-list, segment-create, segment-attach].css read with readFileSync and joined. STYLESHEET_PATH='/assets/app.css' with a sha256 content hash. Sizes: components.css 439 lines, base 128, layout 88 (.section-head lives here), tables 78, the rest 12-34 lines. `position: sticky` already appears once in components.css.",
+      "filePath": "packages/dashboard/src/infrastructure/views/stylesheet.ts",
+      "implication": "Sticky nav CSS goes in a NEW small file (e.g. section-nav.css) added to STYLE_FILES after layout.css \u2014 that is the established pattern for every feature-scoped sheet (segment-list/segment-create/segment-attach are all 12-23 lines). Adding a file requires only the array edit; no build tooling. Order matters."
+    },
+    {
+      "area": "Test layout and coverage gate",
+      "finding": "Root vitest.config.ts creates one project per packages/* dir, excluding integration/** and e2e/**; coverage include is ['packages/*/src/**/*.ts'] with 100% lines/branches/functions/statements. Dashboard unit tests live in TWO places: co-located src/infrastructure/**/*.test.ts (http-server.test.ts 1593 lines) and a separate test/ tree mirroring application/ and domain/. views/scripts/app.js is .js, hence outside the include glob and outside the gate.",
+      "filePath": "vitest.config.ts",
+      "implication": "Every new .ts branch (query parsing, page clamping, 404 for unknown flag key, empty page, page-out-of-range) needs a test in the same phase it is written, or coverage fails the gate. New application-layer modules get tests under packages/dashboard/test/application/; new infrastructure/view modules get co-located *.test.ts. Keeping the new route logic out of http-server.ts also keeps its already-huge test file from growing."
+    },
+    {
+      "area": "Playwright e2e exposure",
+      "finding": "Specs: flag-list.spec.ts, concurrent-edits.spec.ts (in-memory fixture), segment-picker.spec.ts, segment-upload-rollout.spec.ts (LocalStack). Every navigation is a bare URL with no query string. The seed environment has exactly 3 flags and 1 version. flag-list.spec.ts 'filters flags by key, type and on/off as you type' drives the client-side filter: fills the searchbox and asserts visible [data-flag] counts and 'No flags match.'. fixtures.ts exports expandFlag(page,key) clicking `.flag-row > summary`; segment-upload-rollout.spec.ts reopens the flag row AND the details.rollouts panel by hand after navigating.",
+      "filePath": "packages/dashboard/e2e/support/fixtures.ts",
+      "implication": "Adding query state does not break existing specs (all use bare URLs, so defaults must render the unfiltered first page with 3 flags and 1 version visible). The real risk is flag-list.spec.ts's filter spec: if the filter becomes a server-side GET form, typing no longer hides rows live and that spec must be rewritten (submit + assert rendered HTML) \u2014 an explicit deliverable of the filtering phase, not an afterthought. The goal that the horizon-23 spec 'no longer needs to reopen the flag row and Rollout panel' is only achievable once open/closed state round-trips through the query string on the POST re-render."
+    },
+    {
+      "area": "Fixture port surface",
+      "finding": "e2e/support/fixtures.ts InMemoryEnvironment.ports() and http-server.test.ts fakes() both construct a full DashboardPorts literal (readCurrentVersion, fetchSnapshotText, listPublishedSegments, publishSegment, readSegmentVersion, openWriter). DashboardPorts = EditFeaturePorts & SegmentUploadPorts & ListPublishedSegmentsPorts.",
+      "filePath": "packages/dashboard/src/infrastructure/http-server.ts",
+      "implication": "If any phase widens BrowsePorts (e.g. to list versions), three hand-written port literals must be updated in lockstep (fixtures.ts, localstack-fixtures.ts, http-server.test.ts fakes) plus aws-adapters.ts. The arithmetic-paging approach avoids this entirely \u2014 the plan should explicitly commit to NOT widening BrowsePorts."
+    }
+  ],
+  "requiredMaterials": [],
+  "phases": [
+    {
+      "id": "stop-second-history-walk",
+      "order": 0,
+      "name": "Read only the current snapshot for segment list",
+      "goal": "Make listPublishedSegments read just the current published snapshot instead of walking every published version, so one page render stops paying the version fan-out twice.",
+      "rationale": "A helper that only needs the flags in the newest snapshot currently loads every snapshot ever published. On an environment with 400 published versions that is 400 network reads for data taken from one of them, and this helper runs on every page render and every edit submit.",
+      "filesAffected": [
+        "packages/dashboard/src/application/list-published-segments.ts",
+        "packages/dashboard/test/application/list-published-segments.test.ts"
+      ],
+      "changes": [
+        "In currentFlags(), replace the browseEnvironment() call with readCurrentVersion(env) followed by a single viewSnapshotVersion(ports, env, version) call.",
+        "Keep the existing fallbacks exactly as they are: return an empty flag list when there is no current version, when the snapshot is missing, or when its contents are invalid.",
+        "Add unit tests covering no-current-version, missing snapshot, invalid snapshot and the happy path, and assert the fake port records exactly one snapshot fetch."
+      ],
+      "boundedContext": "Dashboard read path",
+      "layer": "application",
+      "blastRadius": "small",
+      "inputs": [
+        "packages/dashboard/src/application/browse-environment.ts (viewSnapshotVersion, BrowsePorts)",
+        "Discovery finding: currentFlags() discards everything except view.current.contents.flags"
+      ],
+      "expectedResult": "listPublishedSegments performs exactly one snapshot read per call regardless of how many versions the environment has, proven by a unit test counting port calls.",
+      "dependsOn": [],
+      "compensation": "Revert the file to the previous browseEnvironment-based currentFlags(); no data or stored state is touched.",
+      "rubric": [
+        {
+          "id": "snapshot-read-count",
+          "label": "One snapshot read per call",
+          "ruleStatement": "A unit test must prove listPublishedSegments fetches exactly one snapshot regardless of how many versions exist; 8 = a counting test at a large version count, 10 = counts asserted for both a large and a single-version environment plus an assertion on which version number was fetched.",
+          "passCriteria": [
+            "A test in packages/dashboard/test/application/list-published-segments.test.ts uses a fake port whose fetchSnapshotText increments a counter, seeds currentVersion at 50 or more, and asserts the counter equals 1 after the call",
+            "The same test asserts readCurrentVersion was called exactly once",
+            "The fetched version argument is asserted to equal the current version number, not 1 and not a hardcoded literal"
+          ],
+          "failureExamples": [
+            "The test seeds currentVersion = 1, so a surviving full fan-out would still record exactly one fetch and the test passes against the old code",
+            "The counter is asserted with toBeLessThan(2) or only the returned segment list is asserted, so the read count is never pinned",
+            "fetchSnapshotText call count is asserted but the version argument is not, so an off-by-one (reading version 1) goes undetected"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "fallback-branches-preserved",
+          "label": "Empty-result fallbacks still hold",
+          "ruleStatement": "All three degenerate inputs must still yield an empty segment list rather than a throw or undefined; 8 = a test per branch, 10 = each test also asserts no snapshot fetch happens when there is no current version.",
+          "passCriteria": [
+            "A test where readCurrentVersion resolves undefined asserts the result is an empty array and that fetchSnapshotText was never called",
+            "A test where fetchSnapshotText rejects or returns a missing-snapshot result asserts an empty array and no thrown error",
+            "A test where the snapshot text is syntactically valid but fails schema validation (e.g. flags is a string) asserts an empty array"
+          ],
+          "failureExamples": [
+            "The no-current-version case returns [] but still issues a snapshot read for version undefined or NaN",
+            "Only malformed JSON is tested as 'invalid'; a well-formed JSON body with the wrong shape throws at the .flags access",
+            "The missing-snapshot case lets the port rejection propagate, turning a previously empty list into a 500 on the environment page"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "no-browse-environment-dependency",
+          "label": "Helper no longer routes through browseEnvironment",
+          "ruleStatement": "The published-segments read path must not call browseEnvironment at all; 8 = the import is gone and viewSnapshotVersion is used directly, 10 = no new port method or exported helper was added to achieve it.",
+          "passCriteria": [
+            "grep for 'browseEnvironment' in packages/dashboard/src/application/list-published-segments.ts returns nothing",
+            "The file imports viewSnapshotVersion (and the ports type) from browse-environment.ts and calls it with an explicit version number",
+            "BrowsePorts / ListPublishedSegmentsPorts gained no new method: the fake ports in the test still declare only readCurrentVersion and fetchSnapshotText"
+          ],
+          "failureExamples": [
+            "browseEnvironment is kept but called with a new 'limit' option, leaving the fan-out reachable from other call sites",
+            "A new port method such as readCurrentSnapshot is introduced, forcing edits to e2e fixtures and http-server test fakes",
+            "viewSnapshotVersion is re-implemented inline in list-published-segments.ts, duplicating the status/validation union"
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "The usual miss is a read-count test seeded at one version, which passes against the unchanged code \u2014 seed 50 versions and assert the count is exactly 1 plus the version argument."
+    },
+    {
+      "id": "bound-environment-version-window",
+      "order": 1,
+      "name": "Limit environment page to latest five versions",
+      "goal": "Change browseEnvironment so it loads only the newest few published versions plus the current one, instead of every version from 1 to the current number.",
+      "rationale": "The main environment page loads every snapshot ever published just to draw a history list the operator scrolls past. Loading a fixed small window makes the page cost the same whether the environment is at version 5 or version 500.",
+      "filesAffected": [
+        "packages/dashboard/src/application/browse-environment.ts",
+        "packages/dashboard/test/application/browse-environment.test.ts"
+      ],
+      "changes": [
+        "Introduce an exported constant ENVIRONMENT_VERSION_WINDOW = 5 in browse-environment.ts.",
+        "Replace the Array.from({length: currentVersion}) fan-out with a range covering only the highest ENVIRONMENT_VERSION_WINDOW version numbers (clamped when fewer exist), keeping the returned versions field the same readonly VersionEntry[] type so the view needs no change yet.",
+        "Keep current (the view of currentVersion) correct by selecting it by version number rather than by array index.",
+        "Add unit tests for fewer-than-window, exactly-window and far-more-than-window environments, asserting both the returned entries and the number of snapshot fetches."
+      ],
+      "boundedContext": "Dashboard read path",
+      "layer": "application",
+      "blastRadius": "small",
+      "inputs": [
+        "packages/dashboard/src/application/browse-environment.ts",
+        "Discovery finding: current is taken as views[currentVersion-1] (index-based, breaks under a window)"
+      ],
+      "expectedResult": "browseEnvironment issues at most five snapshot reads per call and still returns the correct current snapshot view, proven by unit tests.",
+      "dependsOn": [],
+      "compensation": "Restore the full 1..currentVersion range in browse-environment.ts.",
+      "rubric": [
+        {
+          "id": "window-clamping",
+          "label": "Window size holds at every boundary",
+          "ruleStatement": "The number of snapshot fetches must be min(currentVersion, ENVIRONMENT_VERSION_WINDOW) at every boundary; 8 = tests at below, at and far above the window, 10 = the exact set of version numbers fetched is asserted, not just how many.",
+          "passCriteria": [
+            "A test with currentVersion = 3 asserts 3 fetches and versions [1,2,3] present in the result",
+            "A test with currentVersion = 5 asserts exactly 5 fetches",
+            "A test with currentVersion = 500 asserts exactly 5 fetches and that the returned entries are versions 496..500",
+            "A test asserts the exact version numbers passed to fetchSnapshotText, collected from the fake port"
+          ],
+          "failureExamples": [
+            "Range computed as currentVersion-5..currentVersion without clamping, so an environment at version 3 requests versions -1 and 0",
+            "Only the count of returned entries is asserted; an off-by-one that fetches 495..499 and silently omits the newest version passes",
+            "ENVIRONMENT_VERSION_WINDOW is used at the boundary as < instead of <=, quietly returning four entries"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "current-selected-by-number",
+          "label": "Current view found by version number",
+          "ruleStatement": "view.current must correspond to currentVersion under a window, where index arithmetic no longer lines up; 8 = a test at currentVersion far above the window asserts current.version === currentVersion, 10 = it also asserts current.contents differ from the other windowed entries so a wrong pick is visible.",
+          "passCriteria": [
+            "A test with currentVersion = 500 asserts view.current.version === 500",
+            "Snapshots in that test carry distinguishable contents (e.g. a flag key per version) and the assertion checks current's contents belong to version 500",
+            "grep of browse-environment.ts shows no 'views[currentVersion - 1]' or equivalent index arithmetic"
+          ],
+          "failureExamples": [
+            "current is taken as the last element of the fetched array \u2014 correct today, silently wrong the moment the range is reordered newest-first",
+            "current is looked up by number but with no test above the window size, so the index-based bug would never have surfaced",
+            "All fixture snapshots are identical, so selecting the wrong entry still satisfies every assertion"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "view-shape-unchanged",
+          "label": "EnvironmentView contract unchanged",
+          "ruleStatement": "Consumers of EnvironmentView must compile and behave unchanged; 8 = versions is still readonly VersionEntry[] and no view module was touched, 10 = the existing environment-page tests and Playwright seed (3 flags, 1 version) pass with no edits.",
+          "passCriteria": [
+            "The exported EnvironmentView type still declares versions as a readonly VersionEntry[] with no added page/offset fields",
+            "git diff for this phase touches no file under packages/dashboard/src/infrastructure/views/",
+            "BrowsePorts declares the same two methods as before; no port literal in fixtures or http-server tests needed editing",
+            "The dashboard e2e flag-list spec, which loads a bare /env/<env> URL on a 1-version seed, still shows that version"
+          ],
+          "failureExamples": [
+            "versions gains a totalVersions or hasOlder field 'while we are here', forcing view changes this phase promised not to make",
+            "The window is applied by slicing inside environment-page.ts instead of in the use case, so every other caller still pays the fan-out",
+            "Entries are returned newest-first to save a reverse() in the view, silently double-reversing the rendered timeline"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "window-constant-exported",
+          "label": "Window size is a single named constant",
+          "ruleStatement": "The bound must live in one exported constant rather than a literal repeated in code and tests; 8 = ENVIRONMENT_VERSION_WINDOW is exported and used in the implementation, 10 = tests import it instead of hardcoding 5, so changing it does not break the suite.",
+          "passCriteria": [
+            "browse-environment.ts exports a named constant ENVIRONMENT_VERSION_WINDOW",
+            "No bare 5 appears in the range computation in browse-environment.ts",
+            "At least the at-the-window test imports the constant rather than writing 5"
+          ],
+          "failureExamples": [
+            "The constant is exported but the implementation still computes with a literal 5 in one branch, so the two drift",
+            "Tests hardcode 5 everywhere, so raising the window to 10 fails a dozen assertions that were never about the boundary"
+          ],
+          "minScore": 7
+        }
+      ],
+      "healerHint": "The likely failure is current still being picked by array index (correct only when the window covers all versions) \u2014 select it by matching version === currentVersion and add a currentVersion=500 test."
+    },
+    {
+      "id": "add-version-page-use-case",
+      "order": 2,
+      "name": "Add paged version history use case",
+      "goal": "Add an application function that returns one page of published versions, computing which version numbers fall on that page arithmetically from the current version number.",
+      "rationale": "A separate history page needs to load a chosen slice of versions rather than all of them. Because versions are numbered 1..current and each is addressable by its number, the slice can be worked out by arithmetic with no extra storage lookup.",
+      "filesAffected": [
+        "packages/dashboard/src/application/list-version-page.ts",
+        "packages/dashboard/test/application/list-version-page.test.ts"
+      ],
+      "changes": [
+        "Create list-version-page.ts exporting listVersionPage(ports, environment, page, pageSize) that reads the current version, computes the newest-first slice of version numbers for the requested page, and fetches only those snapshots via the existing viewSnapshotVersion.",
+        "Return a value containing environment, page, pageSize, totalVersions, the page's VersionEntry list, and whether newer/older pages exist.",
+        "Clamp untrusted input: page below 1 becomes 1, a page past the end returns an empty entry list rather than an error, and pageSize is clamped to a fixed maximum.",
+        "Reuse the existing BrowsePorts interface unchanged \u2014 do not add a port method \u2014 and cover every clamping branch with unit tests."
+      ],
+      "boundedContext": "Dashboard read path",
+      "layer": "application",
+      "blastRadius": "small",
+      "inputs": [
+        "packages/dashboard/src/application/browse-environment.ts (viewSnapshotVersion, BrowsePorts)",
+        "Discovery finding: fixture files each hand-build a full port literal, so widening ports is costly"
+      ],
+      "expectedResult": "A listVersionPage application module returning one bounded page of version entries, with unit tests covering clamping and out-of-range pages.",
+      "dependsOn": [],
+      "compensation": "Delete the new module and its test; nothing else imports it until the next phase.",
+      "rubric": [
+        {
+          "id": "page-arithmetic",
+          "label": "Page slice computed newest-first and correctly",
+          "ruleStatement": "For a given page and pageSize the returned version numbers must be the correct newest-first slice; 8 = first, middle and last page asserted by exact version numbers, 10 = a last page that is only partly full is also asserted.",
+          "passCriteria": [
+            "With totalVersions = 23 and pageSize = 10, page 1 returns versions 23..14 in that order",
+            "The same fixture at page 3 returns versions 3..1 (three entries, not ten)",
+            "A test asserts the returned entries' order is descending",
+            "fetchSnapshotText is called exactly once per returned entry and never for a version outside the page"
+          ],
+          "failureExamples": [
+            "Pagination is computed ascending then reversed per page, so page 1 shows the oldest ten versions in descending order",
+            "The final partial page computes a negative lower bound and requests version 0 or -3 from the port",
+            "Total count is right but the slice is off by one at the page boundary, repeating version 14 on both page 1 and page 2"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "input-clamping",
+          "label": "Untrusted page and pageSize clamped, never thrown",
+          "ruleStatement": "Out-of-range page and pageSize inputs must clamp or return empty rather than throw or fan out; 8 = each clamp branch has a test, 10 = a huge pageSize test asserts the port call count equals the clamped maximum, not the requested one.",
+          "passCriteria": [
+            "page = 0 and page = -5 each return the same entries as page 1",
+            "A page past the end (e.g. page 99 of 2 pages) returns an empty entries array, hasOlder false, and issues zero snapshot fetches",
+            "pageSize = 100000 returns at most the fixed maximum number of entries and the fake port records at most that many fetches",
+            "Non-integer or NaN page input resolves to page 1 rather than producing NaN version numbers"
+          ],
+          "failureExamples": [
+            "page is clamped but pageSize is not, so ?pageSize=100000 restores the full fan-out this horizon exists to remove",
+            "The past-the-end page returns [] but still issues pageSize snapshot reads for nonexistent version numbers",
+            "Clamping uses Math.max(1, page) on a NaN input, which yields NaN and produces version keys like 'vNaN'"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "ports-not-widened",
+          "label": "BrowsePorts untouched",
+          "ruleStatement": "The page must be computed arithmetically from readCurrentVersion with no new port method; 8 = BrowsePorts is unchanged and no fixture literal needed editing, 10 = the module's own test constructs ports with only the two existing methods and no cast.",
+          "passCriteria": [
+            "git diff shows no change to the BrowsePorts interface or to DashboardPorts",
+            "No file under packages/dashboard/e2e/support/ or packages/dashboard/src/infrastructure/*fixtures* was edited in this phase",
+            "The new test's fake ports object literal declares exactly readCurrentVersion and fetchSnapshotText, with no 'as unknown as' cast hiding an extra method",
+            "listVersionPage reuses the exported viewSnapshotVersion rather than calling fetchSnapshotText directly"
+          ],
+          "failureExamples": [
+            "A listVersionNumbers port is added 'for future S3 listing', forcing four hand-written port literals to change",
+            "The test fakes ports with a cast to satisfy a widened type, so the widening passes type-check but breaks the real adapters",
+            "Snapshot text is fetched and parsed inline, duplicating viewSnapshotVersion's available/not-available union handling"
+          ],
+          "minScore": 9
+        },
+        {
+          "id": "paging-metadata",
+          "label": "Returned metadata supports navigation",
+          "ruleStatement": "The result must carry enough to render Older/Newer links without a second call; 8 = totalVersions and both has-flags correct on first, middle and last page, 10 = the flags are asserted on the single-page case where both must be false.",
+          "passCriteria": [
+            "The returned value includes environment, page, pageSize, totalVersions and the entry list",
+            "On page 1 of several, the newer-page flag is false and the older-page flag is true",
+            "On the last page, older is false and newer is true",
+            "With totalVersions = 3 and pageSize = 10, both flags are false"
+          ],
+          "failureExamples": [
+            "hasOlder is derived from entries.length === pageSize, so a history whose length is an exact multiple of pageSize advertises an empty page after the last one",
+            "totalVersions is reported as the entries on this page rather than the current version number",
+            "The single-page case reports hasNewer true because the check is page > 0 instead of page > 1"
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "Most likely miss is an unclamped pageSize or a hasOlder derived from entries.length \u2014 clamp pageSize to a named maximum and derive both flags from totalVersions arithmetic, with a test at an exact multiple of pageSize."
+    },
+    {
+      "id": "add-versions-route",
+      "order": 3,
+      "name": "Add paged version history page and route",
+      "goal": "Serve a browsable version history at GET /env/<env>/versions, showing one page of versions with older/newer links, and link to it from the environment page.",
+      "rationale": "Version history moves off the main page so the operator navigates to it instead of scrolling through hundreds of entries. Page position lives in the URL so a given page can be linked to and reloaded.",
+      "filesAffected": [
+        "packages/dashboard/src/infrastructure/views/version-list-page.ts",
+        "packages/dashboard/src/infrastructure/views/environment-page.ts",
+        "packages/dashboard/src/infrastructure/http-server.ts"
+      ],
+      "changes": [
+        "Create version-list-page.ts following the existing standalone-page template (back link, page head, renderPage from layout.ts) and export its own path helper versionsPath(environment, page).",
+        "Render each version entry with the same rollback form markup the environment page uses today, plus Older/Newer links that carry the page number in the query string and are omitted when no such page exists.",
+        "Bind GET /env/<env>/versions in http-server.ts (a three-segment path currently unbound), parsing page and pageSize from the query string with the existing strict-regex plus HttpError(400) validation style, and call listVersionPage.",
+        "In environment-page.ts, keep rendering the bounded version list and add a 'View all versions' link to versionsPath; add co-located tests for the new view module and route including page 1, a middle page and a past-the-end page."
+      ],
+      "boundedContext": "Dashboard routing and views",
+      "layer": "interface",
+      "blastRadius": "medium",
+      "inputs": [
+        "packages/dashboard/src/application/list-version-page.ts (from the previous phase)",
+        "packages/dashboard/src/infrastructure/views/version-page.ts (page template to copy)",
+        "Discovery finding: route matcher rejects paths longer than four segments after /env"
+      ],
+      "expectedResult": "GET /env/<env>/versions renders one page of version history with working Older/Newer links, covered by route and view tests.",
+      "dependsOn": [
+        "add-version-page-use-case"
+      ],
+      "compensation": "Remove the route binding and the environment-page link, and delete version-list-page.ts; the environment page returns to showing only its bounded version list.",
+      "rubric": [
+        {
+          "id": "route-binding-and-query-validation",
+          "label": "GET /env/<env>/versions bound with strict query parsing",
+          "ruleStatement": "The three-segment versions path must resolve for GET and reject malformed query input with 400 rather than coercing it; 8 = bound with tests for valid and malformed page, 10 = method mismatch returns 405 with an allow header like the other routes.",
+          "passCriteria": [
+            "A request test for GET /env/demo/versions returns 200 and HTML containing version entries",
+            "GET /env/demo/versions?page=abc and ?page=-1 return status 400, not 200 with page 1",
+            "The existing GET /env/demo/versions/3 single-version route still returns its old response (the new route did not shadow it)",
+            "POST /env/demo/versions returns 405 with an allow header"
+          ],
+          "failureExamples": [
+            "The new branch is added after the four-segment versions branch or after the features branch and is never reached, so the test only passes because of another handler",
+            "page is parsed with Number(...) so ?page=1e9 or ?page=2.5 silently reaches the use case instead of returning 400",
+            "The route is matched on segments.length > 2 and accidentally swallows /env/demo/versions/3"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "pager-links",
+          "label": "Older/Newer links correct and omitted at the ends",
+          "ruleStatement": "Pager links must carry the page number in the query string and disappear where no such page exists; 8 = both ends tested, 10 = a rendered link is followed in a second request that returns the expected adjacent versions.",
+          "passCriteria": [
+            "On page 1 the rendered HTML contains an Older link whose href includes page=2 and contains no Newer link",
+            "On the final page the rendered HTML contains a Newer link and no Older link",
+            "When all versions fit on one page, neither link is rendered",
+            "A test extracts the Older href from page 1's HTML, requests it, and asserts the versions shown are the next older block"
+          ],
+          "failureExamples": [
+            "Both links always render and are merely disabled with an attribute, so an operator on page 1 can still click through to page 0",
+            "versionsPath omits the query string on page 1 but the Older link is built by string concatenation elsewhere, producing /env/demo/versions?page=NaN when page is absent",
+            "Links are rendered with an unescaped environment name, breaking the href for any env containing a character needing encoding"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "past-the-end-page",
+          "label": "Past-the-end page renders, does not error",
+          "ruleStatement": "Requesting a page beyond the history must render an empty-but-valid history page; 8 = a test asserts 200 and an empty-state message, 10 = it also asserts no snapshot fetch occurred for that request.",
+          "passCriteria": [
+            "GET /env/demo/versions?page=99 on a 3-version environment returns 200",
+            "The response body contains a visible empty-state message rather than an empty <ol>",
+            "The fake ports record zero fetchSnapshotText calls for that request"
+          ],
+          "failureExamples": [
+            "The empty page throws on views[0] while building the heading and returns 500",
+            "The page renders 200 but with a bare empty list and no text, so the operator sees a blank panel and assumes the page is broken",
+            "The handler treats out-of-range as 404, breaking a bookmark that was valid before a rollback reduced the history"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "environment-page-still-bounded",
+          "label": "Environment page keeps the bounded list and links out",
+          "ruleStatement": "The environment page must keep showing only the windowed versions plus a link to the new route; 8 = link present and list still bounded, 10 = a test proves the environment page renders at most the window size on a large history.",
+          "passCriteria": [
+            "renderEnvironmentPage output contains an anchor whose href is versionsPath(environment) / ends in /versions with the text of a 'view all versions' style link",
+            "A view test with a 40-version view object asserts at most ENVIRONMENT_VERSION_WINDOW rollback forms are rendered",
+            "The per-version rollback form markup on the new versions page matches the environment page's (same action path and hidden version field name)"
+          ],
+          "failureExamples": [
+            "The environment page keeps its own version rendering while the new page duplicates a divergent rollback form, so rollback works on one page and 404s on the other",
+            "The link is added but the environment page now renders every version again because the view was fed an unbounded list",
+            "The new page reuses the environment page's section heading id, producing duplicate ids and breaking the aria-labelledby association"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "e2e-defaults-unchanged",
+          "label": "Bare URLs keep working for existing specs",
+          "ruleStatement": "Existing Playwright specs drive bare URLs on a 3-flag, 1-version seed and must keep passing; 8 = no spec file edited and the defaults render page 1, 10 = the versions route itself is exercised by at least one assertion on the seed environment.",
+          "passCriteria": [
+            "No file under packages/dashboard/e2e/ was modified in this phase",
+            "GET /env/<env>/versions with no query string renders page 1 with default page size",
+            "On the 1-version seed, the versions page shows that single version and no pager links",
+            "data-flag and data-search attributes in the flag list are unchanged"
+          ],
+          "failureExamples": [
+            "page is made a required query parameter, so the bare /env/<env>/versions URL returns 400",
+            "A default pageSize of 0 or undefined slips through, rendering an empty history on the seed environment",
+            "A new nav element is inserted above the flag filter, shifting the element the filter spec selects by position"
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "The commonest break is branch ordering in http-server.ts \u2014 bind the three-segment versions route so it cannot shadow the existing /versions/<n> branch, and test both in the same run."
+    },
+    {
+      "id": "add-flag-page",
+      "order": 4,
+      "name": "Add bookmarkable page for one flag",
+      "goal": "Serve a single flag at GET /env/<env>/features/<key> so it can be bookmarked and shared, and link each flag in the list to it.",
+      "rationale": "Today a flag can only be reached by finding it in the full list on the environment page. Giving each flag its own address lets an operator jump straight to it from a bookmark or a chat message. This phase must follow the segment-list read fix, because rendering the flag's edit form requires the published-segment list: adding this route before that fix would introduce a second place that walks every published version.",
+      "filesAffected": [
+        "packages/dashboard/src/infrastructure/views/flag-page.ts",
+        "packages/dashboard/src/infrastructure/views/snapshot-contents.ts",
+        "packages/dashboard/src/infrastructure/http-server.ts"
+      ],
+      "changes": [
+        "Create flag-page.ts rendering one flag using the existing renderFeatureEditForm with the same edit context the environment page builds, following the standalone-page template, and export flagPath(environment, key).",
+        "Convert the existing four-segment features/<key> branch in http-server.ts into a method-dispatching route in the style segment-routes.ts already uses so the existing POST edit route keeps working and GET no longer returns 405.",
+        "For an unknown flag key, or an environment with no published snapshot, throw the existing HttpError(404, <message>) \u2014 http-server.ts already catches HttpError and renders it via renderErrorPage from views/error-page.js, so no new not-found page is built.",
+        "In snapshot-contents.ts, wrap the flag key text in renderFlagCard with an anchor to flagPath, leaving data-flag and data-search attributes untouched so the existing browser filter spec still passes.",
+        "Add co-located tests for the new page module and for GET/POST dispatch, including the unknown-key 404 branch."
+      ],
+      "boundedContext": "Dashboard routing and views",
+      "layer": "interface",
+      "blastRadius": "medium",
+      "inputs": [
+        "packages/dashboard/src/infrastructure/views/feature-edit-form.ts",
+        "packages/dashboard/src/infrastructure/views/segment-routes.ts (method-dispatch pattern)",
+        "Discovery finding: the features/<key> branch is checked before segment routes, so a later branch would be unreachable",
+        "packages/dashboard/src/application/list-published-segments.ts \u2014 the Flag Page renders renderFeatureEditForm, which requires a PublishedSegmentsView, so this route becomes a new caller of listPublishedSegments"
+      ],
+      "expectedResult": "GET /env/<env>/features/<key> renders a single flag page for a known key and a 404 page for an unknown one, with the existing POST edit route unchanged.",
+      "dependsOn": [
+        "stop-second-history-walk"
+      ],
+      "compensation": "Restore the POST-only features/<key> route branch, drop the anchor in renderFlagCard, and delete flag-page.ts.",
+      "rubric": [
+        {
+          "id": "method-dispatch-preserves-post",
+          "label": "features/<key> dispatches by method, POST unchanged",
+          "ruleStatement": "Converting the POST-only branch must leave the edit POST byte-for-byte behaviourally identical while GET now renders; 8 = both verbs tested on the same path, 10 = the pre-existing edit POST tests pass with no edit to their assertions.",
+          "passCriteria": [
+            "GET /env/demo/features/<known-key> returns 200 HTML (it returned 405 before)",
+            "POST /env/demo/features/<known-key> with a valid edit body still returns the same status and re-rendered page as before the change",
+            "The existing edit-route tests in http-server.test.ts were not modified",
+            "An unsupported verb (e.g. DELETE) on that path returns 405 with an allow header listing GET and POST"
+          ],
+          "failureExamples": [
+            "The route object sets method to the matched verb but allow stays ['POST'], so DELETE returns a 405 whose allow header lies",
+            "A new branch for GET is added after the existing features branch and is unreachable, while the GET test passes only because it hits a generic fallback",
+            "The dispatch rebuilds the POST handler and drops the 400/422 re-render statuses, turning validation failures into 500s"
+          ],
+          "minScore": 9
+        },
+        {
+          "id": "unknown-key-404",
+          "label": "Unknown key and unpublished environment give 404",
+          "ruleStatement": "Both not-found cases must surface as the existing HttpError(404) error page, not a crash or an empty flag page; 8 = both branches tested for status, 10 = the response body is asserted to be the rendered error page with a message naming the missing key.",
+          "passCriteria": [
+            "GET /env/demo/features/does-not-exist returns 404",
+            "GET on an environment whose readCurrentVersion resolves undefined returns 404",
+            "The 404 body is HTML from the existing error page renderer, not a bare string or JSON",
+            "The 404 message text includes the requested flag key"
+          ],
+          "failureExamples": [
+            "The unknown key renders a normal flag page with an empty edit form, so a typo'd bookmark looks like a real but broken flag",
+            "The lookup uses flags.find(...)! and throws a TypeError on undefined, producing a 500 instead of a 404",
+            "The no-published-snapshot case is handled but the snapshot-invalid case falls through to the same TypeError"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "edit-form-parity",
+          "label": "Flag page reuses the real edit form and context",
+          "ruleStatement": "The single-flag page must render the same edit form the environment page builds, not a reimplementation; 8 = it calls renderFeatureEditForm with the same EditContext, 10 = a test asserts the rendered form action and input names match the environment page's output for the same flag.",
+          "passCriteria": [
+            "flag-page.ts imports and calls renderFeatureEditForm; grep shows no duplicated <form> markup for flag editing in that file",
+            "A test renders the same flag through the environment page and the flag page and asserts both contain the same form action URL and the same set of input name attributes",
+            "The page follows the standalone template: a back link, a page-head heading, and renderPage from layout.ts",
+            "flagPath(environment, key) is exported from flag-page.ts, not added to escape.ts"
+          ],
+          "failureExamples": [
+            "The form is hand-written on the flag page and omits a hidden field (e.g. base version) the POST handler requires, so edits from this page fail validation only under concurrency",
+            "The EditContext passed omits the draft/notice fields, so a failed edit posted from the flag page re-renders with the error silently dropped",
+            "flagPath is added to escape.ts alongside environmentPath, breaking the per-page-module convention the other pages follow"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "flag-list-anchor-nonbreaking",
+          "label": "Flag card anchor added without disturbing filter hooks",
+          "ruleStatement": "Wrapping the flag key in a link must leave every attribute the browser filter relies on intact; 8 = data-flag and data-search unchanged and the e2e filter spec untouched, 10 = a view test asserts the anchor href equals flagPath and that data-search still holds the lowercased key/type/state text.",
+          "passCriteria": [
+            "renderFlagCard output still carries data-flag=\"<key>\" and the same data-search value as before",
+            "A view test asserts the flag key text is inside an <a> whose href equals flagPath(env, key)",
+            "No file under packages/dashboard/e2e/ was modified",
+            "The <details class=\"flag-row\"> summary still toggles: the anchor is inside the key span, not wrapping the summary"
+          ],
+          "failureExamples": [
+            "The anchor wraps the whole <summary>, so expanding a flag row now navigates away and the horizon-23 expand-and-edit spec fails",
+            "The key is moved into the anchor but data-search is rebuilt from the anchor text and loses the type/on-off terms, so filtering by 'off' stops matching",
+            "The key is escaped for HTML but not URL-encoded in the href, producing a broken link for any key containing a character needing encoding"
+          ],
+          "minScore": 8
+        },
+        {
+          "id": "coverage-of-new-branches",
+          "label": "Every new branch covered",
+          "ruleStatement": "The repo gate requires 100% lines/branches over packages/*/src/**/*.ts, so each new conditional needs a test in this phase; 8 = the coverage run is green, 10 = each new branch has a test that fails when that branch is inverted.",
+          "passCriteria": [
+            "The repo coverage command passes with no new uncovered lines or branches in flag-page.ts, snapshot-contents.ts or http-server.ts",
+            "Tests exist for both sides of the known-key/unknown-key branch and both sides of the has-snapshot/no-snapshot branch",
+            "The GET and POST arms of the dispatch are each exercised by at least one test"
+          ],
+          "failureExamples": [
+            "A defensive fallback (e.g. a ?? 'unknown' on missing flag metadata) is added with no input that reaches it, dropping branch coverage below 100%",
+            "Tests hit the new page only via the happy path and coverage is satisfied by another file's tests incidentally touching the branch",
+            "An optional chain added on contents.flags creates an untested branch that the gate flags at commit time"
+          ],
+          "minScore": 8
+        }
+      ],
+      "healerHint": "The likely break is the anchor swallowing the flag-row summary click or the 405-to-dispatch conversion narrowing the allow header \u2014 anchor only the key span and keep allow listing both GET and POST."
+    }
+  ],
+  "successCriteria": [
+    "Done when: (1) rendering /env/<env> reads a bounded number of Snapshot Versions (a fixed small window, not 1..currentVersion) regardless of how many versions exist, and listPublishedSegments reads exactly one snapshot per call, so a render no longer walks history twice; (2) GET /env/<env>/versions renders one Page Window of version history, with page position read from the query string and Older/Newer links that are omitted when no such page exists; (3) GET /env/<env>/features/<key> returns a Flag Page for an existing key and a 404 for an unknown one, with the existing POST /env/<env>/features/<key> edit route unchanged, and each flag in the environment list links to it; (4) BrowsePorts is NOT widened \u2014 version numbers stay derivable arithmetically from the Current Pointer; (5) repo gates stay green \u2014 pnpm verify (build, typecheck, ESLint layer boundaries, 100% line/branch/function/statement coverage over packages/*/src/**/*.ts), the integration suite and the Playwright browser suite, whose existing specs drive bare URLs and must keep passing on the new defaults.",
+    "Read only the current snapshot for segment list: listPublishedSegments performs exactly one snapshot read per call regardless of how many versions the environment has, proven by a unit test counting port calls.",
+    "Limit environment page to latest five versions: browseEnvironment issues at most five snapshot reads per call and still returns the correct current snapshot view, proven by unit tests.",
+    "Add paged version history use case: A listVersionPage application module returning one bounded page of version entries, with unit tests covering clamping and out-of-range pages.",
+    "Add paged version history page and route: GET /env/<env>/versions renders one page of version history with working Older/Newer links, covered by route and view tests.",
+    "Add bookmarkable page for one flag: GET /env/<env>/features/<key> renders a single flag page for a known key and a 404 page for an unknown one, with the existing POST edit route unchanged."
+  ],
+  "deferred": [
+    "Carry the flag filter and per-section open/closed state in the query string, rendered server-side (user item 3) \u2014 held for the next Planning Horizon to keep this one small and reviewable; it needs a URL-state contract shared by three pages and touches every write form, because POST handlers re-render inline instead of redirecting.",
+    "Server-side flag filtering and flag paging (user item 4) \u2014 held for the next Planning Horizon; its query-string semantics are defined by item 3's URL-state contract, and it forces a rewrite of the flag-list browser spec that drives the live client-side filter.",
+    "Sticky Flags / Versions / Segments section navigation (user item 5) \u2014 held for the next Planning Horizon; cosmetic, and its shape depends on how the new routes settle (Segments is a separate route, not an on-page section).",
+    "A reusable query-string/URL-state parsing module shared by all pages \u2014 premature abstraction while only page and pageSize exist; extract it when item 3 adds the third and fourth consumers.",
+    "Widening BrowsePorts with a version-listing method \u2014 unnecessary; version numbers are derivable arithmetically from the Current Pointer, and it would force lockstep edits to three hand-written port literals plus the AWS adapter.",
+    "Carrying the flag filter and per-section open/closed state in the query string (user item 3) \u2014 deferred to the next horizon; it needs a URL-state contract shared by three pages and touches every write form, because POST handlers re-render inline instead of redirecting.",
+    "Making the horizon-23 browser spec stop reopening the flag row and Rollout panel after a submit \u2014 that depends entirely on open/closed state travelling in the URL, which is deferred item 3; this horizon cannot and does not promise it.",
+    "Any new logic in packages/dashboard/src/infrastructure/views/scripts/app.js \u2014 an explicit horizon-18 decision puts it outside the coverage gate and the user chose server-side URL state instead.",
+    "Caching, memoising or otherwise persisting parsed Snapshot Versions between requests \u2014 paging removes the fan-out without introducing a cache and its invalidation.",
+    "A per-environment version index object in S3 \u2014 versions stay derivable from the Current Pointer, and horizon 23 already rejected index objects as a second source of truth.",
+    "Widening ListObjectsV2 beyond the <env>/segments/ prefix \u2014 the horizon-10 no-listing rule still binds every other prefix.",
+    "Segment list paging or filtering \u2014 the user's five items cover Flags and Versions only.",
+    "Orphaned snapshot/segment object cleanup (the superseded horizon 22) \u2014 unrelated to navigation and still parked.",
+    "The create-a-flag-with-segments-attached scope in next-horizon-brief.md \u2014 written for a different horizon and explicitly redirected by the user.",
+    "Any change to flag edit, publish, rollback, replay or conflict semantics \u2014 this horizon changes read paths and navigation only.",
+    "Authentication, multi-user sessions or server-side session storage \u2014 state lives in the URL, and the dashboard remains a localhost single-operator tool behind the Host/Origin guard.",
+    "A visual redesign of the dashboard beyond the sticky section nav's markup and CSS."
+  ]
+}

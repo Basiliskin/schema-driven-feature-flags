@@ -1,4 +1,4 @@
-import type { EnvironmentView, SnapshotMetadata, VersionEntry } from '../../application/browse-environment.js';
+import type { EnvironmentView, SnapshotMetadata } from '../../application/browse-environment.js';
 import type { PublishedSegmentsView } from '../../application/list-published-segments.js';
 import { environmentPath, escapeHtml } from './escape.js';
 import type { EditDraft } from './feature-edit-form.js';
@@ -6,6 +6,7 @@ import { renderPage, renderRawJson, renderTimestamp, type Notice } from './layou
 import { renderNewFlagForm, type CreateDraft } from './new-flag-form.js';
 import { segmentListPath } from './segment-list-page.js';
 import { renderSnapshotContents } from './snapshot-contents.js';
+import { renderVersionItem, versionsPath } from './version-list-page.js';
 
 export interface EnvironmentPageState {
   readonly notices?: readonly Notice[];
@@ -100,31 +101,8 @@ ${flags}
 </section>`;
 };
 
-const renderVersionItem = (view: PublishedView, entry: VersionEntry): string => {
-  const base = environmentPath(view.environment);
-  const label = String(entry.version);
-  const isCurrent = entry.version === view.currentVersion;
-  const link = `<a href="${escapeHtml(`${base}/versions/${label}`)}">Version ${label}</a>`;
-  const action = isCurrent
-    ? '<span class="badge badge-accent">current</span>'
-    : `<form method="post" action="${escapeHtml(`${base}/rollback`)}">
-<input type="hidden" name="version" value="${label}">
-<button type="submit" class="button-secondary">Restore version ${label}</button>
-</form>`;
-  const about =
-    entry.metadata === undefined
-      ? '<p class="muted">Details unavailable.</p>'
-      : `<p class="muted">${escapeHtml(entry.metadata.createdBy)} · ${renderTimestamp(entry.metadata.createdAt)}</p>${
-          entry.metadata.reason === '' ? '' : `\n<p>${escapeHtml(entry.metadata.reason)}</p>`
-        }`;
-  return `<li${isCurrent ? ' class="is-current"' : ''}>
-<div class="timeline-head">${link}${action}</div>
-${about}
-</li>`;
-};
-
 const renderVersions = (view: PublishedView): string => `<section class="section" aria-labelledby="versions-heading">
-<div class="section-head"><h2 id="versions-heading">Version history</h2></div>
+<div class="section-head"><h2 id="versions-heading">Version history</h2><a href="${escapeHtml(versionsPath(view.environment))}">View all versions</a></div>
 <ol class="timeline" reversed>
 ${[...view.versions]
   .reverse()

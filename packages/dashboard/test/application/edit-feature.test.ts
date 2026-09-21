@@ -15,7 +15,6 @@ import {
   INVALID_RULES_JSON_MESSAGE,
   INVALID_SEGMENT_KEY_MESSAGE,
   NOTIFY_FAILED_WARNING,
-  SEGMENT_NEEDS_SCHEMA_VERSION_2_MESSAGE,
   PUBLISH_ERROR_MESSAGES,
   UNEXPECTED_ERROR_MESSAGE,
   UNKNOWN_FEATURE_MESSAGE,
@@ -576,12 +575,6 @@ describe('editFeature', () => {
         INVALID_RULE_INDEX_MESSAGE('dark-mode', 0),
         [],
         true,
-      ],
-      [
-        'an attach to a schemaVersion 1 snapshot',
-        { kind: 'attachSegment', key: 'dark-mode', segmentKey: 'beta', memberAttribute: 'userId' },
-        SEGMENT_NEEDS_SCHEMA_VERSION_2_MESSAGE('dark-mode'),
-        [],
       ],
       [
         'a detach of a rule position that does not exist',

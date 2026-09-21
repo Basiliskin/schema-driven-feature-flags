@@ -161,9 +161,10 @@ describe('listPublishedSegments', () => {
   });
 
   it('reports published segments as unused when the Environment has nothing published', async () => {
+    const fetchSnapshotText = vi.fn();
     const ports: ListPublishedSegmentsPorts = {
       readCurrentVersion: () => Promise.resolve(undefined),
-      fetchSnapshotText: vi.fn(),
+      fetchSnapshotText,
       listPublishedSegments: () => Promise.resolve({ status: 'listed', segments: [published('beta')] }),
     };
 
@@ -171,6 +172,7 @@ describe('listPublishedSegments', () => {
       status: 'listed',
       rows: [expect.objectContaining({ segmentKey: 'beta', usage: { status: 'unused' } })],
     });
+    expect(fetchSnapshotText).not.toHaveBeenCalled();
   });
 
   it('reports published segments as unused when the current Snapshot Version is missing', async () => {
@@ -197,5 +199,48 @@ describe('listPublishedSegments', () => {
       status: 'listed',
       rows: [expect.objectContaining({ segmentKey: 'beta', usage: { status: 'unused' } })],
     });
+  });
+
+  it('reports published segments as unused when the current snapshot parses but fails validation', async () => {
+    const ports: ListPublishedSegmentsPorts = {
+      readCurrentVersion: () => Promise.resolve(1),
+      fetchSnapshotText: () => Promise.resolve(JSON.stringify({ schemaVersion: 2, features: 'not-an-object' })),
+      listPublishedSegments: () => Promise.resolve({ status: 'listed', segments: [published('beta')] }),
+    };
+
+    await expect(listPublishedSegments(ports, 'production')).resolves.toEqual({
+      status: 'listed',
+      rows: [expect.objectContaining({ segmentKey: 'beta', usage: { status: 'unused' } })],
+    });
+  });
+
+  it('reads exactly one snapshot however many versions the Environment has published', async () => {
+    const readCurrentVersion = vi.fn(() => Promise.resolve(50));
+    const fetchSnapshotText = vi.fn(() => Promise.resolve(snapshotText({ 'new-dashboard': [inSegment('beta')] })));
+    const ports: ListPublishedSegmentsPorts = {
+      readCurrentVersion,
+      fetchSnapshotText,
+      listPublishedSegments: () => Promise.resolve({ status: 'listed', segments: [published('beta')] }),
+    };
+
+    await expect(listPublishedSegments(ports, 'production')).resolves.toEqual({
+      status: 'listed',
+      rows: [expect.objectContaining({ segmentKey: 'beta', usage: { status: 'used', flagKeys: ['new-dashboard'] } })],
+    });
+    expect(readCurrentVersion).toHaveBeenCalledExactlyOnceWith('production');
+    expect(fetchSnapshotText).toHaveBeenCalledExactlyOnceWith('production', 50);
+  });
+
+  it('reads the single published version of a one-version Environment', async () => {
+    const fetchSnapshotText = vi.fn(() => Promise.resolve(snapshotText({})));
+    const ports: ListPublishedSegmentsPorts = {
+      readCurrentVersion: () => Promise.resolve(1),
+      fetchSnapshotText,
+      listPublishedSegments: () => Promise.resolve({ status: 'listed', segments: [published('beta')] }),
+    };
+
+    await listPublishedSegments(ports, 'production');
+
+    expect(fetchSnapshotText).toHaveBeenCalledExactlyOnceWith('production', 1);
   });
 });

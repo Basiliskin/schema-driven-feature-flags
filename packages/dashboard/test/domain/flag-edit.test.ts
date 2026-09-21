@@ -540,12 +540,27 @@ describe('attachSegment and detachSegment', () => {
     });
   });
 
-  it('refuses to attach to a schemaVersion 1 snapshot instead of upgrading it', () => {
-    expect(applyFlagEdit(rawText, { ...attachVip, key: 'new-dashboard' }, meta)).toEqual({
-      ok: false,
-      error: { kind: 'SEGMENT_NEEDS_SCHEMA_VERSION_2', key: 'new-dashboard' },
-    });
+  it('carries a schemaVersion 1 snapshot up to 2 so the attached segment rule is representable', () => {
+    const result = applyFlagEdit(rawText, { ...attachVip, key: 'new-dashboard' }, meta);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.schemaVersion).toBe(2);
+    expect(parseSnapshot(result.value).ok).toBe(true);
     expect((JSON.parse(rawText) as Record<string, unknown>).schemaVersion).toBe(1);
+  });
+
+  it('leaves a schemaVersion 2 snapshot at 2 when a segment is attached', () => {
+    const result = applyFlagEdit(segmentText, attachVip, meta);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.schemaVersion).toBe(2);
+  });
+
+  it('does not upgrade the schemaVersion for an edit that is not an attach', () => {
+    const result = applyFlagEdit(rawText, { kind: 'enabled', key: 'new-dashboard', enabled: false }, meta);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.schemaVersion).toBe(1);
   });
 
   it('removes exactly the addressed rule and leaves the other one intact', () => {

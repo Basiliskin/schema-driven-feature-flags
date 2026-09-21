@@ -80,3 +80,6 @@
 - 2026-09-20 | horizon 23 | The Member Attribute is STORED on the Segment Pointer at publish time and read back by the dashboard, never typed by the operator — supersedes the horizon-21 decision that it is typed — see horizon-23 roadmap.md
 - 2026-09-20 | horizon 23 | The DASHBOARD may call ListObjectsV2 on the <env>/segments/ prefix to enumerate published segments — supersedes horizon 10's no-ListObjectsV2 rule for the dashboard only; the SDK — see horizon-23 roadmap.md
 - 2026-09-20 | horizon 23 | No per-environment segment index object is maintained; the prefix listing is the single source for which segments exist — because an index is a second source of truth to write, — see horizon-23 roadmap.md
+- 2026-09-21 | horizon 23 | Attaching a segment auto-upgrades a schemaVersion 1 snapshot to 2; additive and recomputed per apply, so replay is safe — supersedes horizon 21 "v1 snapshots never upgrade, they fail loudly" (user decision).
+- 2026-09-21 | horizon 24 | Version history is paged arithmetically from the Current Pointer; BrowsePorts is NOT widened and no version index object is written — listing would force lockstep edits to 4 port literals.
+- 2026-09-21 | horizon 24 | Filter and open/closed state will live in the query string rendered server-side, never in app.js — user choice; app.js stays outside the coverage gate per horizon 18.

@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { browseEnvironment, viewSnapshotVersion } from '../application/browse-environment.js';
+import { listVersionPage, DEFAULT_VERSION_PAGE_SIZE } from '../application/list-version-page.js';
 import { compareWithCurrent } from '../application/compare-versions.js';
 import { applyDraftMerge, mergeDraft } from '../application/merge-draft.js';
 import type { MergeChoices, Side } from '../domain/snapshot-merge.js';
@@ -22,6 +23,7 @@ import { renderEnvironmentPage, type EnvironmentPageState } from './views/enviro
 import { renderErrorPage } from './views/error-page.js';
 import { environmentPath } from './views/escape.js';
 import type { EditDraft } from './views/feature-edit-form.js';
+import { renderFlagPage } from './views/flag-page.js';
 import { renderHomePage } from './views/home-page.js';
 import type { Notice } from './views/layout.js';
 import type { CreateDraft } from './views/new-flag-form.js';
@@ -30,6 +32,7 @@ import { renderMergeFragment } from './views/merge-dialog.js';
 import { CLIENT_SCRIPT, CLIENT_SCRIPT_PATH } from './views/client-script.js';
 import { STYLESHEET, STYLESHEET_PATH } from './views/stylesheet.js';
 import { renderVersionPage } from './views/version-page.js';
+import { renderVersionListPage } from './views/version-list-page.js';
 import { HttpError, MAX_BODY_BYTES, decodeSegment, readForm, send, type Route } from './http-primitives.js';
 import { matchSegmentRoute } from './segment-routes.js';
 
@@ -109,6 +112,16 @@ const parseVersion = (value: string | null | undefined): number => {
   }
   return Number(value);
 };
+
+/** A page number or size from the query string; absent falls back, anything else is a tampered or mistyped URL. */
+const parsePageNumber = (value: string | null, fallback: number, message: string): number => {
+  if (value === null) return fallback;
+  if (!/^[1-9]\d{0,8}$/.test(value)) throw new HttpError(400, message);
+  return Number(value);
+};
+
+const PAGE_MESSAGE = 'The page must be a positive integer.';
+const PAGE_SIZE_MESSAGE = 'The page size must be a positive integer.';
 
 const outcomeNotices = (outcome: WriteOutcome): Notice[] => {
   if (outcome.kind === 'failure') return [{ kind: 'error', message: outcome.message, details: outcome.issues }];
@@ -442,14 +455,39 @@ function createDashboardRequestHandler(
     }
     if (segments.length === 4 && segments[2] === 'features') {
       const key = decodeSegment(segments[3] as string);
-      return editRoute(
-        environment,
-        (fields, segments) => parseEditForm(key, fields, segments),
-        (fields, message, issues) => ({ editDraft: editDraftOf(key, fields, message, issues) }),
-      );
+      if (method === 'POST') {
+        return editRoute(
+          environment,
+          (fields, segments) => parseEditForm(key, fields, segments),
+          (fields, message, issues) => ({ editDraft: editDraftOf(key, fields, message, issues) }),
+        );
+      }
+      return {
+        method: 'GET',
+        allow: ['GET', 'POST'],
+        handle: async (_request, response) => {
+          const [view, publishedSegments] = await Promise.all([
+            browseEnvironment(ports, environment),
+            listPublishedSegments(ports, environment),
+          ]);
+          const page = renderFlagPage(view, key, publishedSegments);
+          if (page === undefined) throw new HttpError(404, `There is no flag named ${key} in this environment.`);
+          send(response, 200, page);
+        },
+      };
     }
     const segmentRoute = matchSegmentRoute(ports, environment, segments, method);
     if (segmentRoute !== undefined) return segmentRoute;
+    if (segments.length === 3 && segments[2] === 'versions') {
+      return {
+        method: 'GET',
+        handle: async (_request, response, url) => {
+          const page = parsePageNumber(url.searchParams.get('page'), 1, PAGE_MESSAGE);
+          const pageSize = parsePageNumber(url.searchParams.get('pageSize'), DEFAULT_VERSION_PAGE_SIZE, PAGE_SIZE_MESSAGE);
+          send(response, 200, renderVersionListPage(await listVersionPage(ports, environment, page, pageSize)));
+        },
+      };
+    }
     if (segments.length === 4 && segments[2] === 'versions') {
       return {
         method: 'GET',

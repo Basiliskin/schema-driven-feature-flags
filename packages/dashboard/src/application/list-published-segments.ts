@@ -1,5 +1,5 @@
 import type { Condition } from '@featuresync/core';
-import { browseEnvironment, type BrowsePorts, type FlagDefinitionView } from './browse-environment.js';
+import { viewSnapshotVersion, type BrowsePorts, type FlagDefinitionView } from './browse-environment.js';
 
 /** One segment the Environment's `segments/` prefix actually holds, as its Segment Pointer describes it. */
 export interface PublishedSegment {
@@ -68,9 +68,9 @@ const currentFlags = async (
   ports: ListPublishedSegmentsPorts,
   environment: string,
 ): Promise<readonly FlagDefinitionView[]> => {
-  const view = await browseEnvironment(ports, environment);
-  if (view.status === 'empty') return [];
-  const { current } = view;
+  const currentVersion = await ports.readCurrentVersion(environment);
+  if (currentVersion === undefined) return [];
+  const current = await viewSnapshotVersion(ports, environment, currentVersion);
   if (current.status === 'not-available' || current.contents.status === 'invalid') return [];
   return current.contents.flags;
 };

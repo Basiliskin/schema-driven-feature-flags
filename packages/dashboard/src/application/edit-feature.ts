@@ -12,7 +12,6 @@ import {
   INVALID_RULE_INDEX_MESSAGE,
   INVALID_RULES_JSON_MESSAGE,
   INVALID_SEGMENT_KEY_MESSAGE,
-  SEGMENT_NEEDS_SCHEMA_VERSION_2_MESSAGE,
   UNKNOWN_FEATURE_MESSAGE,
 } from './error-messages.js';
 import { publishExpecting, type WriteOutcome, type WritePorts } from './publish-snapshot.js';
@@ -102,12 +101,6 @@ const editFailure = (failure: FlagEditFailure): WriteOutcome => {
         message: INVALID_SEGMENT_KEY_MESSAGE(failure.segmentKey),
         issues: [],
         invalidInput: true,
-      };
-    case 'SEGMENT_NEEDS_SCHEMA_VERSION_2':
-      return {
-        kind: 'failure',
-        message: SEGMENT_NEEDS_SCHEMA_VERSION_2_MESSAGE(failure.key),
-        issues: [],
       };
     case 'INVALID_SNAPSHOT':
       return {

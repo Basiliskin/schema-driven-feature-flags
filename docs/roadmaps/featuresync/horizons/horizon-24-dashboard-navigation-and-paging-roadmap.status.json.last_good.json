@@ -1,0 +1,226 @@
+{
+  "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-24-dashboard-navigation-and-paging-roadmap.json",
+  "roadmapTask": "Make the FeatureSync dashboard comfortable to use as an environment grows: page the version history onto its own route, give each flag its own URL, and stop a page render from reading every published version. (Items 3-5 of the user's five improvements — URL-carried filter/section state, server-side flag filtering, and sticky section nav — are planned for the next horizon.)",
+  "createdAt": "2026-09-21T07:28:19Z",
+  "updatedAt": "2026-09-21T11:16:00Z",
+  "roadmapRevision": 0,
+  "phases": [
+    {
+      "phaseId": "stop-second-history-walk",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-21T07:28:19Z",
+      "baseRef": "68d0ad8918972855c93a1e5befd4095b737ed9c1",
+      "baseDirty": true,
+      "notes": "Changed packages/dashboard/src/application/list-published-segments.ts and packages/dashboard/test/application/list-published-segments.test.ts: currentFlags() now calls readCurrentVersion + a single viewSnapshotVersion instead of browseEnvironment, so the helper fetches one snapshot per call rather than one per published version; the three empty-list fallbacks are unchanged and tests were added for the read count (50-version and 1-version environments, version argument asserted), the no-fetch-when-unpublished case, and a schema-invalid-but-well-formed snapshot. Both changed files were clean at baseRef; already dirty at start (not this phase): packages/dashboard/src/application/edit-feature.ts, error-messages.ts, src/domain/flag-edit.ts, test/application/edit-feature.test.ts, test/domain/flag-edit.test.ts, plus docs/roadmaps/featuresync memory files. | Verified: gates green, grade 10/9/9 all above minScore 8, no healer retry needed. Compensation if ever needed: git checkout 68d0ad8 -- packages/dashboard/src/application/list-published-segments.ts restores the browseEnvironment-based currentFlags(); no stored state is touched.",
+      "unplannedFiles": [],
+      "completedAt": "2026-09-21T07:32:26Z",
+      "gateRun": "pnpm verify (build + pnpm -r typecheck + eslint . --max-warnings=0 + vitest run --coverage): pass",
+      "gradeResult": {
+        "phaseId": "stop-second-history-walk",
+        "dimensionScores": [
+          {
+            "dimensionId": "snapshot-read-count",
+            "score": 10,
+            "pass": true,
+            "evidence": "Beyond the rubric's 10 bar (counts at 50 versions and at 1 version plus the version argument), both assertions use toHaveBeenCalledExactlyOnceWith('production', 50/1), pinning the environment argument and the exact call count of readCurrentVersion and fetchSnapshotText in a single assertion, so an extra read or a wrong environment also fails."
+          },
+          {
+            "dimensionId": "fallback-branches-preserved",
+            "score": 9,
+            "pass": true,
+            "evidence": "All three branches covered: undefined currentVersion returns [] and asserts fetchSnapshotText was never called; the missing-snapshot test still asserts an empty/unused list without throwing; a new test feeds well-formed JSON with the wrong shape and asserts unused rows rather than a throw at .flags."
+          },
+          {
+            "dimensionId": "no-browse-environment-dependency",
+            "score": 9,
+            "pass": true,
+            "evidence": "browseEnvironment no longer appears in list-published-segments.ts; the import is swapped for viewSnapshotVersion called with the explicit currentVersion, no status/validation union is re-implemented inline, and BrowsePorts is untouched so no fixtures elsewhere needed editing."
+          }
+        ],
+        "overallPass": true
+      }
+    },
+    {
+      "phaseId": "bound-environment-version-window",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-21T07:40:18Z",
+      "baseRef": "68d0ad8918972855c93a1e5befd4095b737ed9c1",
+      "baseDirty": true,
+      "notes": "Changed packages/dashboard/src/application/browse-environment.ts and packages/dashboard/test/application/browse-environment.test.ts: browseEnvironment now exports ENVIRONMENT_VERSION_WINDOW = 5 and fetches only versions (currentVersion - min(currentVersion, WINDOW) + 1)..currentVersion instead of 1..currentVersion, with current selected by matching view.version === currentVersion rather than views[currentVersion - 1]; entries stay ascending readonly VersionEntry[] so no view module changed. Tests added for the at-window boundary (imports the constant) and a 500-version history (asserts the exact fetched version numbers 496..500 and that current carries version 500 contents). Both files were clean at baseRef; already dirty at start (not this phase): docs/roadmaps/featuresync memory + horizon-24 roadmap files, packages/dashboard/src/application/edit-feature.ts, error-messages.ts, list-published-segments.ts, src/domain/flag-edit.ts, test/application/edit-feature.test.ts, test/application/list-published-segments.test.ts, test/domain/flag-edit.test.ts. | Verified: gate green, grade 10/9/9/9 all above minScore (8/8/8/7), no healer retry needed; the single 10 named an above-the-bar property so no 10->9 demotion applied. Playwright browser suite not run here (separate LocalStack CI job) — the view-shape dimension scored 9 on code evidence. Compensation if ever needed: restore the full 1..currentVersion range in browse-environment.ts (git diff 68d0ad8 -- packages/dashboard/src/application/browse-environment.ts shows this phase change); no stored state is touched.",
+      "unplannedFiles": [],
+      "completedAt": "2026-09-21T07:44:28Z",
+      "gradeResult": {
+        "phaseId": "bound-environment-version-window",
+        "dimensionScores": [
+          {
+            "dimensionId": "window-clamping",
+            "score": 10,
+            "pass": true,
+            "evidence": "Range is clamped: windowSize = Math.min(currentVersion, ENVIRONMENT_VERSION_WINDOW), oldest = currentVersion - windowSize + 1, so version 3 fetches 1..3, version 5 asserts the full [1..5] call list via the constant, and version 500 asserts exactly [496..500]; version 1 test also present. Above a 9: every boundary test asserts the exact (environment, version) argument tuples of each fetch, not just counts, so both an off-by-one dropping 500 and a wrong-environment read would fail."
+          },
+          {
+            "dimensionId": "current-selected-by-number",
+            "score": 9,
+            "pass": true,
+            "evidence": "current is views.find((view) => view.version === currentVersion); no views[currentVersion - 1] or other index arithmetic remains. The 500-version test asserts currentVersion 500 and current version 500 with reason 'reason 500', fixtures distinguishable per version. The contents check pins only metadata.reason, not the flags payload, so 9 not 10."
+          },
+          {
+            "dimensionId": "view-shape-unchanged",
+            "score": 9,
+            "pass": true,
+            "evidence": "EnvironmentView still declares readonly versions: readonly VersionEntry[] with no page/offset/total fields; BrowsePorts still declares exactly readCurrentVersion and fetchSnapshotText, so no fixture or http-server port literal needed editing. git diff --stat against baseRef for packages/dashboard/src/infrastructure/views/ is empty; entries stay ascending so no double-reverse. The Playwright suite was not run here (separate LocalStack CI job); on the code a 1-version seed yields windowSize 1 and current resolved by number, so flag-list.spec.ts should pass unchanged — unverified empirically, hence 9."
+          },
+          {
+            "dimensionId": "window-constant-exported",
+            "score": 9,
+            "pass": true,
+            "evidence": "browse-environment.ts exports ENVIRONMENT_VERSION_WINDOW = 5 and uses it as the only source in the range computation (no bare 5 in the range math). The at-the-boundary test imports the constant and builds both its seed currentVersion and expected version list from it. The far-above test hardcodes 496..500, appropriate for that case but short of a 10."
+          }
+        ],
+        "overallPass": true
+      },
+      "gateRun": "pnpm verify (build of core/nestjs/aws/cli/dashboard + pnpm -r typecheck + eslint . --max-warnings=0 + vitest run --coverage): pass"
+    },
+    {
+      "phaseId": "add-version-page-use-case",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-21T07:46:01Z",
+      "baseRef": "68d0ad8918972855c93a1e5befd4095b737ed9c1",
+      "baseDirty": true,
+      "notes": "Added packages/dashboard/src/application/list-version-page.ts and packages/dashboard/test/application/list-version-page.test.ts: listVersionPage(ports, environment, page, pageSize) reads the current version, computes the newest-first slice arithmetically (newest = total - (page-1)*size, oldest clamped at 1), fetches only those versions via the existing viewSnapshotVersion, and returns environment/page/pageSize/totalVersions/entries/hasNewer/hasOlder. Exports MAX_VERSION_PAGE_SIZE = 50 and DEFAULT_VERSION_PAGE_SIZE = 20; page and pageSize are clamped (non-finite falls back to 1 / the default), a page past the end returns no entries and issues zero fetches. BrowsePorts is unchanged and the test fake declares exactly its two methods with no cast. Also changed outside filesAffected: browse-environment.ts, exporting the existing toVersionEntry helper (one word) rather than duplicating the mapping. Already dirty at start (not this phase): docs/roadmaps/featuresync memory + horizon-24 files, and the edit-feature/error-messages/list-published-segments/flag-edit sources and tests; browse-environment.ts and its test also carry phase 2 changes already verified done. | Verified: gate green on re-run after a real lint fix, grade 10/10/10/10 all above minScore (8/8/9/8), no healer retry needed; each 10 met that dimension's own explicitly stated 10 bar with a named observable, so no 10->9 demotion applied. The unplanned one-word export of toVersionEntry was examined by the grader and accepted under ports-not-widened's own no-duplication criterion. Compensation if ever needed: delete list-version-page.ts and its test and revert the export keyword; nothing imports the module yet.",
+      "unplannedFiles": [
+        "packages/dashboard/src/application/list-version-page.ts is new (planned); packages/dashboard/src/application/browse-environment.ts changed outside filesAffected: one word, const toVersionEntry -> export const toVersionEntry, so the new module reuses the existing SnapshotVersionView -> VersionEntry mapping instead of duplicating it. No type, signature or port was altered."
+      ],
+      "completedAt": "2026-09-21T07:51:17Z",
+      "gradeResult": {
+        "phaseId": "add-version-page-use-case",
+        "dimensionScores": [
+          {
+            "dimensionId": "page-arithmetic",
+            "score": 10,
+            "pass": true,
+            "evidence": "Page 1 of total 23 / size 10 asserts exactly [23..14] and page 3 asserts [3,2,1]; the tests also assert the fetched version list equals the same exact descending array (one fetch per entry, none outside the page, never version 0), and a page-2 test asserts [13..4] to prove no repeat or skip at the boundary — the off-by-one and negative-lower-bound failure examples are each directly disproven."
+          },
+          {
+            "dimensionId": "input-clamping",
+            "score": 10,
+            "pass": true,
+            "evidence": "clamp() guards with Number.isFinite before Math.floor/min/max, so NaN falls back to page 1 / DEFAULT_VERSION_PAGE_SIZE instead of yielding NaN keys; table tests cover page 0, -5, 1.7 and NaN all resolving to page 1 with identical entries. Above the bar: the oversized-pageSize test asserts the fetch count equals MAX_VERSION_PAGE_SIZE for a 100000 request against a 1000-version history, and the past-the-end test asserts empty entries with zero fetches, which is structural (numbers = [] when newest < 1)."
+          },
+          {
+            "dimensionId": "ports-not-widened",
+            "score": 10,
+            "pass": true,
+            "evidence": "BrowsePorts' member list is unchanged and no file under packages/dashboard/e2e/support/ or any fixtures file was touched; listVersionPage calls viewSnapshotVersion, never fetchSnapshotText directly. Above the bar: the test fake declares exactly readCurrentVersion and fetchSnapshotText with no cast, and its default fetch implementation is typed as BrowsePorts['fetchSnapshotText'], so a future port widening would fail typecheck in the test rather than be papered over. The one unplanned edit (const -> export const on toVersionEntry) is the minimum change satisfying this dimension's own no-duplication criterion and alters no type, signature or port."
+          },
+          {
+            "dimensionId": "paging-metadata",
+            "score": 10,
+            "pass": true,
+            "evidence": "The result carries environment, page, pageSize, totalVersions, entries, hasNewer, hasOlder; page 1 of 23 asserts hasNewer false / hasOlder true, the last page asserts hasNewer true / hasOlder false, and the three-versions-on-one-page case asserts both false. Above the bar: hasOlder is 'numbers.length > 0 && oldest > 1' rather than a length heuristic, and a dedicated test (total 20, size 10, page 2) asserts hasOlder false at an exact multiple of pageSize — the specific failure example this rubric names. totalVersions comes from readCurrentVersion, asserted as 23 even on the 3-entry last page and 0 for an unpublished environment."
+          }
+        ],
+        "overallPass": true
+      },
+      "gateRun": "pnpm verify (build of core/nestjs/aws/cli/dashboard + pnpm -r typecheck + eslint . --max-warnings=0 + vitest run --coverage): failed first run with 4 ESLint errors in the new test file (unbound-method x3, no-misused-promises x1), fixed by adopting the sibling test file's port-fake pattern (default-parameter fetch implementation passed into vi.fn) with no suppression or rule relaxation; re-run pass"
+    },
+    {
+      "phaseId": "add-versions-route",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-21T07:57:55Z",
+      "baseRef": "68d0ad8918972855c93a1e5befd4095b737ed9c1",
+      "baseDirty": true,
+      "notes": "Changed packages/dashboard/src/infrastructure/views/version-list-page.ts (new), views/environment-page.ts and infrastructure/http-server.ts, plus the three co-located test files. GET /env/<env>/versions is now bound as a three-segment route that parses page and pageSize from the query string with the existing /^[1-9]\\\\d{0,8}$/ + HttpError(400) style (absent falls back to page 1 / DEFAULT_VERSION_PAGE_SIZE) and renders listVersionPage through the new renderVersionListPage; the per-version item renderer and rollback form moved out of environment-page.ts into version-list-page.ts so both pages share one markup, and the environment page now carries a View all versions link in its version-history section head. The existing four-segment /versions/<n> route is untouched and the old test asserting /env/a/versions is a 404 was removed because that address is now a page; POST /env/production/versions was added to the 405 Allow table. No file under packages/dashboard/e2e/ was touched. Already dirty at start (not this phase): docs/roadmaps/featuresync memory + horizon-24 roadmap/ledger files; packages/dashboard src application/browse-environment.ts, edit-feature.ts, error-messages.ts, list-published-segments.ts, list-version-page.ts, domain/flag-edit.ts and their tests under test/. | Verified: all three gates green, grade 10/10/9/10/9 against minScore 8 on every dimension, overallPass true, no healer retry needed; each 10 named an above-the-bar observable so no 10->9 demotion applied. The Playwright suite was run locally this time (LocalStack was up), not deferred. Compensation if ever needed: remove the three-segment versions branch and its imports from http-server.ts, delete version-list-page.ts and its test, and move renderVersionItem back into environment-page.ts dropping the View all versions anchor; git diff 68d0ad8 -- packages/dashboard/src/infrastructure shows this phase change. No stored state is touched.",
+      "unplannedFiles": [
+        "packages/dashboard/src/infrastructure/views/version-list-page.test.ts",
+        "packages/dashboard/src/infrastructure/views/environment-page.test.ts",
+        "packages/dashboard/src/infrastructure/http-server.test.ts"
+      ],
+      "completedAt": "2026-09-21T08:07:36Z",
+      "gateRun": "pnpm verify: pass (builds, pnpm -r typecheck, eslint --max-warnings=0, vitest run --coverage at 100% line/branch/function/statement); pnpm test:integration: pass (LocalStack reachable, run here rather than deferred to CI); pnpm --filter @featuresync/dashboard test:e2e: pass (Playwright browser suite)",
+      "gradeResult": {
+        "phaseId": "add-versions-route",
+        "dimensionScores": [
+          {
+            "dimensionId": "route-binding-and-query-validation",
+            "score": 10,
+            "pass": true,
+            "evidence": "Three-segment branch guarded by segments.length === 3 && segments[2] === 'versions' and placed before the four-segment branch, so it cannot swallow /versions/<n>; parsePageNumber reuses the package's /^[1-9]\\d{0,8}$/ + HttpError(400) so abc, -1, 0, 1e9, 2.5 and empty all 400 while absent falls back. Above the bar: pageSize has its own distinct 400 message and test, POST /env/production/versions was added to the 405 Allow table, and the anti-shadowing failure example is tested directly."
+          },
+          {
+            "dimensionId": "pager-links",
+            "score": 10,
+            "pass": true,
+            "evidence": "Both links are built from versionsPath, which omits the query string on page 1, so no NaN concatenation path exists; links are conditionally spread from hasNewer/hasOlder and the whole nav disappears when both are false. Above the bar: a route test extracts the Older href from page 1's real HTML, re-requests it and asserts Version 25 present and Version 26 absent; a view test asserts the escaped href for an environment named <script>\"."
+          },
+          {
+            "dimensionId": "past-the-end-page",
+            "score": 9,
+            "pass": true,
+            "evidence": "renderEntries branches to a muted paragraph before touching entries[0]; GET ?page=99 asserts 200, the empty-state text and fetchSnapshotText not called. All criteria met including the no-fetch assertion, nothing beyond the stated bar."
+          },
+          {
+            "dimensionId": "environment-page-still-bounded",
+            "score": 10,
+            "pass": true,
+            "evidence": "renderVersionItem and the rollback form moved into version-list-page.ts and the environment page imports it, making divergence structurally impossible; the section head gained a View all versions anchor built from versionsPath. Above the bar: the shared-item test asserts one byte-identical item string appears in both pages' output, and the bounding test drives the real browseEnvironment over a 40-version fake asserting exactly ENVIRONMENT_VERSION_WINDOW - 1 restore forms."
+          },
+          {
+            "dimensionId": "e2e-defaults-unchanged",
+            "score": 9,
+            "pass": true,
+            "evidence": "No file under packages/dashboard/e2e/ touched; page and pageSize are optional with fallbacks so the bare URL renders page 1 (tested), a one-version environment shows no pager, and the flag-list data-flag/data-search markup is untouched. Short of 10 because no Playwright spec visits /env/<env>/versions on the seed environment."
+          }
+        ],
+        "overallPass": true
+      }
+    },
+    {
+      "phaseId": "add-flag-page",
+      "status": "awaiting-verification",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-21T10:40:00Z",
+      "baseRef": "68d0ad8918972855c93a1e5befd4095b737ed9c1",
+      "baseDirty": true,
+      "notes": "Already dirty at start (not this phase): docs/roadmaps/featuresync/{blockers,decisions,discoveries,next-horizon-brief,state}.md; packages/dashboard/src/application/{browse-environment,edit-feature,error-messages,list-published-segments}.ts; packages/dashboard/src/domain/flag-edit.ts; packages/dashboard/src/infrastructure/{http-server.ts,http-server.test.ts}; packages/dashboard/src/infrastructure/views/{environment-page.ts,environment-page.test.ts}; packages/dashboard/test/** (4 files); untracked list-version-page.ts, version-list-page.ts and their tests.\n\nImplemented: NEW views/flag-page.ts (flagPath + renderFlagPage, returns undefined when the environment has no valid current snapshot or does not define the key); views/snapshot-contents.ts wraps the flag key in an anchor to flagPath inside the existing .flag-key span, leaving data-flag/data-search untouched; http-server.ts converts the 4-segment features/<key> branch to method dispatch (POST keeps the untouched editRoute, GET renders the flag page or throws HttpError(404, \"There is no flag named <key> in this environment.\"), allow=[GET,POST]).\n\nUnplanned files are all tests, expected by the phase changes list but not named in filesAffected. Two PRE-EXISTING assertions were updated because they characterised behaviour this phase deliberately replaces, NOT to make new code pass: http-server.test.ts \"answers 405 to GET\" (asserted the 405 the discovery entry recorded as a defect) now asserts DELETE->405 with allow \"GET, POST\" and keeps its malformed-key 400; http-server.test.ts line 144 flag-key markup assertion now expects the anchored span. No edit-POST assertion was changed.\n\nRan while implementing (not the gate): pnpm typecheck exit 0; vitest run --no-coverage packages/dashboard/src/infrastructure exit 0, 374 passed. Coverage, lint and the full suite are VERIFY's job.",
+      "amendments": [
+        {
+          "at": "2026-09-21T10:40:00Z",
+          "by": "execute",
+          "reason": "inputs pointed at packages/dashboard/src/infrastructure/views/segment-routes.ts as the method-dispatch pattern to copy; no such file exists. The real module is packages/dashboard/src/infrastructure/segment-routes.ts — routes live beside http-server.ts, not under views/. Same module, corrected path; the phase goal is unchanged.",
+          "grounding": "packages/dashboard/src/infrastructure/views/ contains no segment-routes.ts; http-server.ts imports matchSegmentRoute from ./segment-routes.js.",
+          "before": {
+            "inputs": [
+              "packages/dashboard/src/infrastructure/views/feature-edit-form.ts",
+              "packages/dashboard/src/infrastructure/views/segment-routes.ts (method-dispatch pattern)",
+              "Discovery finding: the features/<key> branch is checked before segment routes, so a later branch would be unreachable",
+              "packages/dashboard/src/application/list-published-segments.ts — the Flag Page renders renderFeatureEditForm, which requires a PublishedSegmentsView, so this route becomes a new caller of listPublishedSegments"
+            ]
+          },
+          "after": {
+            "inputs": [
+              "packages/dashboard/src/infrastructure/views/feature-edit-form.ts",
+              "packages/dashboard/src/infrastructure/segment-routes.ts (method-dispatch pattern)",
+              "Discovery finding: the features/<key> branch is checked before segment routes, so a later branch would be unreachable",
+              "packages/dashboard/src/application/list-published-segments.ts — the Flag Page renders renderFeatureEditForm, which requires a PublishedSegmentsView, so this route becomes a new caller of listPublishedSegments"
+            ]
+          }
+        }
+      ],
+      "unplannedFiles": [
+        "packages/dashboard/src/infrastructure/views/flag-page.test.ts",
+        "packages/dashboard/src/infrastructure/http-server.test.ts",
+        "packages/dashboard/src/infrastructure/views/feature-edit-form.test.ts"
+      ]
+    }
+  ]
+}

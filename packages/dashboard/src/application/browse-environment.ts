@@ -1,5 +1,8 @@
 import { parseSnapshot, referencedSegmentKeys, type ValidationIssue } from '@featuresync/core';
 
+/** How many of the newest Snapshot Versions the Environment view loads, so its cost stays flat as history grows. */
+export const ENVIRONMENT_VERSION_WINDOW = 5;
+
 export interface BrowsePorts {
   /** Resolves to `undefined` when the Environment has no published Snapshot Version yet. */
   readCurrentVersion(environment: string): Promise<number | undefined>;
@@ -104,7 +107,7 @@ export async function viewSnapshotVersion(
   return { environment, version, status: 'available', contents: readContents(text) };
 }
 
-const toVersionEntry = (view: SnapshotVersionView): VersionEntry =>
+export const toVersionEntry = (view: SnapshotVersionView): VersionEntry =>
   view.status === 'available' && view.contents.status === 'valid'
     ? { version: view.version, metadata: view.contents.metadata }
     : { version: view.version };
@@ -112,15 +115,17 @@ const toVersionEntry = (view: SnapshotVersionView): VersionEntry =>
 export async function browseEnvironment(ports: BrowsePorts, environment: string): Promise<EnvironmentView> {
   const currentVersion = await ports.readCurrentVersion(environment);
   if (currentVersion === undefined) return { environment, status: 'empty' };
-  // History is linear (1..current), so every version is read by key; no bucket listing is needed.
+  // History is linear (1..current), so the newest window is read by key; no bucket listing is needed.
+  const windowSize = Math.min(currentVersion, ENVIRONMENT_VERSION_WINDOW);
+  const oldest = currentVersion - windowSize + 1;
   const views = await Promise.all(
-    Array.from({ length: currentVersion }, (_, index) => viewSnapshotVersion(ports, environment, index + 1)),
+    Array.from({ length: windowSize }, (_, index) => viewSnapshotVersion(ports, environment, oldest + index)),
   );
   return {
     environment,
     status: 'published',
     currentVersion,
     versions: views.map(toVersionEntry),
-    current: views[currentVersion - 1] as SnapshotVersionView,
+    current: views.find((view) => view.version === currentVersion) as SnapshotVersionView,
   };
 }

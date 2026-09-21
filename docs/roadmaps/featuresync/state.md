@@ -49,3 +49,5 @@
 - 2026-09-20 | horizon 22 | superseded | by horizon 23: user chose segment picker/listing UX over orphaned-object cleanup; plan kept, never executed
 - 2026-09-20 | horizon 23 | planned | 6 phases (store Member Attribute on the Segment Pointer, published-segments use case, S3 segments-prefix lister, Segment List columns, picker-based attach, browser proof); — see horizon-23 roadmap.md
 - 2026-09-21 | horizon 23 | completed | 6 phases (Member Attribute on the Segment Pointer, published-segments use case, S3 segments-prefix lister, Segment List columns, picker-based attach, browser proof); 2 amendments, 0 overrides
+- 2026-09-21 | horizon 24 | planned | 5 phases (one-read segment list, five-version window, paged version use case, versions route, flag page); items 3-5 of the user's five deferred to horizon 25 — see horizon-24 roadmap.md
+- 2026-09-21 | horizon 24 | completed | 5 phases (one-read segment list, five-version window, paged version use case, versions route, bookmarkable flag page); 1 amendment, 0 overrides
