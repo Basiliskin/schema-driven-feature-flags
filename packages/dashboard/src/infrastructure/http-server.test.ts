@@ -67,7 +67,7 @@ describe('startDashboardServer', () => {
     expect(picked.headers.location).toBe('/env/eu%2Fprod');
   });
 
-  it('renders a published environment with flags, versions and a restore button per older version', async () => {
+  it('renders a published environment with its flags', async () => {
     const dashboard = await start(fakes().ports);
 
     const page = await call(dashboard, 'GET', '/env/production');
@@ -77,12 +77,8 @@ describe('startDashboardServer', () => {
       '<span class="flag-key"><a href="/env/production/features/new-dashboard">new-dashboard</a></span><span class="badge">boolean</span>',
     );
     expect(page.body).toContain('<code>{&quot;max&quot;:3}</code>');
-    expect(page.body).toContain('Current snapshot · v3');
-    expect(page.body).toContain('<a href="/env/production/versions/3">Version 3</a><span class="badge badge-accent">current</span>');
-    expect(page.body).toContain('value="1"');
-    expect(page.body).toContain('Restore version 1');
-    expect(page.body).toContain('Restore version 2');
-    expect(page.body).not.toContain('Restore version 3');
+    expect(page.body).not.toContain('Version history');
+    expect(page.body).not.toContain('Restore version');
     expect(page.body).not.toContain('by hand');
   });
 
@@ -94,7 +90,7 @@ describe('startDashboardServer', () => {
     await empty.close();
 
     const invalid = await start(fakes({ fetchSnapshotText: () => Promise.resolve('{"schemaVersion":2}') }).ports);
-    expect((await call(invalid, 'GET', '/env/production')).body).toContain('This snapshot is not valid:');
+    expect((await call(invalid, 'GET', '/env/production')).body).toContain('required spellcheck="false"></textarea>');
     await invalid.close();
 
     const flagless = await start(fakes({ fetchSnapshotText: () => Promise.resolve(snapshotText({})) }).ports);
@@ -103,7 +99,7 @@ describe('startDashboardServer', () => {
 
     const missing = Object.assign(new Error('gone'), { reason: 'SNAPSHOT_NOT_FOUND' });
     const gone = await start(fakes({ fetchSnapshotText: () => Promise.reject(missing) }).ports);
-    expect((await call(gone, 'GET', '/env/production')).body).toContain('snapshot file is not available');
+    expect((await call(gone, 'GET', '/env/production')).body).not.toContain('flags-heading');
   });
 
   it('renders one snapshot version, including a missing one', async () => {
@@ -456,11 +452,10 @@ describe('startDashboardServer', () => {
     const version = await call(dashboard, 'GET', `/env/${environment}/versions/2`);
 
     expect(page.body).not.toContain('<script>"');
-    expect(page.body).toContain('Environment &lt;script&gt;&quot;&#39;');
     expect(page.body).toContain('<li>features.x&quot;&amp;&lt;y: ');
     expect(version.body).not.toContain('<b>');
     expect(version.body).toContain('<code>&quot;&lt;b&gt;\\&quot;&amp;&lt;/b&gt;&quot;</code>');
-    expect(page.body).toContain('href="/env/%3Cscript%3E%22\'/versions/3"'.replace("'", '&#39;'));
+    expect(page.body).toContain('href="/env/%3Cscript%3E%22\'/versions"'.replace("'", '&#39;'));
   });
 
   describe('POST /env/:env/publish', () => {

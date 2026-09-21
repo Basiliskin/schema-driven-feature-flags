@@ -1,12 +1,6 @@
 import { parseSnapshot } from '@featuresync/core';
 import { describe, expect, it } from 'vitest';
-import {
-  browseEnvironment,
-  ENVIRONMENT_VERSION_WINDOW,
-  type BrowsePorts,
-  type EnvironmentView,
-  type FlagDefinitionView,
-} from '../../application/browse-environment.js';
+import type { EnvironmentView, FlagDefinitionView } from '../../application/browse-environment.js';
 import { parseUrlState, serialiseUrlState } from '../url-state.js';
 import { renderEnvironmentPage } from './environment-page.js';
 
@@ -64,32 +58,6 @@ describe('the first version template', () => {
     const template = prefilledSnapshot(renderEnvironmentPage(publishedView(1)));
 
     expect(template['schemaVersion']).toBe(1);
-  });
-});
-
-describe('the version history section', () => {
-  const portsOver = (totalVersions: number): BrowsePorts => ({
-    readCurrentVersion: () => Promise.resolve(totalVersions),
-    fetchSnapshotText: (environment, version) =>
-      Promise.resolve(
-        JSON.stringify({
-          schemaVersion: 2,
-          environment,
-          version,
-          previousVersion: version - 1,
-          createdAt: '2026-01-01T00:00:00.000Z',
-          createdBy: 'someone',
-          reason: 'A reason',
-          features: {},
-        }),
-      ),
-  });
-
-  it('stays bounded to the newest window on a long history and links to the full list', async () => {
-    const html = renderEnvironmentPage(await browseEnvironment(portsOver(40), 'production'));
-
-    expect(html.match(/Restore version /g)).toHaveLength(ENVIRONMENT_VERSION_WINDOW - 1);
-    expect(html).toContain('<a href="/env/production/versions">View all versions</a>');
   });
 });
 

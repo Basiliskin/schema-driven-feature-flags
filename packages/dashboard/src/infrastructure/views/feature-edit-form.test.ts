@@ -315,41 +315,6 @@ describe('renderEnvironmentPage layout', () => {
     });
   const available = { environment: 'production', version: 7, status: 'available', contents: CONTENTS } as const;
 
-  it('opens with the current snapshot card naming the version and its metadata', () => {
-    const html = published(available);
-    const main = html.slice(html.indexOf('<main'));
-    const firstCard = main.slice(main.indexOf('<section'), main.indexOf('</section>'));
-    expect(firstCard).toContain('<section class="card card-current" aria-labelledby="current-heading">');
-    expect(firstCard).toContain('Current snapshot · v7</h2><span class="badge">2 flags</span>');
-    expect(firstCard).toContain('<dt>Created by</dt><dd>ops</dd>');
-    expect(firstCard).toContain('<time datetime="2026-09-19T06:00:00.000Z">2026-09-19 06:00 UTC</time>');
-    expect(firstCard).toContain('<dt>Reason</dt><dd>Launch</dd>');
-    expect(firstCard).toContain('<summary>Raw JSON</summary>');
-    expect(firstCard).toContain('data-copy="current-json" hidden>Copy JSON</button>');
-    expect(firstCard).toContain('<pre id="current-json"><code>{\n  &quot;schemaVersion&quot;: 1,');
-  });
-
-  it('shows a dash for an empty reason and the singular flag count', () => {
-    const one = { ...available, contents: { ...CONTENTS, flags: [BOOLEAN], metadata: { ...METADATA, reason: '' } } };
-    const html = published(one);
-    expect(html).toContain('<span class="badge">1 flag</span>');
-    expect(html).toContain('<dt>Reason</dt><dd><span class="muted">—</span></dd>');
-  });
-
-  it('lists versions newest first with who, when, why and a restore button on every non-current one', () => {
-    const html = published(available);
-    const timeline = html.slice(html.indexOf('<ol class="timeline" reversed>'), html.indexOf('</ol>'));
-    expect(timeline.indexOf('Version 7')).toBeLessThan(timeline.indexOf('Version 6'));
-    expect(timeline.indexOf('Version 6')).toBeLessThan(timeline.indexOf('Version 5'));
-    expect(timeline).toContain(
-      '<li class="is-current">\n<div class="timeline-head"><a href="/env/production/versions/7">Version 7</a><span class="badge badge-accent">current</span></div>\n<p class="muted">ops · <time datetime="2026-09-19T06:00:00.000Z">2026-09-19 06:00 UTC</time></p>\n<p>Launch</p>\n</li>',
-    );
-    expect(timeline).toContain('<button type="submit" class="button-secondary">Restore version 6</button>');
-    expect(timeline).toContain('06:00 UTC</time></p>\n</li>');
-    expect(timeline).toContain('<p class="muted">Details unavailable.</p>');
-    expect(timeline).not.toContain('Restore version 7');
-  });
-
   it('pre-fills the publish box with the current snapshot minus the fields the publisher stamps', () => {
     const html = published(available);
     const box = html.slice(html.indexOf('<textarea id="snapshot"'), html.indexOf('</textarea>', html.indexOf('<textarea id="snapshot"')));
@@ -372,11 +337,8 @@ describe('renderEnvironmentPage layout', () => {
 
   it('leaves the publish box empty and explains when the current snapshot is invalid or missing', () => {
     const invalid = published({ ...available, contents: { status: 'invalid', issues: [] } });
-    expect(invalid).toContain('<span class="badge">invalid</span>');
-    expect(invalid).toContain('Publish a fixed version below.');
     expect(invalid).toContain('required spellcheck="false"></textarea>');
     const missing = published({ environment: 'production', version: 7, status: 'not-available' });
-    expect(missing).toContain('snapshot file is not available');
     expect(missing).not.toContain('flags-heading');
     expect(missing).toContain('required spellcheck="false"></textarea>');
   });

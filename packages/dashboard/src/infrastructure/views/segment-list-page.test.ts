@@ -112,10 +112,10 @@ describe('the segment list page', () => {
     expect(segmentListPath('pro d')).toBe('/env/pro%20d/segments');
   });
 
-  it('is linked from the environment page', () => {
+  it('is linked from the environment page side menu', () => {
     const view: EnvironmentView = { environment: 'production', status: 'empty' };
 
-    expect(renderEnvironmentPage(view)).toContain('<a href="/env/production/segments">Segments</a>');
+    expect(renderEnvironmentPage(view)).toContain('href="/env/production/segments" class="side-menu-item"');
   });
 
   it('has its styles served in the stylesheet', () => {

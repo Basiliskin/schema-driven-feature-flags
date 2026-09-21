@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { NO_URL_STATE } from '../url-state.js';
 import type { VersionPage } from '../../application/list-version-page.js';
-import { renderEnvironmentPage } from './environment-page.js';
 import { renderVersionItem, renderVersionListPage, versionsPath } from './version-list-page.js';
 
 const metadata = { createdAt: '2026-01-01T00:00:00.000Z', createdBy: 'someone', reason: 'A reason' };
@@ -79,18 +78,9 @@ describe('the version history page', () => {
 });
 
 describe('the shared version item', () => {
-  it('renders the same rollback form the environment page uses', () => {
+  it('renders the same rollback form the version list page uses', () => {
     const item = renderVersionItem({ environment: 'production', currentVersion: 3, urlState: NO_URL_STATE }, { version: 2, metadata });
 
-    const environmentPage = renderEnvironmentPage({
-      environment: 'production',
-      status: 'published',
-      currentVersion: 3,
-      versions: [{ version: 2, metadata }, { version: 3, metadata }],
-      current: { environment: 'production', version: 3, status: 'not-available' },
-    });
-
-    expect(environmentPage).toContain(item);
     expect(renderVersionListPage(page({ totalVersions: 3 }))).toContain(item);
   });
 

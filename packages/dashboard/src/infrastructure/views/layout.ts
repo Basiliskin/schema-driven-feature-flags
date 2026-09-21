@@ -21,12 +21,16 @@ ${notices.map(renderNotice).join('\n')}
 ${body}
 </main>`;
 
-/** `nav` is pre-rendered HTML; when given, the page becomes a two-column shell with it on the left. */
+/**
+ * `nav` is pre-rendered HTML; when given, the page becomes a two-column shell with it on the left.
+ * `headerActions` is pre-rendered HTML pinned to the right of the site header.
+ */
 export const renderPage = (
   title: string,
   body: string,
   notices: readonly Notice[] = [],
   nav?: string,
+  headerActions?: string,
 ): string => `<!doctype html>
 <html lang="en">
 <head>
@@ -37,7 +41,9 @@ export const renderPage = (
 <link rel="stylesheet" href="${escapeHtml(STYLESHEET_HREF)}">
 </head>
 <body>
-<header class="site-header"><div class="container"><a class="brand" href="/">FeatureSync dashboard</a></div></header>
+<header class="site-header"><div class="container"><a class="brand" href="/">FeatureSync dashboard</a>${
+  headerActions === undefined ? '' : `<div class="site-header-actions">${headerActions}</div>`
+}</div></header>
 ${
   nav === undefined
     ? renderMain(body, notices)

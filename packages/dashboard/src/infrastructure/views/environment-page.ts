@@ -1,18 +1,16 @@
-import type { EnvironmentView, SnapshotMetadata } from '../../application/browse-environment.js';
+import type { EnvironmentView } from '../../application/browse-environment.js';
 import { filterFlags } from '../../application/filter-flags.js';
 import type { PublishedSegmentsView } from '../../application/list-published-segments.js';
 import { NO_URL_STATE, withUrlState, type DashboardUrlState } from '../url-state.js';
 import { environmentPath, escapeHtml } from './escape.js';
 import type { EditDraft } from './feature-edit-form.js';
-import { renderPage, renderRawJson, renderTimestamp, type Notice } from './layout.js';
+import { renderPage, type Notice } from './layout.js';
 import { NEW_FLAG_DIALOG_ID, NEW_FLAG_TITLE, renderNewFlagForm, type CreateDraft } from './new-flag-form.js';
 import { renderDialogTrigger, renderModalDialog } from './modal-dialog.js';
 import { renderSideMenu } from './side-menu.js';
 import { renderUpdateWatch } from './update-watch.js';
-import { segmentListPath } from './segment-list-page.js';
 import { renderSnapshotContents } from './snapshot-contents.js';
 import { stateInputs } from './state-fields.js';
-import { renderVersionItem, versionsPath } from './version-list-page.js';
 
 export interface EnvironmentPageState {
   readonly notices?: readonly Notice[];
@@ -46,36 +44,6 @@ const prefill = (view: EnvironmentView): string => {
   if (view.status === 'empty') return firstVersionTemplate(view.environment);
   const { current } = view;
   return current.status === 'available' && current.contents.status === 'valid' ? publishTemplate(current.contents.raw) : '';
-};
-
-const renderMetadata = (metadata: SnapshotMetadata): string => `<dl class="meta">
-<div><dt>Created by</dt><dd>${escapeHtml(metadata.createdBy)}</dd></div>
-<div><dt>Created</dt><dd>${renderTimestamp(metadata.createdAt)}</dd></div>
-<div><dt>Reason</dt><dd>${metadata.reason === '' ? '<span class="muted">—</span>' : escapeHtml(metadata.reason)}</dd></div>
-</dl>`;
-
-const renderCurrentCard = (view: PublishedView): string => {
-  const { current } = view;
-  const heading = `<h2 id="current-heading">Current snapshot · v${String(view.currentVersion)}</h2>`;
-  if (current.status !== 'available') {
-    return `<section class="card card-current" aria-labelledby="current-heading">
-<div class="card-head">${heading}</div>
-<p>The current version’s snapshot file is not available.</p>
-</section>`;
-  }
-  const { contents } = current;
-  const summary =
-    contents.status === 'valid'
-      ? `<span class="badge">${String(contents.flags.length)} ${contents.flags.length === 1 ? 'flag' : 'flags'}</span>`
-      : '<span class="badge">invalid</span>';
-  const details =
-    contents.status === 'valid'
-      ? `${renderMetadata(contents.metadata)}\n${renderRawJson('current-json', contents.raw)}`
-      : '<p>The current snapshot is not valid, so its flags can’t be edited here. Publish a fixed version below.</p>';
-  return `<section class="card card-current" aria-labelledby="current-heading">
-<div class="card-head">${heading}${summary}</div>
-${details}
-</section>`;
 };
 
 // The filter itself is the input's own value, so only the rest of the state is carried in hidden fields.
@@ -116,16 +84,6 @@ ${flags}${noMatchMessage}${newFlag}
 </section>`;
 };
 
-const renderVersions = (view: PublishedView, urlState: DashboardUrlState): string => `<section class="section" aria-labelledby="versions-heading">
-<div class="section-head"><h2 id="versions-heading">Version history</h2><a href="${escapeHtml(versionsPath(view.environment))}">View all versions</a></div>
-<ol class="timeline" reversed>
-${[...view.versions]
-  .reverse()
-  .map((entry) => renderVersionItem({ ...view, urlState }, entry))
-  .join('\n')}
-</ol>
-</section>`;
-
 // Opens on load when a publish was rejected, so the operator lands back on their draft; on a conflict
 // the review dialog opens first and offers to return to this draft from there.
 const renderPublishDialog = (view: EnvironmentView, state: EnvironmentPageState, urlState: DashboardUrlState): string =>
@@ -142,26 +100,22 @@ ${stateInputs(urlState)}${view.status === 'published' ? `<input type="hidden" na
 </form>`,
   });
 
-const renderPublished = (view: PublishedView, state: EnvironmentPageState, urlState: DashboardUrlState): string =>
+const renderPublished = (view: PublishedView, state: EnvironmentPageState): string =>
   `${renderUpdateWatch(view.environment, view.currentVersion, state.conflict)}
-${renderCurrentCard(view)}
-${renderFlags(view, state)}
-${renderVersions(view, urlState)}`;
+${renderFlags(view, state)}`;
 
 export const renderEnvironmentPage = (view: EnvironmentView, state: EnvironmentPageState = {}): string => {
   const urlState = state.urlState ?? NO_URL_STATE;
   const summary =
     view.status === 'empty'
       ? '<section class="card card-current"><p>Nothing has been published to this environment yet.</p></section>'
-      : renderPublished(view, state, urlState);
+      : renderPublished(view, state);
   return renderPage(
     view.environment,
-    `<div class="page-head page-head-actions"><div><p class="eyebrow">Environment</p><h1>Environment ${escapeHtml(view.environment)}</h1></div>
-<a href="${escapeHtml(segmentListPath(view.environment))}">Segments</a>
-${renderDialogTrigger({ dialogId: 'publish-dialog', label: 'Publish new version' })}</div>
-${summary}
+    `${summary}
 ${renderPublishDialog(view, state, urlState)}`,
     state.notices,
     renderSideMenu(view.environment, 'flags', urlState),
+    renderDialogTrigger({ dialogId: 'publish-dialog', label: 'Publish new version' }),
   );
 };
