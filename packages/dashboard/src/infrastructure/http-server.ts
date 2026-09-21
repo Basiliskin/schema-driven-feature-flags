@@ -6,6 +6,9 @@ import { compareWithCurrent } from '../application/compare-versions.js';
 import { applyDraftMerge, mergeDraft } from '../application/merge-draft.js';
 import type { MergeChoices, Side } from '../domain/snapshot-merge.js';
 import { editFeature, type EditFeaturePorts } from '../application/edit-feature.js';
+import { discardPendingChangeSet, publishPendingChangeSet } from '../application/publish-pending-change-set.js';
+import { reviewPendingChangeSet } from '../application/review-pending-change-set.js';
+import { stageFlagEdit } from '../application/stage-flag-edit.js';
 import {
   listPublishedSegments,
   type ListPublishedSegmentsPorts,
@@ -14,6 +17,7 @@ import {
 import type { SegmentUploadPorts } from '../application/upload-segment.js';
 import { describeFailure } from '../application/error-messages.js';
 import type { FlagEdit, FlagType } from '../domain/flag-edit.js';
+import { parsePendingChangeSet, type PendingChangeSet } from '../domain/pending-change-set.js';
 import {
   publishSnapshot,
   rollbackSnapshot,
@@ -27,6 +31,8 @@ import { renderFlagPage } from './views/flag-page.js';
 import { renderHomePage } from './views/home-page.js';
 import type { Notice } from './views/layout.js';
 import type { CreateDraft } from './views/new-flag-form.js';
+import { REVIEW_ACTIONS } from './views/review-dialog.js';
+import { PENDING_FIELD } from './views/state-fields.js';
 import { renderChangesFragment } from './views/changes-dialog.js';
 import { renderMergeFragment } from './views/merge-dialog.js';
 import { CLIENT_SCRIPT, CLIENT_SCRIPT_PATH } from './views/client-script.js';
@@ -115,17 +121,40 @@ const parseVersion = (value: string | null | undefined): number => {
 };
 
 
-const outcomeNotices = (outcome: WriteOutcome): Notice[] => {
+/** What the notices and status code need from a write; staging reports success without a published version. */
+type Reported =
+  | { readonly kind: 'success'; readonly message: string; readonly warning?: string }
+  | Extract<WriteOutcome, { kind: 'failure' }>;
+
+const outcomeNotices = (outcome: Reported): Notice[] => {
   if (outcome.kind === 'failure') return [{ kind: 'error', message: outcome.message, details: outcome.issues }];
   const notices: Notice[] = [{ kind: 'success', message: outcome.message }];
   if (outcome.warning !== undefined) notices.push({ kind: 'warning', message: outcome.warning });
   return notices;
 };
 
-const writeStatus = (outcome: WriteOutcome): number => {
+const writeStatus = (outcome: Reported): number => {
   if (outcome.kind === 'success') return 200;
   return outcome.invalidInput === true ? 400 : 422;
 };
+
+// The main edit form's three controls; every other form that reaches the edit route still publishes at once.
+const STAGED_EDIT_KINDS: ReadonlySet<FlagEdit['kind']> = new Set(['enabled', 'default', 'setRules']);
+
+const pendingOf = (fields: URLSearchParams) => parsePendingChangeSet(fields.get(PENDING_FIELD));
+
+const NO_PENDING_MESSAGE = 'There are no pending changes to review; stage an edit first.';
+const PENDING_ACTION_MESSAGE = `Choose one of these actions: ${Object.values(REVIEW_ACTIONS).join(', ')}.`;
+const DISCARDED_MESSAGE = 'Discarded your pending changes.';
+
+const badRequest = (message: string): Extract<Reported, { kind: 'failure' }> => ({
+  kind: 'failure',
+  message,
+  issues: [],
+  invalidInput: true,
+});
+
+type PendingResult = { readonly outcome: Reported; readonly pending: PendingChangeSet | undefined };
 
 const BASE_VERSION_MESSAGE = 'The edit form is out of date; reload the page and redo your edit.';
 const TYPE_MESSAGE = 'Choose whether the new flag is a boolean or a config flag.';
@@ -297,6 +326,61 @@ function createDashboardRequestHandler(
   const isSameOrigin = (request: IncomingMessage): boolean =>
     request.headers.origin === `http://${LOOPBACK_HOST}:${String(listeningPort())}`;
 
+  const runEdit = async (
+    environment: string,
+    parsed: EditRequest,
+    pending: PendingChangeSet | undefined,
+  ): Promise<PendingResult & { readonly staged: boolean }> => {
+    if (!parsed.ok) {
+      const invalidInput = parsed.invalidInput === true ? { invalidInput: true } : {};
+      return { outcome: { kind: 'failure', message: parsed.message, issues: [], ...invalidInput }, pending, staged: false };
+    }
+    if (!STAGED_EDIT_KINDS.has(parsed.edit.kind)) {
+      return { outcome: await editFeature(ports, environment, parsed.baseVersion, parsed.edit), pending, staged: false };
+    }
+    const staged = await stageFlagEdit(ports, environment, parsed.edit, pending);
+    return {
+      outcome: staged,
+      pending: staged.kind === 'success' ? staged.pending : pending,
+      staged: staged.kind === 'success',
+    };
+  };
+
+  // The draft is only cleared by a publish that succeeded or by Discard; a failed publish hands it back untouched.
+  const publishPending =
+    (force: boolean) =>
+    async (environment: string, pending: PendingChangeSet): Promise<PendingResult> => {
+      const outcome = await publishPendingChangeSet(ports, environment, pending, { force });
+      return { outcome, pending: outcome.kind === 'success' ? undefined : pending };
+    };
+
+  const PENDING_ACTIONS = new Map<string, (environment: string, pending: PendingChangeSet) => Promise<PendingResult>>([
+    [REVIEW_ACTIONS.update, publishPending(false)],
+    [REVIEW_ACTIONS.publishAnyway, publishPending(true)],
+    [
+      REVIEW_ACTIONS.discard,
+      () =>
+        Promise.resolve({ outcome: { kind: 'success', message: DISCARDED_MESSAGE }, pending: discardPendingChangeSet() }),
+    ],
+  ]);
+
+  const runPendingAction = async (
+    environment: string,
+    fields: URLSearchParams,
+    pending: PendingChangeSet | undefined,
+  ): Promise<PendingResult> => {
+    const action = PENDING_ACTIONS.get(fields.get('field') ?? '');
+    if (pending === undefined) return { outcome: badRequest(NO_PENDING_MESSAGE), pending };
+    if (action === undefined) return { outcome: badRequest(PENDING_ACTION_MESSAGE), pending };
+    return action(environment, pending);
+  };
+
+  // Everything a page needs to render the draft it echoes: the draft itself and how it differs from its base.
+  const pendingState = async (environment: string, pending: PendingChangeSet | undefined, reviewOpen = false) =>
+    pending === undefined
+      ? {}
+      : { pending, review: await reviewPendingChangeSet(ports, environment, pending), reviewOpen };
+
   const editRoute = (
     environment: string,
     parse: (fields: URLSearchParams, segments: PublishedSegmentsView) => EditRequest,
@@ -307,19 +391,13 @@ function createDashboardRequestHandler(
       const fields = await readForm(request);
       const segments = await listPublishedSegments(ports, environment);
       const parsed = parse(fields, segments);
-      const outcome: WriteOutcome = parsed.ok
-        ? await editFeature(ports, environment, parsed.baseVersion, parsed.edit)
-        : {
-            kind: 'failure',
-            message: parsed.message,
-            issues: [],
-            ...(parsed.invalidInput === true ? { invalidInput: true } : {}),
-          };
+      const { outcome, pending, staged } = await runEdit(environment, parsed, pendingOf(fields));
       const view = await browseEnvironment(ports, environment);
       const state = {
         notices: outcomeNotices(outcome),
         publishedSegments: segments,
         urlState: parseUrlStateFields(fields),
+        ...(await pendingState(environment, pending, staged)),
         ...(outcome.kind === 'failure' ? draftState(fields, outcome.message, outcome.issues) : {}),
         ...(parsed.ok && outcome.kind === 'failure' && outcome.conflict !== undefined
           ? { conflict: { since: outcome.conflict.since, key: parsed.edit.key } }
@@ -352,6 +430,7 @@ function createDashboardRequestHandler(
           send(response, 200, renderEnvironmentPage(await browseEnvironment(ports, environment), {
             publishedSegments: await listPublishedSegments(ports, environment),
             urlState: parseUrlState(url.searchParams),
+            ...(await pendingState(environment, pendingOf(url.searchParams))),
           }));
         },
       };
@@ -424,6 +503,7 @@ function createDashboardRequestHandler(
             notices: outcomeNotices(outcome),
             publishedSegments: await listPublishedSegments(ports, environment),
             urlState: parseUrlStateFields(fields),
+            ...(await pendingState(environment, pendingOf(fields))),
             ...(outcome.kind === 'failure' ? { draft } : {}),
             ...(outcome.kind === 'failure' && outcome.conflict !== undefined ? { conflict: outcome.conflict } : {}),
           };
@@ -442,6 +522,23 @@ function createDashboardRequestHandler(
             notices: outcomeNotices(outcome),
             publishedSegments: await listPublishedSegments(ports, environment),
             urlState: parseUrlStateFields(fields),
+            ...(await pendingState(environment, pendingOf(fields))),
+          }));
+        },
+      };
+    }
+    if (segments.length === 3 && segments[2] === 'pending') {
+      return {
+        method: 'POST',
+        handle: async (request, response) => {
+          const fields = await readForm(request);
+          const { outcome, pending } = await runPendingAction(environment, fields, pendingOf(fields));
+          const view = await browseEnvironment(ports, environment);
+          send(response, writeStatus(outcome), renderEnvironmentPage(view, {
+            notices: outcomeNotices(outcome),
+            publishedSegments: await listPublishedSegments(ports, environment),
+            urlState: parseUrlStateFields(fields),
+            ...(await pendingState(environment, pending, outcome.kind === 'failure')),
           }));
         },
       };

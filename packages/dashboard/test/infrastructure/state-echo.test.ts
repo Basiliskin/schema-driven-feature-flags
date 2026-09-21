@@ -105,10 +105,10 @@ describe('the view a write POST comes back to', () => {
     });
 
     it('applies it when the edit is rejected', async () => {
-      const dashboard = await start(conflicted().ports);
+      const dashboard = await start(fakes().ports);
 
       const reply = await call(dashboard, 'POST', path, {
-        body: form({ ...VIEW, baseVersion: '3', field: 'enabled' }),
+        body: form({ ...VIEW, baseVersion: '3', field: 'default', default: '1' }),
       });
 
       expectsTheViewBack(reply, 422);

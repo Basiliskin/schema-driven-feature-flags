@@ -1,12 +1,13 @@
 import type { FlagDefinitionView } from '../../application/browse-environment.js';
 import type { PublishedSegmentsView } from '../../application/list-published-segments.js';
+import type { PendingChangeSet } from '../../domain/pending-change-set.js';
 import { withUrlState, type DashboardUrlState } from '../url-state.js';
 import { renderConfirmation } from './confirm-dialog.js';
 import { escapeHtml, flagPath } from './escape.js';
 import { dialogId } from './modal-dialog.js';
 import { renderRolloutForms } from './rollout-form.js';
 import { renderSegmentAttachForm } from './segment-attach-form.js';
-import { stateInputs, type WriteFormContext } from './state-fields.js';
+import { pendingInputs, stateInputs, type WriteFormContext } from './state-fields.js';
 
 export interface EditDraft {
   readonly key: string;
@@ -26,6 +27,8 @@ export interface EditContext {
   /** The view to come back to after a write; every form below carries it so a submit does not reset the page. */
   readonly urlState: DashboardUrlState;
   readonly draft?: EditDraft;
+  /** The operator's staged edits, echoed by every form; `baseVersion` is then the version they started from. */
+  readonly pending?: PendingChangeSet | undefined;
   /** Every segment published in the Environment, loaded by the route and offered by the attach form. */
   readonly publishedSegments?: PublishedSegmentsView;
 }
@@ -60,6 +63,7 @@ const writeFormContext = (flag: FlagDefinitionView, context: EditContext): Write
   action: withUrlState(flagPath(context.environment, flag.key), context.urlState),
   baseVersionInput: baseVersionInput(context),
   stateInputs: stateInputs(context.urlState),
+  pendingInputs: pendingInputs(context.pending),
 });
 
 const renderDeleteControl = (flag: FlagDefinitionView, form: WriteFormContext): string =>
@@ -80,7 +84,7 @@ export const renderFeatureEditForm = (flag: FlagDefinitionView, context: EditCon
   const enabled = draft?.enabled ?? flag.enabled;
   const form = writeFormContext(flag, context);
   return `${draft === undefined ? '' : renderDraftError(draft)}<form method="post" action="${escapeHtml(form.action)}" class="stack">
-${form.baseVersionInput}${form.stateInputs}
+${form.baseVersionInput}${form.stateInputs}${form.pendingInputs}
 <div class="form-row"><label class="check"><input type="checkbox" name="enabled"${enabled ? ' checked' : ''}> Enabled</label>
 <button type="submit" name="field" value="enabled">Save enabled</button></div>
 ${flag.type === 'config' ? renderDefaultControl(flag, draft) : ''}

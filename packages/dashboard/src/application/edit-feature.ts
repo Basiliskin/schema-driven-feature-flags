@@ -20,7 +20,7 @@ export type EditFeaturePorts = BrowsePorts & WritePorts;
 
 const CREATED_BY = 'dashboard';
 
-const describeEdit = (edit: FlagEdit): string => {
+export const describeEdit = (edit: FlagEdit): string => {
   switch (edit.kind) {
     case 'enabled':
       return `Set ${edit.key}.enabled=${String(edit.enabled)} via dashboard`;
@@ -43,7 +43,7 @@ const describeEdit = (edit: FlagEdit): string => {
   }
 };
 
-const editFailure = (failure: FlagEditFailure): WriteOutcome => {
+export const editFailure = (failure: FlagEditFailure): Extract<WriteOutcome, { kind: 'failure' }> => {
   switch (failure.kind) {
     case 'UNKNOWN_FEATURE':
       return {

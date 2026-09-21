@@ -1,16 +1,19 @@
 import type { EnvironmentView } from '../../application/browse-environment.js';
 import { filterFlags } from '../../application/filter-flags.js';
 import type { PublishedSegmentsView } from '../../application/list-published-segments.js';
+import type { PendingReview } from '../../application/review-pending-change-set.js';
+import type { PendingChangeSet } from '../../domain/pending-change-set.js';
 import { NO_URL_STATE, withUrlState, type DashboardUrlState } from '../url-state.js';
 import { environmentPath, escapeHtml } from './escape.js';
 import type { EditDraft } from './feature-edit-form.js';
 import { renderPage, type Notice } from './layout.js';
 import { NEW_FLAG_DIALOG_ID, NEW_FLAG_TITLE, renderNewFlagForm, type CreateDraft } from './new-flag-form.js';
 import { renderDialogTrigger, renderModalDialog } from './modal-dialog.js';
+import { renderReviewDialog, renderReviewTrigger } from './review-dialog.js';
 import { renderSideMenu } from './side-menu.js';
 import { renderUpdateWatch } from './update-watch.js';
 import { renderSnapshotContents } from './snapshot-contents.js';
-import { stateInputs } from './state-fields.js';
+import { pendingInputs, stateInputs } from './state-fields.js';
 
 export interface EnvironmentPageState {
   readonly notices?: readonly Notice[];
@@ -24,6 +27,12 @@ export interface EnvironmentPageState {
   readonly conflict?: { readonly since: number; readonly key?: string };
   /** The query string this page was asked for; absent renders the page as if no query state were set. */
   readonly urlState?: DashboardUrlState;
+  /** Edits staged but not yet published; every form on the page hands them back on submit. */
+  readonly pending?: PendingChangeSet | undefined;
+  /** How the staged edits differ from the version they started from; the Review Dialog is only offered with both this and `pending`. */
+  readonly review?: PendingReview | undefined;
+  /** Opens the Review Dialog on load, so the operator lands on what they just staged. */
+  readonly reviewOpen?: boolean;
 }
 
 type PublishedView = Extract<EnvironmentView, { status: 'published' }>;
@@ -47,8 +56,8 @@ const prefill = (view: EnvironmentView): string => {
 };
 
 // The filter itself is the input's own value, so only the rest of the state is carried in hidden fields.
-const renderFilterForm = (environment: string, urlState: DashboardUrlState): string =>
-  `<form class="flag-filter-form" method="get" action="${escapeHtml(environmentPath(environment))}">${stateInputs({ ...urlState, filter: '' })}<input type="search" class="flag-filter" data-filter="flag-list" name="filter" value="${escapeHtml(urlState.filter)}" placeholder="Filter flags…" aria-label="Filter flags by key, type or on/off"><button type="submit" class="button-secondary">Filter</button></form>`;
+const renderFilterForm = (environment: string, urlState: DashboardUrlState, pending: PendingChangeSet | undefined): string =>
+  `<form class="flag-filter-form" method="get" action="${escapeHtml(environmentPath(environment))}">${stateInputs({ ...urlState, filter: '' })}${pendingInputs(pending)}<input type="search" class="flag-filter" data-filter="flag-list" name="filter" value="${escapeHtml(urlState.filter)}" placeholder="Filter flags…" aria-label="Filter flags by key, type or on/off"><button type="submit" class="button-secondary">Filter</button></form>`;
 
 const renderFlags = (view: PublishedView, state: EnvironmentPageState): string => {
   const { current } = view;
@@ -58,8 +67,9 @@ const renderFlags = (view: PublishedView, state: EnvironmentPageState): string =
   const { contents } = current;
   const context = {
     environment: view.environment,
-    baseVersion: view.currentVersion,
+    baseVersion: state.pending?.baseVersion ?? view.currentVersion,
     urlState,
+    pending: state.pending,
     publishedSegments: state.publishedSegments ?? { status: 'unavailable' as const },
   };
   // The filter is applied here rather than inside the shared renderer, which the single-version page reuses unfiltered.
@@ -72,14 +82,19 @@ const renderFlags = (view: PublishedView, state: EnvironmentPageState): string =
   const creatable = contents.status === 'valid';
   const newFlag = creatable ? `\n${renderNewFlagForm({ ...context, ...(createDraft === undefined ? {} : { draft: createDraft }) })}` : '';
   const newFlagTrigger = creatable ? renderDialogTrigger({ dialogId: NEW_FLAG_DIALOG_ID, label: NEW_FLAG_TITLE }) : '';
+  const reviewable = state.pending !== undefined && state.review !== undefined;
+  const reviewTrigger = reviewable ? renderReviewTrigger() : '';
+  const reviewDialog = reviewable
+    ? `\n${renderReviewDialog({ environment: view.environment, urlState, pending: state.pending, review: state.review, openOnLoad: state.reviewOpen === true })}`
+    : '';
   const filterable = contents.status === 'valid' && contents.flags.length > 0;
-  const filter = filterable ? renderFilterForm(view.environment, urlState) : '';
+  const filter = filterable ? renderFilterForm(view.environment, urlState, state.pending) : '';
   // The message stays in the markup while rows match, because the in-browser instant filter reveals it without a reload.
   const noMatchMessage = filterable ? `\n<p class="muted" data-filter-empty${noMatch ? '' : ' hidden'}>No flags match.</p>` : '';
   return `<section class="section" aria-labelledby="flags-heading">
-<div class="section-head"><h2 id="flags-heading">Flags</h2>${filter}${newFlagTrigger}</div>
+<div class="section-head"><h2 id="flags-heading">Flags</h2>${filter}${reviewTrigger}${newFlagTrigger}</div>
 <div class="stack">
-${flags}${noMatchMessage}${newFlag}
+${flags}${noMatchMessage}${newFlag}${reviewDialog}
 </div>
 </section>`;
 };
@@ -94,7 +109,7 @@ const renderPublishDialog = (view: EnvironmentView, state: EnvironmentPageState,
     openOnLoad: state.draft !== undefined && state.conflict === undefined,
     body: `<p class="muted">Starts from the current snapshot. <code>version</code>, <code>previousVersion</code> and <code>createdAt</code> are set when you publish.</p>
 <form method="post" action="${escapeHtml(withUrlState(`${environmentPath(view.environment)}/publish`, urlState))}" class="stack">
-${stateInputs(urlState)}${view.status === 'published' ? `<input type="hidden" name="baseVersion" value="${String(view.currentVersion)}">\n` : ''}<label for="snapshot">Snapshot JSON</label>
+${stateInputs(urlState)}${pendingInputs(state.pending)}${view.status === 'published' ? `<input type="hidden" name="baseVersion" value="${String(view.currentVersion)}">\n` : ''}<label for="snapshot">Snapshot JSON</label>
 <textarea id="snapshot" name="snapshot" rows="16" required spellcheck="false">${escapeHtml(state.draft ?? prefill(view))}</textarea>
 <div class="actions"><button type="submit">Publish</button></div>
 </form>`,

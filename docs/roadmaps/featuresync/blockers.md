@@ -93,3 +93,11 @@
 - 2026-09-21 | horizon 26 | Should a confirmation also guard the rollback action on the versions page? It is arguably destructive but the operator's complaint enumerated deletes.
 - 2026-09-21 | horizon 26 | Should the four remaining write-form surfaces (edit-flag, rollout, attach-segment, create-segment) move into dialogs before or after the write-model change, given a staged-write — see horizon-26 roadmap.md
 - 2026-09-21 | horizon 26 | Does app.js's form[action$="/features"] selector silently drop carried-over new-flag edits whenever the page carries URL state, and is that worth fixing given app.js is outside the coverage gate?
+- 2026-09-21 | horizon 27 | Once other Write Surfaces are converted, does one Pending Change Set span flags AND segments, and can it mix a flag edit with a segment CSV upload (different body limit, different writer)?
+- 2026-09-21 | horizon 27 | What is the real serialized byte cost of the accumulated-snapshot payload echoed on ~9 forms for a production-size snapshot, and at what snapshot size does hidden-field carriage stop working under the 1 MiB cap?
+- 2026-09-21 | horizon 27 | Does a Pending Change Set need to survive navigation between pages? Hidden-field carriage holds only within one rendered page, and multi-surface staging almost certainly crosses pages.
+- 2026-09-21 | horizon 27 | Can non-flag writes (rollback, deletes, segment publishes) be expressed as an accumulated snapshot at all, or does multi-surface staging force a different representation?
+- 2026-09-21 | horizon 27 | After every surface is staged, does replayOnLatest/canReplayEdit still have a caller, or are it and the changes-dialog merge UI deletable?
+- 2026-09-21 | horizon 27 | Did the frozen-Base-Version change leak into the seven immediate-publish forms, making them post a stale baseVersion and take spurious 422s while a draft is open?
+- 2026-09-21 | horizon 27 | Open: how should a staged draft larger than Node's 16 KiB header cap survive the GET filter form (POST it, drop the field there, or cap the draft lower)? Decide before the draft is expected to grow.
+- 2026-09-21 | horizon 27 | Which phase updates the three stale e2e specs (concurrent-edits x2, url-state) to the staged flow, given drift-browser-spec's diff must list only its own spec and amendments are 3 of 3? — resolved by decision 2026-09-21

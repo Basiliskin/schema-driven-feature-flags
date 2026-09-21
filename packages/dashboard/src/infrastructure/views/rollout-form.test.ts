@@ -26,7 +26,7 @@ const ROLLED_OUT_RULE = {
 const PLAIN_RULE = { when: { plan: 'free' }, enabled: false };
 
 const render = (rules: readonly unknown[]): string =>
-  renderRolloutForms(flagWith(rules), { action: ACTION, baseVersionInput: BASE_VERSION_INPUT, stateInputs: '' });
+  renderRolloutForms(flagWith(rules), { action: ACTION, baseVersionInput: BASE_VERSION_INPUT, stateInputs: '', pendingInputs: '' });
 
 describe('renderRolloutForms', () => {
   it('shows a badge only for the rule that has a rollout', () => {
@@ -180,7 +180,7 @@ describe('the attached segments of a flag', () => {
   it('escapes a flag key into an id that is unique and safe to select on', () => {
     const dotted = renderRolloutForms(
       { ...flagWith([SEGMENT_RULE_FULL]), key: 'checkout.limits/v2' },
-      { action: ACTION, baseVersionInput: BASE_VERSION_INPUT, stateInputs: '' },
+      { action: ACTION, baseVersionInput: BASE_VERSION_INPUT, stateInputs: '', pendingInputs: '' },
     );
     expect(dotted).toContain('data-open-dialog="confirm-detach_checkout_002elimits_002fv2_0"');
     expect(dotted).toContain('<dialog id="confirm-detach_checkout_002elimits_002fv2_0"');
@@ -210,7 +210,7 @@ describe('the stylesheet', () => {
 describe('the URL state the rollout and detach forms carry', () => {
   const STATE_INPUTS = '<input type="hidden" name="filter" value="dark">';
   const render = (rules: readonly unknown[]): string =>
-    renderRolloutForms(flagWith(rules), { action: ACTION, baseVersionInput: BASE_VERSION_INPUT, stateInputs: STATE_INPUTS });
+    renderRolloutForms(flagWith(rules), { action: ACTION, baseVersionInput: BASE_VERSION_INPUT, stateInputs: STATE_INPUTS, pendingInputs: '' });
 
   it('puts it in the set-rollout form and in the detach form of a segment rule', () => {
     const html = render([{ when: { plan: { inSegment: 'beta-testers' } }, rollout: { percentage: 40, bucketBy: 'userId', salt: '' } }]);

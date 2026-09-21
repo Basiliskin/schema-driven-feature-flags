@@ -1,9 +1,10 @@
 import type { FlagType } from '../../domain/flag-edit.js';
+import type { PendingChangeSet } from '../../domain/pending-change-set.js';
 import { withUrlState, type DashboardUrlState } from '../url-state.js';
 import { environmentPath, escapeHtml } from './escape.js';
 import { renderDraftError } from './feature-edit-form.js';
 import { renderModalDialog } from './modal-dialog.js';
-import { stateInputs } from './state-fields.js';
+import { pendingInputs, stateInputs } from './state-fields.js';
 
 export const NEW_FLAG_DIALOG_ID = 'new-flag-dialog';
 export const NEW_FLAG_TITLE = 'New flag';
@@ -21,6 +22,7 @@ export interface NewFlagContext {
   readonly environment: string;
   readonly baseVersion: number;
   readonly urlState: DashboardUrlState;
+  readonly pending?: PendingChangeSet | undefined;
   readonly draft?: CreateDraft;
 }
 
@@ -38,7 +40,7 @@ export const renderNewFlagForm = (context: NewFlagContext): string => {
     // Opens on load when a create draft was rejected, so the operator sees the error next to their input.
     openOnLoad: draft !== undefined,
     body: `${draft === undefined ? '' : renderDraftError(draft)}<form method="post" action="${escapeHtml(action)}" class="stack">
-<input type="hidden" name="baseVersion" value="${String(context.baseVersion)}">${stateInputs(context.urlState)}
+<input type="hidden" name="baseVersion" value="${String(context.baseVersion)}">${stateInputs(context.urlState)}${pendingInputs(context.pending)}
 <div class="form-row">
 <label>Key <input type="text" name="key" required value="${escapeHtml(draft?.key ?? '')}" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
 <label>Type <select name="type">${typeOption('boolean', type)}${typeOption('config', type)}</select></label>

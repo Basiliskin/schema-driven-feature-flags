@@ -66,7 +66,7 @@ export type EnvironmentView =
 const isSnapshotNotFound = (error: unknown): boolean =>
   typeof error === 'object' && error !== null && 'reason' in error && error.reason === 'SNAPSHOT_NOT_FOUND';
 
-const readContents = (text: string): SnapshotContents => {
+export const readContents = (text: string): SnapshotContents => {
   let raw: unknown;
   try {
     raw = JSON.parse(text);

@@ -24,7 +24,7 @@ export const renderConfirmation = (
   { id, title, prompt, triggerLabel, confirmLabel, field, hiddenInputs = '' }: Confirmation,
   form: WriteFormContext,
 ): string => {
-  const body = `<form method="post" action="${escapeHtml(form.action)}">${form.baseVersionInput}${form.stateInputs}${hiddenInputs}
+  const body = `<form method="post" action="${escapeHtml(form.action)}">${form.baseVersionInput}${form.stateInputs}${form.pendingInputs}${hiddenInputs}
 <p>${prompt}</p>
 <button type="submit" class="button-danger" name="field" value="${escapeHtml(field)}">${escapeHtml(confirmLabel)}</button>
 </form>`;

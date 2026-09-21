@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import type { PendingChangeSet } from '../../domain/pending-change-set.js';
 import { NO_URL_STATE, type DashboardUrlState } from '../url-state.js';
 import type { EnvironmentView, FlagDefinitionView, SnapshotContents, SnapshotVersionView } from '../../application/browse-environment.js';
 import { renderEnvironmentPage } from './environment-page.js';
 import { flagPath } from './escape.js';
 import { renderFeatureEditForm, type EditContext } from './feature-edit-form.js';
 import { renderSnapshotContents } from './snapshot-contents.js';
+import { pendingInputs } from './state-fields.js';
 import { renderVersionPage } from './version-page.js';
 
 const BOOLEAN: FlagDefinitionView = { key: 'new-dashboard', type: 'boolean', enabled: true, defaultValue: true, ruleCount: 0, rules: [] };
@@ -410,5 +412,29 @@ describe('the URL state every write form carries', () => {
 
   it('leaves every form free of hidden state when the page was asked for without a query string', () => {
     expect(renderFeatureEditForm(CONFIG, CONTEXT)).not.toContain('name="filter"');
+  });
+});
+
+describe('the staged draft every write form carries', () => {
+  const PENDING: PendingChangeSet = { baseVersion: 4, snapshot: { features: {} } };
+  const rendered = renderFeatureEditForm(CONFIG, { ...CONTEXT, urlState: VIEWED, pending: PENDING });
+
+  it('appends it after the view state, never between the state inputs', () => {
+    const forms = rendered.split('<form method="post"').slice(1);
+    const editing = forms.filter((body) => body.includes('name="field" value="enabled"') || body.includes('value="delete"'));
+
+    expect(editing).toHaveLength(2);
+    for (const body of editing) expect(body).toContain(VIEWED_INPUTS + pendingInputs(PENDING));
+  });
+
+  it('puts it in every form that posts, so no submit drops the draft', () => {
+    const posting = rendered.match(/<form method="post"/g) ?? [];
+
+    expect(posting.length).toBeGreaterThan(2);
+    expect(rendered.match(/name="pending"/g)).toHaveLength(posting.length);
+  });
+
+  it('adds nothing when no edits are staged', () => {
+    expect(renderFeatureEditForm(CONFIG, { ...CONTEXT, urlState: VIEWED })).not.toContain('name="pending"');
   });
 });

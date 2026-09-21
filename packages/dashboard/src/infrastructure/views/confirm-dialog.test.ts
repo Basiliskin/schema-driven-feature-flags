@@ -6,6 +6,7 @@ const FORM: WriteFormContext = {
   action: '/env/production/features/checkout',
   baseVersionInput: '<input type="hidden" name="baseVersion" value="7">',
   stateInputs: '<input type="hidden" name="filter" value="dark">',
+  pendingInputs: '',
 };
 
 const CONFIRMATION = {

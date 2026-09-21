@@ -94,7 +94,7 @@ const renderRuleRollout = (rule: unknown, flagKey: string, ruleIndex: number, fo
   return `<li class="rule-rollout">
 <div class="rule-head"><span class="rule-label">Rule ${label}</span>${renderRolloutBadge(rollout)}</div>
 ${renderSegmentKeys(segmentKeysOf(rule), flagKey, ruleIndex, rollout, form)}
-<form method="post" action="${escapeHtml(form.action)}">${form.baseVersionInput}${form.stateInputs}
+<form method="post" action="${escapeHtml(form.action)}">${form.baseVersionInput}${form.stateInputs}${form.pendingInputs}
 <div class="form-row">
 <input type="hidden" name="ruleIndex" value="${escapeHtml(index)}">
 <label>Percentage <input type="number" name="percentage" min="0" max="100" step="0.01" value="${escapeHtml(String(rollout?.percentage ?? 0))}"></label>

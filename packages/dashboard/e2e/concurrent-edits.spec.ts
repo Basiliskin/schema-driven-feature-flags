@@ -30,15 +30,32 @@ test.describe('someone else publishes while the page is open', () => {
   });
 
   test('saves an edit on top of a change to a different field without asking', async ({ page, env, openEnvironment }) => {
+    const rule = { when: { plan: 'pro' }, enabled: true };
+    // Rollouts only exist from schemaVersion 2, which publishAs does not write.
+    const publishV2 = (createdBy: string, enabled: boolean) =>
+      env.publish({
+        schemaVersion: 2,
+        createdBy,
+        reason: 'Other change',
+        features: { ...SEED, 'new-dashboard': { type: 'boolean', enabled, rules: [rule] } },
+      });
+    publishV2('alice', true);
     await openEnvironment();
-    env.publishAs('bob', { ...SEED, 'checkout-limits': { type: 'config', enabled: true, default: { max: 3 } } });
+    publishV2('bob', false);
 
-    const row = await expandFlag(page, 'checkout-limits');
-    await row.getByLabel('Default JSON').fill('{"max": 5}');
-    await row.getByRole('button', { name: 'Save default' }).click();
+    const row = await expandFlag(page, 'new-dashboard');
+    await row.locator('details.rollouts > summary').click();
+    const rollout = row.locator('.rule-rollout');
+    await rollout.getByLabel('Percentage').fill('25');
+    await rollout.getByLabel('Salt').fill('autumn');
+    await rollout.getByRole('button', { name: 'Save rollout' }).click();
 
     await expect(page.getByText('your edit was applied on top of it')).toBeVisible();
-    expect(env.features()['checkout-limits']).toEqual({ type: 'config', enabled: true, default: { max: 5 } });
+    expect(env.features()['new-dashboard']).toEqual({
+      type: 'boolean',
+      enabled: false,
+      rules: [{ ...rule, rollout: { percentage: 25, bucketBy: 'userId', salt: 'autumn' } }],
+    });
   });
 
   test('offers a review when the edited flag was deleted meanwhile', async ({ page, env, openEnvironment }) => {
@@ -46,8 +63,8 @@ test.describe('someone else publishes while the page is open', () => {
     env.publishAs('bob', Object.fromEntries(Object.entries(SEED).filter(([key]) => key !== 'dark-mode')));
 
     const row = await expandFlag(page, 'dark-mode');
-    await row.getByLabel('Enabled').check();
-    await row.getByRole('button', { name: 'Save enabled' }).click();
+    await row.getByRole('button', { name: 'Delete', exact: true }).click();
+    await page.getByRole('dialog', { name: 'Delete dark-mode' }).getByRole('button', { name: 'Delete dark-mode' }).click();
 
     await expect(page.getByText('Someone else published version 2 meanwhile, so your edit was not saved.')).toBeVisible();
     await page.getByRole('button', { name: 'Review changes' }).click();

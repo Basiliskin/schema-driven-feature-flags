@@ -33,6 +33,7 @@ const render = (of: FlagDefinitionView, context: Partial<AttachContext> = {}): s
     action: '/env/production/features/checkout',
     baseVersionInput: BASE_VERSION_INPUT,
     stateInputs: '',
+    pendingInputs: '',
     segments: BETA_AND_VIPS,
     ...context,
   });

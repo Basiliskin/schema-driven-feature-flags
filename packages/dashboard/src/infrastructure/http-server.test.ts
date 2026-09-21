@@ -18,6 +18,7 @@ import {
   type DashboardPorts,
   type RunningDashboard,
 } from './http-server.js';
+import { parsePendingChangeSet, serializePendingChangeSet, type PendingChangeSet } from '../domain/pending-change-set.js';
 
 let running: RunningDashboard | undefined;
 
@@ -30,6 +31,29 @@ const start = async (ports: DashboardPorts, logError: (error: unknown) => void =
   running = await startDashboardServer({ ports, port: 0, logError });
   return running;
 };
+
+type Features = Record<string, Record<string, unknown>>;
+
+/** The hidden field a rendered page hands back, read the way the next request would. */
+const pendingOf = (body: string): PendingChangeSet | undefined =>
+  parsePendingChangeSet(/name="pending" value="([^"]*)"/.exec(body)?.[1]?.replaceAll('&#39;', "'"));
+
+const featuresOf = (pending: PendingChangeSet | undefined): Features => (pending?.snapshot['features'] ?? {}) as Features;
+
+const DRAFT_FEATURES: Features = {
+  'new-dashboard': { type: 'boolean', enabled: false },
+  'checkout-limits': { type: 'config', enabled: false, default: { max: 3 } },
+};
+
+/** A draft started on `baseVersion` with the given features already staged, as a form would carry it. */
+const draftAt = (baseVersion: number, features: Features = DRAFT_FEATURES): PendingChangeSet => ({
+  baseVersion,
+  snapshot: { ...(JSON.parse(VALID) as Record<string, unknown>), features },
+});
+const carriedDraft = (draft: PendingChangeSet): string => serializePendingChangeSet(draft);
+
+const submittingForms = (body: string): number => (body.match(/<form\b(?![^>]*method="dialog")/g) ?? []).length;
+const pendingFields = (body: string): number => (body.match(/name="pending"/g) ?? []).length;
 
 
 
@@ -701,37 +725,37 @@ describe('startDashboardServer', () => {
     const published = (writer: Fakes['writer']) => writer.publish.mock.calls[0] as [string, Snapshot, unknown];
     type Snapshot = { version: number; createdAt: string; createdBy: string; features: Record<string, Record<string, unknown>> };
 
-    it('publishes the edit against the submitted base version and re-renders with the new version', async () => {
-      const fetchSnapshotText = vi.fn(() => Promise.resolve(VALID));
-      const { ports, writer } = fakes({ fetchSnapshotText }, { publish: () => Promise.resolve(2) });
+    it('stages the edit into a Pending Change Set instead of publishing a version', async () => {
+      const { ports, writer, openWriter } = fakes();
       const dashboard = await start(ports);
 
       const reply = await call(dashboard, 'POST', '/env/production/features/new-dashboard', {
-        body: form({ baseVersion: '1', field: 'enabled', enabled: 'on' }),
-      });
-
-      expect(reply.status).toBe(200);
-      expect(reply.body).toContain('Published version 2 to production.');
-      expect(fetchSnapshotText).toHaveBeenCalledWith('production', 1);
-      const [environment, snapshot, options] = published(writer);
-      expect(environment).toBe('production');
-      expect(options).toEqual({ expectedCurrentVersion: 1 });
-      expect(snapshot.createdBy).toBe('dashboard');
-      expect(snapshot.features['new-dashboard']?.enabled).toBe(true);
-    });
-
-    it('treats field=enabled without an enabled field as unchecked, meaning false', async () => {
-      const { ports, writer } = fakes();
-      const dashboard = await start(ports);
-
-      await call(dashboard, 'POST', '/env/production/features/new-dashboard', {
         body: form({ baseVersion: '3', field: 'enabled' }),
       });
 
-      expect(published(writer)[1].features['new-dashboard']?.enabled).toBe(false);
+      expect(reply.status).toBe(200);
+      expect(reply.body).toContain('Staged.');
+      expect(reply.body).toContain('data-watch-version="3"');
+      expect(openWriter).not.toHaveBeenCalled();
+      expect(writer.publish).not.toHaveBeenCalled();
+      const pending = pendingOf(reply.body);
+      expect(pending?.baseVersion).toBe(3);
+      expect(featuresOf(pending)['new-dashboard']?.enabled).toBe(false);
     });
 
-    it('publishes an edited config default', async () => {
+    it('stages a checked enabled box as true', async () => {
+      const { ports, writer } = fakes();
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'POST', '/env/production/features/checkout-limits', {
+        body: form({ baseVersion: '3', field: 'enabled', enabled: 'on' }),
+      });
+
+      expect(featuresOf(pendingOf(reply.body))['checkout-limits']?.enabled).toBe(true);
+      expect(writer.publish).not.toHaveBeenCalled();
+    });
+
+    it('stages an edited config default', async () => {
       const { ports, writer } = fakes();
       const dashboard = await start(ports);
 
@@ -740,7 +764,36 @@ describe('startDashboardServer', () => {
       });
 
       expect(reply.status).toBe(200);
-      expect(published(writer)[1].features['checkout-limits']?.default).toEqual({ max: 5 });
+      expect(featuresOf(pendingOf(reply.body))['checkout-limits']?.default).toEqual({ max: 5 });
+      expect(writer.publish).not.toHaveBeenCalled();
+    });
+
+    it('accumulates a second staged edit onto the draft the form carried, keeping its Base Version', async () => {
+      const { ports, writer } = fakes();
+      const dashboard = await start(ports);
+      const earlier = draftAt(2);
+
+      const reply = await call(dashboard, 'POST', '/env/production/features/checkout-limits', {
+        body: form({ baseVersion: '2', field: 'default', default: '{"max": 5}', pending: carriedDraft(earlier) }),
+      });
+
+      const pending = pendingOf(reply.body);
+      expect(pending?.baseVersion).toBe(2);
+      expect(featuresOf(pending)['new-dashboard']?.enabled).toBe(false);
+      expect(featuresOf(pending)['checkout-limits']?.default).toEqual({ max: 5 });
+      expect(writer.publish).not.toHaveBeenCalled();
+    });
+
+    it('answers a draft it cannot read as if nothing were staged', async () => {
+      const { ports } = fakes();
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'POST', '/env/production/features/new-dashboard', {
+        body: form({ baseVersion: '3', field: 'enabled', pending: '%E0%A4%A' }),
+      });
+
+      expect(reply.status).toBe(200);
+      expect(pendingOf(reply.body)?.baseVersion).toBe(3);
     });
 
     it('URL-decodes the feature key before handing it to the edit', async () => {
@@ -825,16 +878,20 @@ describe('startDashboardServer', () => {
       expect(openWriter).not.toHaveBeenCalled();
     });
 
-    it('keeps the unchecked checkbox in the draft after a failed enabled edit', async () => {
-      const { ports } = fakes({}, { publish: () => Promise.reject(publishError('CONFLICT')) });
+    it('keeps the checked box in the draft when a staged enabled edit is rejected, and hands the earlier draft back', async () => {
+      const { ports, writer } = fakes();
       const dashboard = await start(ports);
+      const earlier = draftAt(2, { 'new-dashboard': { type: 'boolean', enabled: false } });
 
-      const reply = await call(dashboard, 'POST', '/env/production/features/new-dashboard', {
-        body: form({ baseVersion: '3', field: 'enabled' }),
+      const reply = await call(dashboard, 'POST', '/env/production/features/checkout-limits', {
+        body: form({ baseVersion: '2', field: 'enabled', enabled: 'on', pending: carriedDraft(earlier) }),
       });
 
       expect(reply.status).toBe(422);
-      expect(reply.body).toContain('<input type="checkbox" name="enabled"> Enabled');
+      const row = reply.body.slice(reply.body.indexOf('data-flag="checkout-limits"'));
+      expect(/<input type="checkbox" name="enabled"( checked)?> Enabled/.exec(row)?.[1]).toBe(' checked');
+      expect(pendingOf(reply.body)).toEqual(earlier);
+      expect(writer.publish).not.toHaveBeenCalled();
     });
 
     it('tells the operator to reload and redo the edit when someone else published meanwhile', async () => {
@@ -845,7 +902,7 @@ describe('startDashboardServer', () => {
       const dashboard = await start(ports);
 
       const reply = await call(dashboard, 'POST', '/env/production/features/new-dashboard', {
-        body: form({ baseVersion: '3', field: 'enabled', enabled: 'on' }),
+        body: form({ baseVersion: '3', field: 'delete' }),
       });
 
       expect(reply.status).toBe(422);
@@ -861,7 +918,7 @@ describe('startDashboardServer', () => {
       const dashboard = await start(ports);
 
       const reply = await call(dashboard, 'POST', '/env/production/features/new-dashboard', {
-        body: form({ baseVersion: '3', field: 'enabled', enabled: 'on' }),
+        body: form({ baseVersion: '3', field: 'delete' }),
       });
 
       expect(reply.body).toContain('data-watch-version="7" data-watch-path="/env/production" data-review-since="3" data-review-key="new-dashboard"');
@@ -883,7 +940,7 @@ describe('startDashboardServer', () => {
       const dashboard = await start(ports);
 
       const reply = await call(dashboard, 'POST', '/env/production/features/new-dashboard', {
-        body: form({ baseVersion: '3', field: 'enabled', enabled: 'on' }),
+        body: form({ baseVersion: '3', field: 'delete' }),
       });
 
       expect(reply.status).toBe(422);
@@ -905,7 +962,7 @@ describe('startDashboardServer', () => {
       expect(Object.keys(snapshot.features)).toEqual(['checkout-limits']);
     });
 
-    it('publishes edited rules', async () => {
+    it('stages edited rules', async () => {
       const { ports, writer } = fakes();
       const dashboard = await start(ports);
       const rules = [{ when: { plan: 'pro' }, value: { max: 9 } }];
@@ -915,7 +972,8 @@ describe('startDashboardServer', () => {
       });
 
       expect(reply.status).toBe(200);
-      expect(published(writer)[1].features['checkout-limits']?.rules).toEqual(rules);
+      expect(featuresOf(pendingOf(reply.body))['checkout-limits']?.rules).toEqual(rules);
+      expect(writer.publish).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -993,6 +1051,269 @@ describe('startDashboardServer', () => {
 
       const malformed = await call(dashboard, 'POST', '/env/production/features/%E0', { body: form({}) });
       expect(malformed.status).toBe(400);
+    });
+  });
+
+  describe('a staged draft next to the surfaces that still publish at once', () => {
+    const published = (writer: Fakes['writer']) => writer.publish.mock.calls[0] as [string, { features: Features }, unknown];
+
+    it('still publishes a created flag and bumps the version by one, leaving the draft unpublished and echoed', async () => {
+      const { ports, writer } = fakes({}, { publish: () => Promise.resolve(4) });
+      const dashboard = await start(ports);
+      const draft = draftAt(2);
+
+      const reply = await call(dashboard, 'POST', '/env/production/features', {
+        body: form({ baseVersion: '3', key: 'beta', type: 'boolean', pending: carriedDraft(draft) }),
+      });
+
+      expect(reply.status).toBe(200);
+      expect(reply.body).toContain('Published version 4 to production.');
+      expect(writer.publish).toHaveBeenCalledTimes(1);
+      expect(Object.keys(published(writer)[1].features)).toEqual(['new-dashboard', 'checkout-limits', 'beta']);
+      expect(published(writer)[1].features['new-dashboard']?.enabled).toBe(true);
+      expect(pendingOf(reply.body)).toEqual(draft);
+    });
+
+    it('still publishes a delete at once, and hands the draft back', async () => {
+      const { ports, writer } = fakes();
+      const dashboard = await start(ports);
+      const draft = draftAt(2);
+
+      const reply = await call(dashboard, 'POST', '/env/production/features/new-dashboard', {
+        body: form({ baseVersion: '3', field: 'delete', pending: carriedDraft(draft) }),
+      });
+
+      expect(reply.status).toBe(200);
+      expect(writer.publish).toHaveBeenCalledTimes(1);
+      expect(Object.keys(published(writer)[1].features)).toEqual(['checkout-limits']);
+      expect(pendingOf(reply.body)).toEqual(draft);
+    });
+
+    it.each([
+      ['a page load', 'GET', (draft: string) => `/env/production?${new URLSearchParams({ pending: draft }).toString()}`, undefined],
+      ['a pasted publish', 'POST', () => '/env/production/publish', { snapshot: VALID, baseVersion: '3' }],
+      ['a rollback', 'POST', () => '/env/production/rollback', { version: '2' }],
+    ] as const)('hands the draft back through %s in every form on the page', async (_label, method, path, fields) => {
+      const dashboard = await start(fakes().ports);
+      const draft = draftAt(2);
+      const carried = carriedDraft(draft);
+
+      const reply = await call(dashboard, method, path(carried), {
+        ...(fields === undefined ? {} : { body: form({ ...fields, pending: carried }) }),
+      });
+
+      expect(pendingOf(reply.body)).toEqual(draft);
+      expect(submittingForms(reply.body)).toBeGreaterThanOrEqual(6);
+      expect(pendingFields(reply.body)).toBe(submittingForms(reply.body));
+    });
+
+    it('hands the draft back in every form after a created flag and a delete as well', async () => {
+      const dashboard = await start(fakes().ports);
+      const carried = carriedDraft(draftAt(2));
+
+      const created = await call(dashboard, 'POST', '/env/production/features', {
+        body: form({ baseVersion: '3', key: 'beta', type: 'boolean', pending: carried }),
+      });
+      const deleted = await call(dashboard, 'POST', '/env/production/features/new-dashboard', {
+        body: form({ baseVersion: '3', field: 'delete', pending: carried }),
+      });
+
+      for (const reply of [created, deleted]) {
+        expect(pendingFields(reply.body)).toBe(submittingForms(reply.body));
+      }
+    });
+
+    it('renders no pending field when nothing is staged', async () => {
+      const dashboard = await start(fakes().ports);
+
+      const reply = await call(dashboard, 'GET', '/env/production');
+
+      expect(reply.body).not.toContain('name="pending"');
+    });
+  });
+
+  describe('POST /env/:env/pending', () => {
+    /** A store whose current version moves only when the fake writer publishes, so version deltas are observable. */
+    const store = (startAt: number) => {
+      let version = startAt;
+      const { ports, writer, openWriter } = fakes(
+        { readCurrentVersion: () => Promise.resolve(version) },
+        { publish: () => Promise.resolve(++version) },
+      );
+      return { ports, writer, openWriter, version: () => version, moveTo: (next: number) => (version = next) };
+    };
+    const staged = (baseVersion: number) =>
+      draftAt(baseVersion, { 'new-dashboard': { type: 'boolean', enabled: false, rules: [] } });
+    const submit = (dashboard: Awaited<ReturnType<typeof start>>, fields: Record<string, string>) =>
+      call(dashboard, 'POST', '/env/production/pending', { body: form(fields) });
+    const reviewDialogOf = (body: string): string => {
+      const start = body.indexOf('<dialog id="review-dialog"');
+      return start === -1 ? '' : body.slice(start, body.indexOf('</dialog>', start));
+    };
+
+    it('opens the Review Dialog on load right after an edit is staged, listing the net change', async () => {
+      const { ports } = store(3);
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'POST', '/env/production/features/new-dashboard', {
+        body: form({ baseVersion: '3', field: 'enabled' }),
+      });
+
+      const dialog = reviewDialogOf(reply.body);
+      expect(dialog).toContain('data-open-on-load');
+      expect(dialog).toContain('<span class="flag-key">new-dashboard</span><span class="badge diff-changed">changed</span>');
+      expect(dialog).toContain('<button type="submit" name="field" value="update">Update</button>');
+      expect(dialog).not.toContain('data-version-drift');
+    });
+
+    it('does not open it on load after an immediate-publish write that merely carried the draft', async () => {
+      const { ports } = store(3);
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'POST', '/env/production/features/new-dashboard', {
+        body: form({ baseVersion: '3', field: 'delete', pending: carriedDraft(staged(3)) }),
+      });
+
+      expect(reviewDialogOf(reply.body)).not.toContain('data-open-on-load');
+      expect(reply.body).toContain('<dialog id="review-dialog"');
+    });
+
+    it('Update publishes the whole draft as exactly one new version, expecting its base, and clears the draft', async () => {
+      const { ports, writer, version } = store(3);
+      const dashboard = await start(ports);
+      const before = version();
+
+      const reply = await submit(dashboard, { field: 'update', pending: carriedDraft(staged(3)) });
+
+      expect(reply.status).toBe(200);
+      expect(version() - before).toBe(1);
+      expect(writer.publish).toHaveBeenCalledTimes(1);
+      const [environment, snapshot, options] = writer.publish.mock.calls[0] as [string, { features: Features }, unknown];
+      expect(environment).toBe('production');
+      expect(snapshot.features['new-dashboard']?.enabled).toBe(false);
+      expect(options).toEqual({ expectedCurrentVersion: 3 });
+      expect(reply.body).toContain('Published version 4 to production.');
+      expect(reply.body).toContain('data-watch-version="4"');
+      expect(reply.body).not.toContain('name="pending"');
+      expect(reply.body).not.toContain('review-dialog');
+    });
+
+    it('a second Update after a successful one has no draft to publish', async () => {
+      const { ports, writer } = store(3);
+      const dashboard = await start(ports);
+      const first = await submit(dashboard, { field: 'update', pending: carriedDraft(staged(3)) });
+
+      expect(pendingOf(first.body)).toBeUndefined();
+      const second = await submit(dashboard, { field: 'update' });
+
+      expect(second.status).toBe(400);
+      expect(writer.publish).toHaveBeenCalledTimes(1);
+    });
+
+    it('Discard changes nothing in storage and the response no longer carries the draft', async () => {
+      const { ports, writer, openWriter, version } = store(3);
+      const dashboard = await start(ports);
+
+      const reply = await submit(dashboard, { field: 'discard', pending: carriedDraft(staged(3)) });
+
+      expect(reply.status).toBe(200);
+      expect(version()).toBe(3);
+      expect(openWriter).not.toHaveBeenCalled();
+      expect(writer.publish).not.toHaveBeenCalled();
+      expect(reply.body).toContain('Discarded your pending changes.');
+      expect(reply.body).not.toContain('name="pending"');
+      expect(reply.body).not.toContain('review-dialog');
+    });
+
+    it('shows a drift warning with a still-working publish-anyway button once the environment moved on', async () => {
+      const { ports } = store(5);
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'GET', `/env/production?${new URLSearchParams({ pending: carriedDraft(staged(3)) }).toString()}`);
+
+      const dialog = reviewDialogOf(reply.body);
+      expect(dialog).toContain('data-version-drift');
+      expect(dialog).toContain('<button type="submit" name="field" value="publishAnyway">Publish anyway</button>');
+      expect(dialog).not.toContain('disabled');
+      expect(dialog).not.toContain('data-open-on-load');
+    });
+
+    it('publish anyway publishes one new version without expecting the base', async () => {
+      const { ports, writer, version } = store(5);
+      const dashboard = await start(ports);
+
+      const reply = await submit(dashboard, { field: 'publishAnyway', pending: carriedDraft(staged(3)) });
+
+      expect(reply.status).toBe(200);
+      expect(version()).toBe(6);
+      expect(writer.publish).toHaveBeenCalledTimes(1);
+      expect(writer.publish.mock.calls[0]).toHaveLength(2);
+      expect(reply.body).toContain('Published version 6 to production.');
+      expect(reply.body).not.toContain('name="pending"');
+    });
+
+    it('an Update from a stale page fails as a conflict, keeps the draft and reopens the dialog with the drift warning', async () => {
+      const { ports, writer } = store(5);
+      writer.publish.mockRejectedValueOnce(publishError('CONFLICT'));
+      const dashboard = await start(ports);
+      const draft = staged(3);
+
+      const reply = await submit(dashboard, { field: 'update', pending: carriedDraft(draft) });
+
+      expect(reply.status).toBe(422);
+      expect(writer.publish).toHaveBeenCalledTimes(1);
+      expect(reply.body).toContain('Someone else published version 5 meanwhile, so your edit was not saved.');
+      expect(pendingOf(reply.body)).toEqual(draft);
+      const dialog = reviewDialogOf(reply.body);
+      expect(dialog).toContain('data-open-on-load');
+      expect(dialog).toContain('data-version-drift');
+    });
+
+    it.each([
+      ['an unknown action', { field: 'republish' }],
+      ['a prototype key', { field: 'constructor' }],
+      ['no action', {}],
+    ] as const)('publishes nothing for %s and hands the draft back', async (_label, fields) => {
+      const { ports, writer, openWriter } = store(3);
+      const dashboard = await start(ports);
+      const draft = staged(3);
+
+      const reply = await submit(dashboard, { ...fields, pending: carriedDraft(draft) });
+
+      expect(reply.status).toBe(400);
+      expect(reply.body).toContain('Choose one of these actions: update, publishAnyway, discard.');
+      expect(openWriter).not.toHaveBeenCalled();
+      expect(writer.publish).not.toHaveBeenCalled();
+      expect(pendingOf(reply.body)).toEqual(draft);
+    });
+
+    it.each([
+      ['no draft is carried', { field: 'update' }],
+      ['the carried draft is malformed', { field: 'update', pending: '%E0%A4%A' }],
+    ] as const)('refuses an action when %s', async (_label, fields) => {
+      const { ports, writer } = store(3);
+      const dashboard = await start(ports);
+
+      const reply = await submit(dashboard, fields);
+
+      expect(reply.status).toBe(400);
+      expect(reply.body).toContain('There are no pending changes to review; stage an edit first.');
+      expect(writer.publish).not.toHaveBeenCalled();
+    });
+
+    it('only accepts POST from the dashboard’s own pages', async () => {
+      const { ports, openWriter } = store(3);
+      const dashboard = await start(ports);
+
+      const foreign = await call(dashboard, 'POST', '/env/production/pending', {
+        body: form({ field: 'update', pending: carriedDraft(staged(3)) }),
+        sameOrigin: false,
+      });
+      const get = await call(dashboard, 'GET', '/env/production/pending');
+
+      expect(foreign.status).toBe(403);
+      expect(get.status).toBe(405);
+      expect(openWriter).not.toHaveBeenCalled();
     });
   });
 

@@ -45,7 +45,7 @@ export const renderSegmentAttachForm = (flag: FlagDefinitionView, context: Attac
   }
   const options = segments.rows.map((row) => renderOption(row, draft?.segmentKey)).join('');
   return wrap(`<form method="post" action="${escapeHtml(context.action)}" class="stack">
-${context.baseVersionInput}${context.stateInputs}
+${context.baseVersionInput}${context.stateInputs}${context.pendingInputs}
 <label>Segment <select name="segmentKey" required><option value="" disabled${segments.rows.some((row) => row.segmentKey === draft?.segmentKey) ? '' : ' selected'}>Choose a segment…</option>${options}</select></label>
 <p class="muted">Each segment is listed with the member attribute it was published with; members are matched on it.</p>
 ${renderValueControl(flag, draft)}
