@@ -1,0 +1,652 @@
+# Horizon 26 — Dashboard side menu and dialogs
+
+## 🎯 What are we trying to achieve?
+
+The FeatureSync dashboard's environment page is today one long scrolling column, pinned to a fixed 60rem width with a lot of unused space on both sides, and every create/edit form sits inline in that column. This horizon turns it into a full-width page with a persistent left menu that switches between the Flags, Versions and Segments views, moves the New flag form into a pop-up dialog, and makes all three destructive actions ask for confirmation first. Nothing about when or how changes reach S3 changes here.
+
+## 🧠 Why does this change need to happen?
+
+The operator who uses this dashboard raised five complaints. Four of them are about the page itself: one long list instead of navigable views, wasted horizontal space, forms that push the page around instead of opening over it, and delete actions that fire on a single click with nothing in between. The fifth — accumulating edits as a pending draft and publishing only on an explicit Update — is a change to how writes reach storage and is deliberately left to the next horizon, so this one stays a presentation change that cannot break the publishing rules.
+
+## At a glance
+
+- **Phases:** 5
+- **Complexity:** Medium — five small/medium phases over view modules and stylesheets, no application or domain changes, but the shell change touches all seven pages and the dialog work breaks existing end-to-end specs that each phase must fix.
+- **Main risk:** A confirmation dialog is a usability guard, not a security one — it runs in the browser and can be bypassed by a direct POST. The server-side same-origin guard, the expected-current-version conflict check and validation must stay exactly as they are.
+- **Quality target:** `pnpm verify` green at 100% line/branch/function/statement coverage over `packages/*/src/**/*.ts`, ESLint layer boundaries clean, LocalStack integration suite passing, Playwright e2e suite updated by whichever phase breaks it.
+- **Testing focus:** the no-JavaScript fallback for every dialog; both URL-state echo mechanisms surviving each form move; branch coverage over new view modules; existing e2e specs updated rather than weakened.
+
+---
+
+## Order of work
+
+1. **Add full-width page shell with navigation slot** — nothing depends on it yet; it creates the frame everything else sits in.
+2. **Add Side Menu linking Flags, Versions, Segments** — needs the nav slot from step 1 to have somewhere to render.
+3. **Extract reusable Modal Dialog from publish dialog** — independent of the shell work; can start immediately and in parallel.
+4. **Move New flag form into Modal Dialog** — needs the reusable dialog helper from step 3.
+5. **Add confirmation dialog before every destructive action** — also needs step 3's helper; independent of step 4.
+
+```mermaid
+graph TD
+  full-width-page-shell["Add full-width page shell with navigation slot<br/>(full-width-page-shell)"]
+  environment-side-menu["Add Side Menu linking Flags, Versions, Segments<br/>(environment-side-menu)"]
+  reusable-modal-dialog["Extract reusable Modal Dialog from publish dialog<br/>(reusable-modal-dialog)"]
+  new-flag-dialog["Move New flag form into Modal Dialog<br/>(new-flag-dialog)"]
+  destructive-action-confirmation["Add confirmation dialog before every destructive action<br/>(destructive-action-confirmation)"]
+  full-width-page-shell --> environment-side-menu
+  reusable-modal-dialog --> new-flag-dialog
+  reusable-modal-dialog --> destructive-action-confirmation
+```
+
+---
+
+## Implementation plan
+
+### Phase 1 — Add full-width page shell with navigation slot
+
+Technical ID: `full-width-page-shell` · Dashboard page shell · infrastructure layer · medium blast radius
+
+**Goal** — Replace the fixed 60rem centred column with a full-width page shell that has an optional left navigation region, so the dashboard uses the available viewport and has somewhere to put a persistent menu. After this phase: A full-width .page-shell page frame with an optional left navigation region, replacing the 60rem .container cap, with no horizontal page scroll at a wide viewport or at 640px and below and every existing page otherwise unchanged.
+
+**Why** — Today every dashboard page is rendered by one helper that emits a header and a single centred column capped at 60rem, with no place to put a navigation menu. Both operator complaints — wasted space at the sides, and no side menu — come from that one frame, and both are fixed in the same two files.
+
+**Changes**
+
+- Add an optional `nav` (pre-rendered HTML string) field to renderPage's options; when present, wrap it in an <aside class="page-shell-nav"> sibling of <main> inside a <div class="page-shell"> grid container. When absent, emit exactly the markup renderPage emits today so the pages that pass nothing are byte-identical.
+- Remove the max-width: 60rem from the .container rule in layout.css so the header and content span the viewport, keeping the existing --gutter side padding.
+- Create views/styles/shell.css holding ONLY the .page-shell grid (a fixed ~16rem nav column plus a content column that takes the rest) and its single-column stacking below the repo's existing 640px breakpoint; do not restyle anything else.
+- Reintroduce readability caps per region now that the page cap is gone, with concrete values: <pre> raw-JSON blocks get max-width: 80ch (they already have max-height: 24rem); the auto-fit .meta and .merge-sides grids get a repeat(auto-fit, minmax(<existing min>, 24rem)) upper bound so their columns stop growing.
+- Register 'shell.css' in the ordered STYLE_FILES array in stylesheet.ts immediately after layout.css so it cascades over the base layout rules, and confirm the new file ships with the package build (stylesheet.ts reads it at runtime via readFileSync relative to the module URL).
+- Extend the layout unit tests to cover both the nav-present and nav-absent branches for 100% branch coverage.
+
+**Files / areas**
+
+- `packages/dashboard/src/infrastructure/views/layout.ts`
+- `packages/dashboard/src/infrastructure/views/styles/layout.css`
+- `packages/dashboard/src/infrastructure/views/styles/shell.css`
+- `packages/dashboard/src/infrastructure/views/stylesheet.ts`
+- `packages/dashboard/src/infrastructure/views/layout.test.ts`
+
+**How to verify**
+
+- **Nav-absent output is byte-identical to today** — Check out the previous commit's layout.ts output and diff it against the new renderPage output for an options object with no `nav` field — the strings match character for character
+- **Viewport width used without horizontal scroll** — Grep views/styles/layout.css for `max-width: 60rem` — no match remains in the `.container` rule
+- **Per-region readability caps reintroduced** — `grep -n 'max-width' packages/dashboard/src/infrastructure/views/styles/*.css` shows a width cap on the raw-JSON `pre` rule (e.g. 80ch) alongside its existing max-height: 24rem
+- **shell.css registered in order and present in the build** — `shell.css` appears in the STYLE_FILES array in stylesheet.ts immediately after `layout.css`
+- **Both shell branches covered** — `pnpm test` (vitest with coverage) passes with no threshold failure and layout.ts shows 100% branches
+
+**Done when** — A full-width .page-shell page frame with an optional left navigation region, replacing the 60rem .container cap, with no horizontal page scroll at a wide viewport or at 640px and below and every existing page otherwise unchanged. And every check under *How to verify* passes its bar.
+
+**Depends on** — nothing — can start immediately
+
+<details>
+<summary>Reference — full rubric</summary>
+
+**Nav-absent output is byte-identical to today** (`nav-absent-markup-identical`, minScore 7)
+
+- *Rule:* With no nav passed, renderPage must emit exactly the markup it emitted before this phase; 10 = a test asserts full-string equality against the pre-change output for a page with notices AND one without, 8 = equality asserted for one representative case, minScore is the bar for acceptable.
+- *Pass criteria:*
+  - Check out the previous commit's layout.ts output and diff it against the new renderPage output for an options object with no `nav` field — the strings match character for character
+  - A unit test in layout.test.ts calls renderPage without `nav` and asserts the rendered string contains `<main class="container">` with no `page-shell` wrapper element
+  - The page renderers that pass no nav (e.g. flag-page, merge page) still produce HTML with no `<aside` element — grep the rendered output in their existing tests
+- *Failure examples:*
+  - The developer wraps every page in `<div class="page-shell">` unconditionally and renders an empty `<aside>` when nav is absent, so non-nav pages gain markup and a stray grid column
+  - The nav-absent branch drops or reorders the deferred app.js `<script>` tag or the notices block while restructuring the template
+  - Whitespace/indentation of the main element changes, silently breaking an exact-string assertion elsewhere and prompting the developer to loosen that assertion instead of the markup
+
+**Viewport width used without horizontal scroll** (`width-cap-removed-no-overflow`, minScore 7)
+
+- *Rule:* The 60rem cap is gone and content spans the viewport at both wide and narrow widths with no horizontal page scroll; 10 = verified at 1920px, 1280px, 640px and 375px with the stacked-table layout intact, 8 = verified wide plus 640px, minScore is acceptable.
+- *Pass criteria:*
+  - Grep views/styles/layout.css for `max-width: 60rem` — no match remains in the `.container` rule
+  - Load /env/<env> in a browser at 1920px width: the header brand and the main content start at the left gutter and the content region reaches the right gutter, not a centred 60rem column
+  - At 375px and 640px viewport width, document.documentElement.scrollWidth === document.documentElement.clientWidth (no horizontal scrollbar) and the table still renders in its stacked data-label card form
+  - The --gutter side padding (16px, 24px at >=640px) is still applied to the header and main
+- *Failure examples:*
+  - The cap is removed but the nav column is declared as a fixed `16rem` plus a `1fr` content column without `minmax(0, 1fr)`, so a wide `<pre>` or table forces the grid wider than the viewport and the whole page scrolls sideways
+  - The developer removes `max-width` but leaves `margin: 0 auto`, which is harmless, while also dropping the padding, so text touches the screen edge on mobile
+  - The single-column stacking rule is written at a new breakpoint (e.g. 768px) that fights the existing 640px stacked-table rule, leaving a band of widths where the sidebar is still beside a stacked table
+
+**Per-region readability caps reintroduced** (`readability-caps-per-region`, minScore 7)
+
+- *Rule:* Regions that previously relied on the page cap now carry their own caps so they stop growing on a wide screen; 10 = every unbounded region (pre, .meta, .merge-sides) is capped with a stated value and visually checked at 1920px, 8 = all three capped in CSS, minScore is acceptable.
+- *Pass criteria:*
+  - `grep -n 'max-width' packages/dashboard/src/infrastructure/views/styles/*.css` shows a width cap on the raw-JSON `pre` rule (e.g. 80ch) alongside its existing max-height: 24rem
+  - The `.meta` and `.merge-sides` repeat(auto-fit, minmax(...)) grid declarations now carry an upper bound (e.g. minmax(<existing min>, 24rem)) rather than an open 1fr
+  - At a 1920px viewport, a version's raw JSON block and the meta grid do not stretch edge to edge — measure their rendered width in devtools and confirm it is bounded
+- *Failure examples:*
+  - Only `pre` is capped; the auto-fit `.meta` grid quietly stretches its columns to half the screen because the developer checked the JSON block visually and assumed the grids were fine
+  - A cap is applied to a shared container rather than the region, re-creating a global 60rem column under a different name and undoing the width goal
+  - The cap uses `width` instead of `max-width`, forcing the region to that size on narrow screens too
+
+**shell.css registered in order and present in the build** (`shell-css-registered-and-shipped`, minScore 7)
+
+- *Rule:* The new stylesheet is in STYLE_FILES at the right position AND actually ships in the published package; 10 = ordering verified in the served CSS and the file confirmed present in the packed artifact, 8 = both checks run, minScore is acceptable.
+- *Pass criteria:*
+  - `shell.css` appears in the STYLE_FILES array in stylesheet.ts immediately after `layout.css`
+  - Fetch /assets/app.css from the running dashboard and confirm the `.page-shell` rules appear after the `.container` rules in the concatenated output
+  - Run the package build and confirm dist/**/styles/shell.css (the path stylesheet.ts resolves via new URL('./styles/...', import.meta.url)) exists in the output — not just in src/
+  - Starting the server from the built output serves the CSS without a readFileSync ENOENT
+- *Failure examples:*
+  - shell.css works in dev because stylesheet.ts reads from src, but the build only compiles .ts and never copies .css, so the packaged dashboard 500s or serves a stylesheet missing the shell rules — the developer never ran from dist
+  - shell.css is appended to the end of STYLE_FILES, so component rules that came later now lose to it (or it loses to layout.css) and the grid silently does nothing on one page
+  - The stylesheet hash in STYLESHEET_HREF is cached from a stale build so the new rules never reach the browser during manual verification
+
+**Both shell branches covered** (`shell-branch-coverage`, minScore 7)
+
+- *Rule:* The nav-present and nav-absent branches of renderPage are both exercised so the 100% branch gate over packages/*/src/**/*.ts holds; 10 = tests assert the structural difference (aside present/absent, nav HTML placed inside it) not merely that render did not throw, 8 = both branches asserted, minScore is acceptable.
+- *Pass criteria:*
+  - `pnpm test` (vitest with coverage) passes with no threshold failure and layout.ts shows 100% branches
+  - layout.test.ts has one test passing a `nav` string that asserts the string appears inside `<aside class="page-shell-nav">` and inside `<div class="page-shell">`
+  - layout.test.ts has a test omitting `nav` that asserts no `page-shell` substring is present
+- *Failure examples:*
+  - The nav branch is covered only by another page's test that happens to pass a nav, so coverage is green but layout.test.ts never pins the placement, and a later refactor moving the aside outside the grid goes unnoticed
+  - The developer uses `nav ?? ''` so there is no branch to cover at all, and an empty aside is always emitted — coverage passes while the nav-absent markup regresses
+  - A new optional field introduces a ternary inside a template literal that vitest reports as a partially covered branch, and it is silenced with an istanbul ignore comment
+
+*Healer hint:* The most likely failure is the new shell.css not being copied into the built package (stylesheet.ts readFileSync resolves relative to the module URL in dist) — check the build's asset-copy step before assuming the CSS is fine because dev works.
+
+</details>
+
+### Phase 2 — Add Side Menu linking Flags, Versions, Segments
+
+Technical ID: `environment-side-menu` · Dashboard navigation · interface layer · medium blast radius
+
+**Goal** — Render a persistent left-hand menu on every environment-scoped page that links to the Flags view, the Versions page and the Segments page and marks the one currently shown. After this phase: A persistent Side Menu module rendered in the shell's nav slot on the environment, versions and segment-list pages, with the current view marked by aria-current.
+
+**Why** — The operator asked for a side menu instead of one long scrolling list. A small sticky bar of in-page anchors exists today; it links to headings on a single page rather than to the different views.
+
+**Changes**
+
+- Create side-menu.ts exporting renderSideMenu(env, current, urlState): a <nav aria-label="Views"> of ordinary server-rendered links to the environment page (Flags), /env/<env>/versions and the segment list route, each built through the existing withUrlState helper so the filter/open/page query keys survive navigation.
+- Mark the active item with aria-current="page" and a modifier class; do NOT introduce a new query-string key for view selection — the route is the selector.
+- Pass the rendered menu into renderPage's nav slot from the environment page, the versions page and the segment list page.
+- Delete section-nav.ts and section-nav.css, remove the call site and the rule that filtered out the Flags anchor when no flags rendered, and rewrite section-nav.test.ts as side-menu tests covering each active-item branch (its current exact-string toBe() assertion is replaced, not adapted).
+- Create styles/side-menu.css for the menu only and register it in STYLE_FILES after shell.css.
+- Keep the existing update-banner / changes-dialog machinery rendering on every page that shows the menu, so concurrent-edit notices are not silently lost on the Versions and Segments views.
+
+**Files / areas**
+
+- `packages/dashboard/src/infrastructure/views/side-menu.ts`
+- `packages/dashboard/src/infrastructure/views/styles/side-menu.css`
+- `packages/dashboard/src/infrastructure/views/section-nav.ts`
+- `packages/dashboard/src/infrastructure/views/environment-page.ts`
+- `packages/dashboard/src/infrastructure/views/version-list-page.ts`
+- `packages/dashboard/src/infrastructure/views/segment-list-page.ts`
+
+**How to verify**
+
+- **Menu links point at routes and carry URL state** — View source of /env/<env>?filter=check&page=2 and confirm the menu's three anchors are plain `<a href="...">` (no `#` fragment targets) pointing at the environment page, /env/<env>/versions and the segment list route
+- **Current view marked correctly on every page** — View source of /env/<env>, /env/<env>/versions and the segment list page; in each, exactly one aria-current="page" appears in the menu nav
+- **section-nav removed, not left orphaned** — `grep -rn 'section-nav\|SECTION_NAV\|CURRENT_SECTION\|FLAGS_SECTION\|VERSIONS_SECTION' packages/dashboard` returns no matches outside git history
+- **Concurrent-edit banner/changes dialog on every menu view** — View source of /env/<env>/versions and the segment list page and confirm the update-watch element, the update-banner element and <dialog id="changes-dialog"> are all present, as they are on /env/<env>
+
+**Done when** — A persistent Side Menu module rendered in the shell's nav slot on the environment, versions and segment-list pages, with the current view marked by aria-current. And every check under *How to verify* passes its bar.
+
+**Depends on** — "Add full-width page shell with navigation slot"
+
+<details>
+<summary>Reference — full rubric</summary>
+
+**Menu links point at routes and carry URL state** (`menu-links-routes-not-fragments`, minScore 7)
+
+- *Rule:* Each menu item is an ordinary server-rendered anchor to a real route with the filter/open/page/pageSize query keys preserved and no new view query key; 10 = all three hrefs verified against http-server's route table with state round-tripped, 8 = all three hrefs correct and state carried, minScore is acceptable.
+- *Pass criteria:*
+  - View source of /env/<env>?filter=check&page=2 and confirm the menu's three anchors are plain `<a href="...">` (no `#` fragment targets) pointing at the environment page, /env/<env>/versions and the segment list route
+  - Each of those hrefs still contains filter=check and page=2
+  - `grep -rn 'view=' packages/dashboard/src` returns nothing — no new query-string key was introduced for view selection
+  - Clicking each menu link with JavaScript disabled loads the corresponding page (no 404 from http-server's 2-4 segment path matcher)
+- *Failure examples:*
+  - The hrefs are built by string concatenation instead of the existing withUrlState helper, so a filter containing `&` or a space is not encoded and the next page loads with a mangled filter
+  - URL state is carried to Flags but dropped on the Versions and Segments links because the developer reasoned those views have no filter — the operator loses their filter on a round trip back
+  - The Flags link points at /env/<env>/flags, a route http-server's match() does not know, returning 404
+
+**Current view marked correctly on every page** (`active-item-marking`, minScore 7)
+
+- *Rule:* Exactly one item carries aria-current="page" plus its modifier class, and it is the item matching the page being rendered; 10 = asserted for all three pages including that non-active items carry neither marker, 8 = asserted for all three pages, minScore is acceptable.
+- *Pass criteria:*
+  - View source of /env/<env>, /env/<env>/versions and the segment list page; in each, exactly one aria-current="page" appears in the menu nav
+  - On each page the marked item is the one naming that view
+  - Non-active items have no aria-current attribute and no active modifier class
+  - side-menu tests cover each active value, including that a nav rendered for one view does not mark another
+- *Failure examples:*
+  - The active item gets the CSS modifier class but not aria-current, so it looks right and is invisible to screen readers and to any role/name based e2e assertion
+  - The active state is derived from the request path string and fails for /env/<env>/versions/3, leaving the Versions item unmarked on a single-version page
+  - Two items match because the comparison uses startsWith, marking Flags active on the Versions page too
+
+**section-nav removed, not left orphaned** (`section-nav-fully-removed`, minScore 7)
+
+- *Rule:* The replaced in-page anchor bar and its stylesheet are deleted along with every reference, including the empty-flags filtering rule and the old exact-string test; 10 = no file, import, STYLE_FILES entry, CSS rule or test remnant remains anywhere, 8 = same, minScore is acceptable.
+- *Pass criteria:*
+  - `grep -rn 'section-nav\|SECTION_NAV\|CURRENT_SECTION\|FLAGS_SECTION\|VERSIONS_SECTION' packages/dashboard` returns no matches outside git history
+  - section-nav.css is gone from the STYLE_FILES array in stylesheet.ts and the file is deleted
+  - The rendered environment page no longer contains class="section-nav" or the sticky top: 3.25rem bar
+  - side-menu.css is registered in STYLE_FILES after shell.css and the served /assets/app.css contains its rules
+- *Failure examples:*
+  - section-nav.ts and its call site are deleted but 'section-nav.css' is left in STYLE_FILES, so stylesheet.ts throws ENOENT at first request — a failure that only shows on a cold server start, not in unit tests
+  - section-nav.test.ts is adapted rather than rewritten: its exact toBe() on the whole nav string is edited to match the new markup, keeping a brittle change-detector that will break on the next phase
+  - The old sticky positioning rules survive in another stylesheet and give the new menu a stray top: 3.25rem offset
+
+**Concurrent-edit banner/changes dialog on every menu view** (`update-machinery-survives-on-all-views`, minScore 7)
+
+- *Rule:* The update-watch div, update banner, merge notice and changes-dialog render on all three pages that show the menu, so concurrent-edit notices are not lost when the operator navigates; 10 = verified live by making an out-of-band change and seeing the banner on each view, 8 = markup present on all three pages, minScore is acceptable.
+- *Pass criteria:*
+  - View source of /env/<env>/versions and the segment list page and confirm the update-watch element, the update-banner element and <dialog id="changes-dialog"> are all present, as they are on /env/<env>
+  - With the dashboard open on the Versions view, publish a change from a second session and confirm the update banner appears
+  - The banner's z-index still sits above the side menu — the menu does not overlap or cover it at any viewport width
+- *Failure examples:*
+  - The developer passes the menu into the nav slot on all three pages but only the environment page keeps renderUpdateWatch, so an operator sitting on Versions never learns someone else published
+  - The changes-dialog element is duplicated on a page that already had one, producing two elements with id changes-dialog and making app.js target the wrong one
+  - The sticky side menu's stacking context clips the fixed update banner, which is visible only by scrolling
+
+*Healer hint:* The most likely failure is a leftover reference to the deleted section-nav — especially its entry in STYLE_FILES, which throws ENOENT only on a real server start — so grep the whole package and boot the server before declaring the phase done.
+
+</details>
+
+### Phase 3 — Extract reusable Modal Dialog from publish dialog
+
+Technical ID: `reusable-modal-dialog` · Dashboard dialogs · infrastructure layer · medium blast radius
+
+**Goal** — Turn the one-off publish dialog into a named, reusable modal-dialog helper and stylesheet that any form can be wrapped in. After this phase: A reusable modal-dialog view module with its own stylesheet, with the publish dialog rendered through it and behaving exactly as before.
+
+**Why** — A working overlay pattern already exists but is hard-coded to the publish dialog's CSS class name, so every further dialog would copy a misleading name. Two later phases in this horizon both need it, so extracting it once is cheaper than copying it twice; rebuilding a dialog mechanism from scratch would be waste.
+
+**Changes**
+
+- Create modal-dialog.ts exporting renderModalDialog({id, title, openOnLoad, body}) emitting <dialog id class="modal-dialog" aria-labelledby> plus the close control, and renderDialogTrigger({dialogId, label}) emitting the hidden trigger button the existing app.js unhides.
+- Move the dialog rules out of components.css into a new styles/dialog.css under the class .modal-dialog (default inline-card look, .is-enhanced overlay look, ::backdrop, hide-close-when-not-enhanced) and register dialog.css in STYLE_FILES; keep the rendered attributes identical so the existing browser script needs no change.
+- Re-render the publish dialog through renderModalDialog and delete the now-unused .publish-dialog rules.
+- Update the existing dialogs and environment-page unit tests, and cover every branch of the new module (open-on-load vs not, with and without a trigger) to keep branch coverage at 100%.
+- Run the existing Playwright spec that drives the publish dialog by its accessible name to prove the overlay behaviour is unchanged.
+
+**Files / areas**
+
+- `packages/dashboard/src/infrastructure/views/modal-dialog.ts`
+- `packages/dashboard/src/infrastructure/views/styles/dialog.css`
+- `packages/dashboard/src/infrastructure/views/styles/components.css`
+- `packages/dashboard/src/infrastructure/views/environment-page.ts`
+
+**How to verify**
+
+- **Browser-script contract preserved byte for byte** — Diff the rendered publish dialog HTML from before this phase against after: the only difference is the class token
+- **Dialog rules relocated under the reusable class** — `grep -rn 'publish-dialog' packages/dashboard/src/infrastructure/views/styles/` returns no matches
+- **All helper branches covered** — `pnpm test` passes and modal-dialog.ts reports 100% for lines, branches, functions and statements
+- **Existing publish-dialog e2e behaviour unchanged** — Run the Playwright suite — the publish-dialog spec in flag-list.spec.ts and the concurrent-edits.spec.ts dialogs pass
+
+**Done when** — A reusable modal-dialog view module with its own stylesheet, with the publish dialog rendered through it and behaving exactly as before. And every check under *How to verify* passes its bar.
+
+**Depends on** — nothing — can start immediately
+
+<details>
+<summary>Reference — full rubric</summary>
+
+**Browser-script contract preserved byte for byte** (`rendered-attributes-unchanged`, minScore 8)
+
+- *Rule:* The attributes app.js keys off (data-open-dialog, data-open-on-load, the hidden trigger, <dialog id>, aria-labelledby) are emitted exactly as before so app.js needs no edit; 10 = a diff of the rendered publish-dialog HTML before and after shows only the class name change, 8 = every app.js-relevant attribute verified present and identically spelled, minScore is acceptable.
+- *Pass criteria:*
+  - Diff the rendered publish dialog HTML from before this phase against after: the only difference is the class token
+  - views/scripts/app.js has zero changes in this phase's diff
+  - The publish trigger button is still emitted with the `hidden` attribute and data-open-dialog="publish-dialog"
+  - data-open-on-load is still emitted under exactly the same condition (draft present and no conflict) — verified by a unit test for both the present and absent case
+- *Failure examples:*
+  - renderModalDialog emits data-open-on-load="false" when closed instead of omitting the attribute; app.js checks attribute presence, so the dialog now pops open on every page load
+  - The helper drops the `hidden` attribute on the trigger because it looks like a bug, so the button is visible to no-JS users and clicking it does nothing
+  - The dialog id becomes generated/prefixed (e.g. dialog-publish) and the existing Playwright and app.js references silently stop matching
+
+**Dialog rules relocated under the reusable class** (`css-moved-not-copied`, minScore 7)
+
+- *Rule:* Dialog styling lives in a new dialog.css keyed on .modal-dialog and the old .publish-dialog rules are deleted rather than left as dead duplicates; 10 = all four rule groups (default inline card, .is-enhanced overlay, ::backdrop, hidden close-when-not-enhanced) moved and the old selector appears nowhere, 8 = same with minor rule drift, minScore is acceptable.
+- *Pass criteria:*
+  - `grep -rn 'publish-dialog' packages/dashboard/src/infrastructure/views/styles/` returns no matches
+  - dialog.css contains rules for .modal-dialog, .modal-dialog.is-enhanced, .modal-dialog::backdrop, and the rule hiding the close control when not enhanced
+  - dialog.css is present in the STYLE_FILES array and its rules appear in the served /assets/app.css
+  - components.css no longer contains any dialog rules
+- *Failure examples:*
+  - The rules are copied to dialog.css but left in components.css too, so a later fix to one file is silently overridden by the other depending on STYLE_FILES order
+  - The ::backdrop rule is forgotten because it does not affect the default inline-card look, so the enhanced overlay renders with the browser's default backdrop and the page behind shows through unstyled
+  - dialog.css is registered before components.css, so a generic .card rule now wins over the dialog's default inline-card styling
+
+**All helper branches covered** (`modal-dialog-branch-coverage`, minScore 7)
+
+- *Rule:* Every branch of renderModalDialog and renderDialogTrigger is exercised by unit tests so the 100% gate holds; 10 = tests assert the markup difference each branch produces, not just that both paths execute, 8 = each branch asserted, minScore is acceptable.
+- *Pass criteria:*
+  - `pnpm test` passes and modal-dialog.ts reports 100% for lines, branches, functions and statements
+  - Tests exist for openOnLoad true and false, asserting the presence and absence of the data-open-on-load attribute
+  - A test renders a trigger and asserts the `hidden` attribute and data-open-dialog value; another renders a dialog with no trigger and asserts no trigger button is emitted
+  - New dialog tests use toContain-style assertions rather than whole-string toBe()
+- *Failure examples:*
+  - Only the openOnLoad=true path is tested directly; the false path is covered incidentally by environment-page tests, so coverage is green while nothing pins that the attribute is omitted rather than set to "false"
+  - A default parameter value (e.g. openOnLoad = false) creates an uncovered default-assignment branch that vitest flags and the developer suppresses with an ignore comment
+  - Tests assert the full dialog string with toBe(), reproducing the brittle pattern the repo already suffers from
+
+**Existing publish-dialog e2e behaviour unchanged** (`publish-e2e-still-green`, minScore 8)
+
+- *Rule:* The Playwright specs that drive the publish and changes dialogs by accessible name pass unmodified; 10 = the full e2e suite passes with no spec edits in this phase's diff, 8 = the publish and concurrent-edit specs pass unmodified, minScore is acceptable.
+- *Pass criteria:*
+  - Run the Playwright suite — the publish-dialog spec in flag-list.spec.ts and the concurrent-edits.spec.ts dialogs pass
+  - This phase's diff contains no changes under packages/dashboard/e2e/
+  - getByRole('dialog', { name: 'Publish a new version' }), { name: 'What changed' } and { name: 'Merge your draft' } all still resolve
+- *Failure examples:*
+  - The heading element that aria-labelledby points at is renamed or its id changed by the helper, so the dialog loses its accessible name and getByRole('dialog', {name}) times out
+  - The changes-dialog, which shares the old publish-dialog class but is declared separately in environment-page.ts, is not migrated and loses its styling because its class no longer matches any rule
+  - The developer edits the e2e spec's selector to make it pass instead of restoring the markup contract
+
+*Healer hint:* The most likely failure is a subtle change to the app.js contract — an emitted-when-false data-open-on-load, a dropped `hidden`, or a renamed dialog/heading id — so diff the rendered publish-dialog HTML against the previous commit and keep it identical except the class token.
+
+</details>
+
+### Phase 4 — Move New flag form into Modal Dialog
+
+Technical ID: `new-flag-dialog` · Dashboard write forms · interface layer · small blast radius
+
+**Goal** — Render the create-a-flag form inside a modal dialog opened from a button, instead of as an inline expandable card in the page flow. After this phase: The new-flag form rendered inside a modal dialog opened from a trigger, re-opening with the operator's draft values after a rejected submit.
+
+**Why** — The operator asked for new/edit forms to appear in modal dialogs. The new-flag form is the simplest of the five write forms and proves the pattern end to end, including what happens when the server rejects a submission.
+
+**Changes**
+
+- Replace the <details class="card"><summary>New flag</summary> wrapper with a trigger button plus a modal dialog rendered through renderModalDialog.
+- Reuse the existing 'a draft was rejected' condition to set the dialog's open-on-load flag, so a 400/422 response re-opens the dialog with the operator's typed values rather than losing them.
+- Keep BOTH existing URL-state mechanisms intact: the form action still goes through withUrlState AND the hidden state inputs are still emitted.
+- Verify the no-JavaScript path: with scripting off the dialog renders as an inline card whose form submits normally and whose close control is hidden.
+- Update this form's unit tests to cover the open and closed branches, and update the Playwright spec that asserts on the new-flag form to open the dialog by its accessible name, following the existing publish-dialog spec idiom.
+
+**Files / areas**
+
+- `packages/dashboard/src/infrastructure/views/new-flag-form.ts`
+- `packages/dashboard/src/infrastructure/views/environment-page.ts`
+- `packages/dashboard/src/infrastructure/views/new-flag-form.test.ts`
+- `packages/dashboard/e2e/flag-list.spec.ts`
+
+**How to verify**
+
+- **400/422 re-render re-opens the dialog with typed values** — Submit the new-flag form with an invalid key: the response status is 400 or 422 (not a redirect), the page re-renders, and the dialog is open with the previously typed key and JSON still in the inputs
+- **Both URL-state echoes retained** — Load /env/<env>?filter=check&open=<key>&page=2&pageSize=10 and view source: the new-flag form's action attribute contains those query keys
+- **Works with scripting disabled** — Disable JavaScript in the browser, load /env/<env>: the New flag form's fields are visible and usable on the page (not hidden behind a <dialog> the browser never opens)
+- **Playwright spec updated to the new affordance** — packages/dashboard/e2e/flag-list.spec.ts appears in this phase's diff
+
+**Done when** — The new-flag form rendered inside a modal dialog opened from a trigger, re-opening with the operator's draft values after a rejected submit. And every check under *How to verify* passes its bar.
+
+**Depends on** — "Extract reusable Modal Dialog from publish dialog"
+
+<details>
+<summary>Reference — full rubric</summary>
+
+**400/422 re-render re-opens the dialog with typed values** (`rejected-draft-reopens-with-values`, minScore 7)
+
+- *Rule:* A rejected submit still returns the inline-re-rendered page with the operator's draft values, now with the dialog flagged to open on load; 10 = verified in a browser for both 400 and 422 with the error message visible inside the dialog, 8 = verified for one rejection status with values preserved, minScore is acceptable.
+- *Pass criteria:*
+  - Submit the new-flag form with an invalid key: the response status is 400 or 422 (not a redirect), the page re-renders, and the dialog is open with the previously typed key and JSON still in the inputs
+  - The validation error message is rendered inside the dialog, not in a part of the page the open dialog covers
+  - The dialog element carries data-open-on-load in that response's HTML and does not carry it on a normal GET of the page
+  - The condition driving open-on-load is the pre-existing rejected-draft condition, not a newly invented state field
+- *Failure examples:*
+  - The draft values are preserved in the markup but the error summary is rendered above the dialog in the page flow, so with JavaScript on the modal overlay hides the very message explaining the rejection
+  - The dialog re-opens but the developer re-renders empty inputs because the trigger-plus-dialog refactor dropped the draft value bindings on one field (e.g. the JSON textarea keeps its value, the key input does not)
+  - A successful submit also sets open-on-load because the condition was loosened to 'draft is defined', so the dialog pops open after every create
+
+**Both URL-state echoes retained** (`url-state-both-mechanisms`, minScore 8)
+
+- *Rule:* The form action still goes through withUrlState AND the hidden stateInputs are still emitted after the move into the dialog; 10 = a filtered, paged, row-open URL round-trips unchanged through a successful create and through a rejection, 8 = both mechanisms present in markup and verified on the success path, minScore is acceptable.
+- *Pass criteria:*
+  - Load /env/<env>?filter=check&open=<key>&page=2&pageSize=10 and view source: the new-flag form's action attribute contains those query keys
+  - The same form contains one hidden <input> per URL-state key (filter, open, page, pageSize) inside the dialog
+  - Submit a valid new flag from that URL: the resulting page still shows the same filter, open row, page and pageSize
+  - Submit an invalid new flag from that URL: the re-rendered page preserves the same four keys
+- *Failure examples:*
+  - The action keeps withUrlState but the hidden inputs are left behind in the deleted <details> wrapper, so state survives the action but any POST-body-read path loses it
+  - Hidden inputs are moved inside the dialog but outside the <form> element, so they are never submitted — the markup looks right to a grep
+  - The developer re-derives the action path by hand inside the dialog helper and omits pageSize, which only shows up when a non-default page size is in use
+
+**Works with scripting disabled** (`no-js-inline-fallback`, minScore 8)
+
+- *Rule:* With JavaScript off, the dialog renders as an ordinary inline card whose form submits and whose close control is hidden, because app.js is outside the coverage gate and may never run; 10 = verified in a real browser with JS disabled for create, rejection and success, 8 = verified for create and rejection, minScore is acceptable.
+- *Pass criteria:*
+  - Disable JavaScript in the browser, load /env/<env>: the New flag form's fields are visible and usable on the page (not hidden behind a <dialog> the browser never opens)
+  - With JS still off, submitting the form creates the flag and the page re-renders correctly
+  - With JS off the dialog's Close control is not visible (the not-enhanced rule hides it) and the hidden trigger button is not shown
+  - No display: none or hidden attribute on the dialog itself in the default (non-.is-enhanced) state
+- *Failure examples:*
+  - The developer relies on the browser's native <dialog> default styling, which is display: none until showModal() runs, so with JS off the entire New flag form vanishes from the page — the check was skipped because it worked in their JS-enabled browser
+  - The trigger button is rendered without `hidden`, so no-JS users see a button that does nothing above a form that already works
+  - The close control is a <form method="dialog"> submit that, without JS, submits the surrounding write form or navigates away
+
+**Playwright spec updated to the new affordance** (`flag-list-e2e-updated`, minScore 8)
+
+- *Rule:* The e2e spec asserting on the New flag form is updated in this phase to open the dialog by accessible name following the existing publish-dialog idiom, rather than left failing or weakened; 10 = the updated spec still asserts the create actually took effect end to end, 8 = spec passes using getByRole('dialog', {name}), minScore is acceptable.
+- *Pass criteria:*
+  - packages/dashboard/e2e/flag-list.spec.ts appears in this phase's diff
+  - The spec obtains the dialog via getByRole('dialog', { name: ... }) in the same style as the existing publish-dialog assertions
+  - Run the full Playwright suite — flag-list.spec.ts and every other spec pass
+  - The spec's existing assertion that the row-level 'Save default' control is hidden until the row is expanded still passes (the flag row disclosure was not turned into a dialog)
+- *Failure examples:*
+  - The spec is made to pass by deleting the assertion about the form being hidden before the trigger is clicked, losing the regression check entirely
+  - The dialog has no accessible name because the heading id and aria-labelledby do not match, so the developer falls back to a brittle locator('#new-flag-dialog') selector instead of the role idiom
+  - flag-list.spec.ts is updated but url-state.spec.ts, which clicks the Expand link on [data-flag="checkout-limits"], is broken by incidental markup churn and left failing for a later phase
+
+*Healer hint:* The most likely failure is the no-JavaScript path: a bare <dialog> is display:none by default, so confirm the not-enhanced CSS renders it as a visible inline card before assuming the fallback works.
+
+</details>
+
+### Phase 5 — Add confirmation dialog before every destructive action
+
+Technical ID: `destructive-action-confirmation` · Dashboard write forms · interface layer · small blast radius
+
+**Goal** — Require an explicit confirmation naming the exact flag, segment or rule before each of the dashboard's three destructive actions posts. After this phase: All three destructive actions — delete flag, detach segment, remove rollout — require an explicit confirmation naming the affected flag, segment or rule before posting.
+
+**Why** — Two of the three destructive actions (detaching a segment, removing a rollout) fire on a single click with no confirmation at all, and the third (deleting a flag) confirms in a different way — by making the operator expand a Delete section first. The operator asked for every delete to be confirmed, so all three should confirm identically.
+
+**Changes**
+
+- Wrap the detach-segment, remove-rollout and delete-flag submit buttons each in a modal dialog rendered through renderModalDialog, whose text names the exact flag key, segment key or rule index being removed and whose confirm button is the actual submit.
+- Replace the delete-flag <details class="danger-zone"> disclosure with its confirmation dialog, and update the source comment that currently explains the disclosure IS the confirmation step so it no longer contradicts the code.
+- Give each dialog an id unique per flag and per rule index so a page listing many flags has no duplicate element ids, and so the single-flag page works too.
+- Leave the server untouched: the same-origin guard, the expected-current-version check and validation stay exactly as they are — a browser confirmation is a usability guard, never a security one, and can always be bypassed by a direct POST.
+- Keep the no-JavaScript path working: without scripting each confirmation renders as an inline card whose confirm button submits the same form.
+- Cover every confirmation branch in the rollout-form and feature-edit-form unit tests, and update the Playwright spec that detaches a segment so it confirms before asserting the result.
+- Update flag-page.test.ts in this same diff: the single-flag page renders the same feature-edit-form, so replacing the delete danger-zone disclosure with a confirmation dialog changes that page too.
+
+**Files / areas**
+
+- `packages/dashboard/src/infrastructure/views/rollout-form.ts`
+- `packages/dashboard/src/infrastructure/views/feature-edit-form.ts`
+- `packages/dashboard/src/infrastructure/views/flag-page.test.ts`
+- `packages/dashboard/src/infrastructure/views/rollout-form.test.ts`
+- `packages/dashboard/src/infrastructure/views/feature-edit-form.test.ts`
+- `packages/dashboard/e2e/segment-picker.spec.ts`
+
+**How to verify**
+
+- **Every destructive action named and confirmed** — On /env/<env> expand a flag: clicking Detach on a segment opens a confirmation naming that segment key and that flag key, not generic 'Are you sure?' text
+- **Dialog ids unique per flag and per rule** — Load /env/<env> with several flags each having multiple rollout rules, then in devtools compare document.querySelectorAll('[id]').length with the size of the set of their ids — no duplicates
+- **Server-side guards unchanged** — This phase's diff contains no changes to packages/dashboard/src/infrastructure/http-server.ts or any application/domain file
+- **No-JS confirmations work and branches are covered** — With JavaScript disabled, expand a flag: the Detach, Remove and Delete confirm controls are visible inline and clicking one performs the action in a single submit
+
+**Done when** — All three destructive actions — delete flag, detach segment, remove rollout — require an explicit confirmation naming the affected flag, segment or rule before posting. And every check under *How to verify* passes its bar.
+
+**Depends on** — "Extract reusable Modal Dialog from publish dialog"
+
+<details>
+<summary>Reference — full rubric</summary>
+
+**Every destructive action named and confirmed** (`all-three-actions-confirmed`, minScore 8)
+
+- *Rule:* Delete-flag, detach-segment and remove-rollout each require an explicit confirmation that names the exact flag key, segment key or rule index; 10 = all three name the specific subject in the dialog text and no destructive POST can be issued from a single click, 8 = all three confirmed with the subject named, minScore is acceptable.
+- *Pass criteria:*
+  - On /env/<env> expand a flag: clicking Detach on a segment opens a confirmation naming that segment key and that flag key, not generic 'Are you sure?' text
+  - Clicking Remove on a rollout rule opens a confirmation naming the flag and the rule being removed
+  - The Delete control on a flag opens a confirmation naming that flag key
+  - `grep -rn 'danger-zone' packages/dashboard/src` returns no <details> disclosure remnant, and the source comment that said the disclosure IS the confirmation step is updated or removed
+  - In each dialog the confirm control is the real submit button carrying name="field" with value delete / detachSegment / removeRollout
+- *Failure examples:*
+  - Delete-flag and detach get dialogs, but remove-rollout is left as a one-click submit because it was read as 'just removing a rule' rather than a destructive action
+  - The confirmation text is generic ('Remove this item?') for detach because the segment key was not threaded into the rollout-form render, so an operator with several attached segments cannot tell which one they are removing
+  - The old <details class="danger-zone"> is kept around the new dialog, so deleting a flag now needs two disclosure steps
+
+**Dialog ids unique per flag and per rule** (`unique-dialog-ids-per-subject`, minScore 8)
+
+- *Rule:* Ids are scoped by flag key and rule index so a page listing many flags contains no duplicate element id, and the single-flag page works too; 10 = verified programmatically with zero duplicate ids on a multi-flag page and all triggers opening their own dialog, 8 = ids unique and manually spot-checked, minScore is acceptable.
+- *Pass criteria:*
+  - Load /env/<env> with several flags each having multiple rollout rules, then in devtools compare document.querySelectorAll('[id]').length with the size of the set of their ids — no duplicates
+  - Click the Detach control on the second flag's second rule: the dialog that opens names that rule, not the first flag's
+  - Load /env/<env>/features/<key> (single-flag page) and confirm the same controls open their dialogs there
+  - Flag keys containing characters unusual in ids (dots, slashes, uppercase) still produce a valid, unique id and a working data-open-dialog match
+- *Failure examples:*
+  - Ids are scoped by flag key but not by rule index, so all rollout rules of one flag share a dialog id and every Remove button opens the first rule's confirmation — which submits the wrong ruleIndex
+  - The id is built as confirm-delete-${flagKey} and a key like checkout.limits/v2 produces an id that breaks a selector assumption, or collides after naive sanitising of two different keys to the same string
+  - The single-flag page renders with NO_URL_STATE and the developer's id scheme accidentally depends on a URL-state value, giving different ids on the two pages
+
+**Server-side guards unchanged** (`server-guards-untouched`, minScore 8)
+
+- *Rule:* The confirmation is purely a browser usability guard: the same-origin POST check, the expected-current-version conflict check and validation are byte-unchanged; 10 = the diff touches no server file and a direct POST bypassing the dialog is still rejected exactly as before, 8 = no server changes and the conflict path verified, minScore is acceptable.
+- *Pass criteria:*
+  - This phase's diff contains no changes to packages/dashboard/src/infrastructure/http-server.ts or any application/domain file
+  - Issue a delete POST with curl (no Origin header / wrong Origin) — it is rejected by the same-origin guard as before
+  - Issue a delete POST with a stale expected-current-version value — the conflict response is unchanged (same status and same rendered conflict notice)
+  - Each confirmation dialog's form still carries the base-version hidden input from the existing WriteFormContext
+- *Failure examples:*
+  - The developer moves the destructive submit into the dialog but rebuilds the form by hand, dropping the base-version hidden input — so deletes now silently win races that used to return a conflict
+  - A confirm()-style client check is added in app.js and treated as sufficient, while the dialog's form loses a field the server validates
+  - http-server.test.ts is edited to accommodate changed POST bodies, revealing the write contract drifted
+
+**No-JS confirmations work and branches are covered** (`confirmation-no-js-and-coverage`, minScore 8)
+
+- *Rule:* Without scripting each confirmation renders as an inline card whose confirm button submits the same form, and every new branch in rollout-form.ts and feature-edit-form.ts is unit-covered to keep the 100% gate; 10 = no-JS verified for all three actions and tests assert the per-subject dialog id and naming text, 8 = no-JS verified for one action and coverage green with meaningful assertions, minScore is acceptable.
+- *Pass criteria:*
+  - With JavaScript disabled, expand a flag: the Detach, Remove and Delete confirm controls are visible inline and clicking one performs the action in a single submit
+  - With JS disabled no confirmation Close/Cancel control is visible and no control is unreachable behind a never-opened <dialog>
+  - `pnpm test` passes with rollout-form.ts and feature-edit-form.ts at 100% branches
+  - Unit tests assert the dialog text contains the specific flag key / segment key / rule index, and that two different rules produce two different dialog ids
+  - packages/dashboard/e2e/segment-picker.spec.ts is updated in this diff to confirm before asserting the detach result, and the whole Playwright suite passes
+  - flag-page.test.ts is updated in this same diff and green — the single-flag page renders the same edit form, so its assertions on the delete control change with it
+- *Failure examples:*
+  - With JS off the confirmation renders inline but its Cancel control is a plain button inside the destructive form, so clicking Cancel submits the delete
+  - Unit tests assert a dialog exists but not that it names the right subject, so a wiring mistake sending every dialog the first rule's index passes the suite
+  - segment-upload-rollout.spec.ts, which also clicks details.rollouts > summary and reads .rule-rollout, is broken by the markup change and left failing because only segment-picker.spec.ts was listed in the plan
+
+*Healer hint:* The most likely failure is per-subject wiring — a dialog id or hidden ruleIndex shared across rules or flags, so the confirmation names one thing and posts another; assert two distinct rules produce distinct ids and distinct submitted values.
+
+</details>
+
+---
+
+## Discovery Findings
+
+| Area | Finding | File | Implication |
+|---|---|---|---|
+| Page shell / layout | layout.ts renderPage() emits a fixed frame: <header class="site-header"><div class="container">brand</div></header> then <main class="container">notices + body</main> then a deferred <script> for app.js. There is NO slot, no nav region and no grid/flex shell — every page is header + one centred column. Exports besides renderPage: renderRawJson, renderTimestamp, interface Notice. | `packages/dashboard/src/infrastructure/views/layout.ts:19-37` | A Side Menu cannot be added per-page; renderPage must gain a shell concept (e.g. an optional sidebar/nav argument or a renderEnvironmentShell wrapper). All 7 page renderers call renderPage, so the signature change is a cross-cutting phase of its own, and every view test that asserts on the page string is touched. |
+| Width cap | The 60rem cap is a single rule: .container { width:100%; max-width:60rem; margin:0 auto; padding:0 var(--gutter) } in layout.css lines 2-7. .container is applied in exactly two places, both in layout.ts (site-header inner div, and main). --gutter is 16px, 24px at min-width 640px (layout.css:80-88). | `packages/dashboard/src/infrastructure/views/styles/layout.css:2-7` | Widening is a one-rule change but it changes header AND every page simultaneously. Per-region max-width has to be reintroduced for pre (capped at max-height 24rem, no width cap) and .meta/.merge-sides grids which are auto-fit and will stretch unboundedly. |
+| Responsive behaviour | There are only four media queries in the whole stylesheet: layout.css:80 (min-width 640px, bumps --gutter and h1), tables.css:33 (max-width 640px, the stacked-card table layout driven by data-label attributes), base.css:29 (prefers-color-scheme dark) and base.css:124 (prefers-reduced-motion). There is no existing breakpoint for a sidebar and no container query anywhere. | `packages/dashboard/src/infrastructure/views/styles/tables.css:33` | The Side Menu needs a new breakpoint convention. 640px is the repo's only existing breakpoint and is already load-bearing for tables — reuse it rather than inventing a second one, and the collapse-the-menu-below-640px rule must not fight the stacked-table rule. |
+| Stylesheet registration | stylesheet.ts holds an ordered const array STYLE_FILES of 11 filenames (base, layout, forms, components, tables, rollout, segments, segment-list, segment-create, segment-attach, section-nav), reads each with readFileSync(new URL('./styles/<file>', import.meta.url)) and joins with newline. STYLESHEET_HREF is /assets/app.css?v=<sha256 slice 12>. stylesheet.test.ts is only 12 lines. | `packages/dashboard/src/infrastructure/views/stylesheet.ts:5-15` | Adding shell.css / side-menu.css / dialog.css is a one-line array edit, but ORDER matters (comment says tokens then layout then components). New files must also be copied by the build — check package.json/tsconfig handling of non-TS assets before assuming a new .css ships. |
+| Dialog pattern — VERIFIED, claim is TRUE | The <dialog> + data-open-dialog + data-open-on-load + .is-enhanced pattern really exists. environment-page.ts:128 renders <dialog id="publish-dialog" class="publish-dialog" aria-labelledby="publish-heading" with data-open-on-load when state.draft!==undefined && conflict===undefined>; the trigger at line 183 is <button type="button" data-open-dialog="publish-dialog" hidden>Publish new version</button>. app.js:18-28 adds is-enhanced to every <dialog> that has showModal, calls showModal() if data-open-on-load, and wires each [data-open-dialog] button (unhiding it) to showModal. components.css:235-277 gives .publish-dialog a static inline-card look by default and .publish-dialog.is-enhanced a fixed/modal look, plus ::backdrop and a rule hiding the Close form when not enhanced. | `packages/dashboard/src/infrastructure/views/scripts/app.js:18-28` | New dialogs get the pattern for free IF they reuse class publish-dialog — which is badly named for reuse. Plan an early rename/extraction phase (e.g. .modal-dialog in a new dialog.css with .publish-dialog as an alias) before five more dialogs hard-code the publish name. The trigger button is rendered hidden and unhidden only by app.js — that is the no-JS fallback contract. |
+| changes-dialog.ts / merge-dialog.ts — NOT dialogs | Neither file renders a <dialog>. changes-dialog.ts exports renderChangesFragment() and merge-dialog.ts exports renderMergeFragment() — both return inner-HTML FRAGMENTS fetched by app.js and injected into #changes-body of the single <dialog id="changes-dialog" class="publish-dialog"> declared in environment-page.ts:155-159. app.js:165 rewrites #changes-heading textContent to 'Merge your draft' to reuse that same dialog element. | `packages/dashboard/src/infrastructure/views/environment-page.ts:155-159` | There is precedent for a server-rendered fragment endpoint feeding one reusable dialog shell — a viable pattern for confirmation dialogs too. But it lives in app.js (outside coverage). Do not describe changes-dialog/merge-dialog as existing modal components; they are fragment renderers. |
+| section-nav.ts | section-nav.ts is 22 lines. It renders <nav class="section-nav" aria-label="Sections"> containing plain anchors of the form <a href=withUrlState(environmentPath(env), urlState)#fragment> for three exported constants CURRENT_SECTION(current-heading), FLAGS_SECTION(flags-heading), VERSIONS_SECTION(versions-heading). It is called only from environment-page.ts:167, which filters FLAGS_SECTION out when the flags section renders empty. section-nav.css makes it position:sticky; top:3.25rem; z-index:9; display:flex; flex-wrap:wrap explicitly sized to clear the update-banner (z-index 10). | `packages/dashboard/src/infrastructure/views/section-nav.ts:14-22` | It is genuinely the seed of the Side Menu: same URL-state-carrying link shape, same only-offer-sections-that-rendered rule. But its links are in-page FRAGMENTS on one page, whereas the Side Menu must link to different ROUTES and mark the current one. Treat it as replaced, not extended; section-nav.test.ts (35 lines) asserts exact full-string equality and will be rewritten wholesale. |
+| Write forms — placement | Only ONE write form is currently a dialog (publish). Every other one is inline: new-flag-form.ts wraps in <details class="card"><summary>New flag</summary> (open when a draft was rejected); feature-edit-form.ts renders a bare <form> inside the flag row, plus renderRulesControl's <details><summary>Edit rules</summary>; rollout-form.ts wraps in <details class="rollouts"><summary>Rollout</summary> with one <form> per rule; segment-attach-form.ts wraps in <details class="segment-attach"><summary>Attach a segment</summary>; the create-segment form is a plain <section class="card segment-create"> on the segment list page; rollback is a bare <form> per timeline item in version-list-page.ts. | `packages/dashboard/src/infrastructure/views/feature-edit-form.ts:74-92` | The existing <details> wrappers ARE the current disclosure affordance and are exactly what the e2e specs click. Moving to dialogs means each wrapper becomes trigger-button + <dialog>, and the open-because-a-draft-was-rejected branch becomes data-open-on-load. That branch already exists in three places — reuse its condition, don't invent new state. |
+| URL-state echo mechanism — BOTH, not one | Write forms carry URL state TWO ways at once: (a) the form's action is wrapped in withUrlState(path, urlState) — see new-flag-form.ts, feature-edit-form.ts writeFormContext(), environment-page publish dialog, version-list rollback; and (b) hidden inputs from stateInputs(urlState) in state-fields.ts, which emits one hidden input per key. The GET filter form uses hidden inputs ONLY, with filter blanked so the search input owns that key. WriteFormContext is the shared shape {action, baseVersionInput, stateInputs}. | `packages/dashboard/src/infrastructure/views/state-fields.ts:9-19` | Any dialog-ised form must keep BOTH mechanisms, and WriteFormContext is the seam to thread through new dialog renderers — don't invent a new context type. url-state vocabulary is exactly filter/open/page/pageSize; a Side Menu view selector must be a ROUTE, not a new query key. |
+| Deletes/detaches that actually exist — complaint 4 is grounded but small | Exactly three destructive UI actions exist, all POSTing to the same flag endpoint /env/<env>/features/<key> with a field submit-button value: (1) delete-flag — feature-edit-form.ts renderDeleteControl, <details class="danger-zone"><summary>Delete</summary> with button name=field value=delete, and an explicit comment 'A <details> disclosure is the confirmation step, so the page needs no JavaScript confirm()'; (2) detachSegment — rollout-form.ts renderSegmentKeys, its own <form> with hidden ruleIndex and button name=field value=detachSegment, NO confirmation at all; (3) removeRollout — rollout-form.ts, button name=field value=removeRollout, NO confirmation. There is NO delete-segment and NO delete-environment anywhere. | `packages/dashboard/src/infrastructure/views/rollout-form.ts:44-62` | Complaint 4's scope is 3 actions on 2 files, not a sweep. Delete-flag already has a deliberate non-JS confirmation step that the plan must REPLACE-not-duplicate (and whose comment must be updated). removeRollout is a destructive action the task statement did not enumerate — decide explicitly in-plan whether it is in scope. Do not plan for a segment-delete confirmation; no such action exists. |
+| Environment-scoped routes | http-server.ts match() only accepts paths starting /env/<env> with 2-4 segments: GET /env/<env>; GET /env/<env>/current-version; GET /env/<env>/changes; GET\|POST /env/<env>/merge; POST /env/<env>/merge/apply; POST /env/<env>/publish; POST /env/<env>/rollback; POST /env/<env>/features; POST and GET /env/<env>/features/<key>; GET /env/<env>/versions and GET /env/<env>/versions/<n>; segment routes delegated to matchSegmentRoute. POSTs are gated by isSameOrigin. | `packages/dashboard/src/infrastructure/http-server.ts:332-501` | A Side Menu with Flags / Versions / Segments has ready targets for Versions and Segments, but Flags has no route of its own — it is the environment page root, which today ALSO carries the current snapshot card and the version timeline. Either the menu's Flags item points at /env/<env> (and the page sheds the versions/current sections), or a new /env/<env>/flags route is added. The 4-segment path cap bounds any new nested route. |
+| environment-page.ts composition | renderEnvironmentPage (188 lines) composes, in order: renderUpdateWatch (watch div + update-banner + merge-notice + changes-dialog), renderSectionNav, renderCurrentCard (#current-heading), renderFlags (#flags-heading, filter form, snapshot contents, new-flag form), renderVersions (#versions-heading, reversed timeline), then renderPublishDialog appended after the summary. The page-head is <div class="page-head page-head-actions"> with an h1, a bare Segments link, and the hidden publish trigger. | `packages/dashboard/src/infrastructure/views/environment-page.ts:163-188` | Splitting by section is mechanical (renderCurrentCard/renderFlags/renderVersions are already separate private functions) — extracting them into modules is a low-risk first phase. But renderUpdateWatch's banner/changes-dialog is GLOBAL to the environment page and must survive on every Side Menu view, otherwise the horizon-24/25 concurrent-edit machinery silently stops working on the Versions and Segments views. |
+| Coverage gate | Root vitest.config.ts sets coverage.include = ['packages/*/src/**/*.ts'], exclude ['**/*.test.ts'], with 100% thresholds on lines/branches/functions/statements. Tests live BOTH in packages/dashboard/src (co-located *.test.ts for infrastructure/views) and in packages/dashboard/test (application/domain). e2e/** and integration/** are excluded from the vitest projects. app.js is a .js under src and therefore outside the include glob. | `vitest.config.ts:17-27` | Every new .ts view module needs 100% branch coverage from day one, and any dialog logic pushed into app.js is uncovered-but-also-unprovable-by-unit-test. Budget a coverage task inside each phase, not a trailing one. |
+| Test sizes / style | http-server.test.ts is 1726 lines. View unit tests total 1767 lines across 12 files (feature-edit-form 433, environment-page 246, rollout-form 185, segment-attach-form 185, segment-list-page 184, version-list-page 133, snapshot-contents 126, dialogs 103, flag-page 97, section-nav 35, state-fields 28, stylesheet 12). They are pure string assertions on rendered HTML, and section-nav.test.ts uses exact toBe() on the whole nav string; environment-page.test.ts regex-scrapes the <textarea id="snapshot"> and HTML-unescapes it. | `packages/dashboard/src/infrastructure/views/section-nav.test.ts:8-16` | Markup changes break tests by construction — these are change-detector tests. Exact-equality assertions are the most brittle; prefer toContain in new dialog tests. The 1726-line http-server.test.ts is the file that grows most from new routes/fragments; plan its split or at least budget for it. |
+| e2e selectors a dialog move breaks | Concrete couplings: segment-upload-rollout.spec.ts:54-55 clicks .flag-row > summary then details.rollouts > summary, then reads .rule-rollout / .badge-rollout; segment-picker.spec.ts:52-65 clicks link name Expand, then details.segment-attach summary, then details.rollouts > summary, then .rule-segment; flag-list.spec.ts:6-8 asserts 'Save default' hidden until the row opens, and :54-61 already drives the publish dialog via getByRole('dialog',{name:'Publish a new version'}); concurrent-edits.spec.ts uses getByRole('dialog',{name:'What changed'}) and {name:'Merge your draft'} plus row.getByLabel('Default JSON'); url-state.spec.ts:11-12 clicks the Expand link on [data-flag="checkout-limits"]. | `packages/dashboard/e2e/segment-picker.spec.ts:52-65` | Moving rollout and attach into dialogs breaks segment-picker.spec.ts and segment-upload-rollout.spec.ts directly. flag-list.spec.ts's hidden-until-expanded assertion breaks if the edit form leaves the row. url-state.spec.ts and the [data-flag] / Expand link contract must be preserved — the row disclosure itself is URL-state-bound and should NOT become a dialog. The publish-dialog specs give the exact getByRole('dialog',{name}) idiom every new spec should copy. |
+| Dialog-vs-URL-state collision (concrete) | snapshot-contents.ts carries an explicit comment: 'Only the flag rows themselves are in the URL contract. The nested Rollout / Attach a segment / Edit rules / Delete panels deliberately stay out of it: end-to-end specs click those summaries open, and a state link inside them would reload the page out from under the click.' Row openness is OR-ed: editable.draft?.key === flag.key \|\| inUrl. | `packages/dashboard/src/infrastructure/views/snapshot-contents.ts:30-40` | This is a recorded decision that directly governs the dialog work: the nested panels are already deliberately outside URL state, so turning them into dialogs is consistent — but the dialog must then be re-opened on a rejected draft by the same draft?.key===flag.key signal, i.e. data-open-on-load keyed per flag. That means dialog ids must be per-flag (unique), which the single-global-publish-dialog pattern does not yet cover. |
+| Flag page reuses the same form | flag-page.ts renders renderFeatureEditForm with urlState: NO_URL_STATE (the single-flag page has no flag list to filter and no sibling rows to open), inside <section class="card">. So every change to feature-edit-form (edit, rollout, attach, delete) lands on BOTH /env/<env> and /env/<env>/features/<key>. | `packages/dashboard/src/infrastructure/views/flag-page.ts:29-44` | Dialog-ising the edit/rollout/attach/delete forms changes two pages at once; flag-page.test.ts (97 lines) must be updated in the same phase. Per-flag dialog ids must be safe on a page with exactly one flag and on a page with many. |
+| ESLint layer rules | eslint.config.js has import-x/no-restricted-paths zones: packages/*/src/domain/** may not import from application/** or infrastructure/**; packages/*/src/application/** may not import from infrastructure/**. There is no rule constraining imports WITHIN infrastructure, and a dedicated config block treats packages/dashboard/src/infrastructure/views/scripts/*.js as browser-global JS. | `eslint.config.js:50-62` | New view modules under infrastructure/views are unconstrained by layer rules (views already import from application) — no architectural blocker to adding shell/side-menu/dialog modules. No new eslint work is needed beyond keeping app.js in its existing browser-globals block. |
+| Scope reconciliation | Of the five move-into-dialogs targets, one (publish) is already a dialog, and the create-segment form lives on a DIFFERENT page (/env/<env>/segments) as a plain card, not on the environment page at all. The rollback form is a third inline write form (version-list-page.ts) the task statement does not mention and which is arguably destructive. | `packages/dashboard/src/infrastructure/views/segment-list-page.ts:66-80` | Restate the dialog scope as: new-flag, edit-flag(+rules), rollout, attach-segment on the environment/flag pages, plus create-segment on the segment list page — five surfaces across three pages, not one page. Decide explicitly whether rollback and removeRollout join the confirmation set. |
+
+## Out of Scope
+
+- Item 5 — the staged pending-changes write model (accumulating edits into a pending draft, a 'review pending changes' dialog, publishing to S3 only on Update): explicitly DEFERRED by the user to the next horizon; its version-drift behaviour is already decided and recorded as an assumption, not planned here.
+- Any change to when or how writes reach S3 — CAS via expectedCurrentVersion, replayOnLatest, the 200/400/422 inline re-render, single-writer publisher — because this horizon is presentation-only and item 5 owns the write model.
+- Burning down the ~30 open blockers.md entries (200+422 concurrent-replay race, pointer-read timing window, orphaned objects, the standing rule for app.js logic): the user chose a feature horizon over the brief's Direction B stabilisation.
+- Extending URL state to the flag page and versions page, and the horizon-25 deferred collapsible page-level sections: superseded by the Side Menu, which changes what 'a section' even means.
+- Flag-list paging or virtualisation: no justification exists in the repo and the e2e seed has three flags (horizon-25 finding).
+- Introducing a CSS framework, a component library, a client-side router or a build step for the dashboard: the dashboard is deliberately a no-framework server-rendered node:http app (horizon-10 decision).
+- Redirect-after-POST (POST/Redirect/GET), even though it would simplify dialog re-open state: explicitly rejected in horizon 25 and not re-opened here.
+- Moving the Playwright e2e suite off the in-memory InMemoryEnvironment fixture onto LocalStack fixtures: a separate, CI-wall-clock-costly decision that this UI work does not require.
+- Authentication, multi-user access control, or any relaxation of the 127.0.0.1 Host/Origin guard: the dashboard stays a local single-operator tool.
+- Redesigning or restyling the CLI, the deploy stack, or any non-dashboard package.
+- Move the edit-flag form and its Edit rules panel into a Modal Dialog — held for the next Planning Horizon to keep this one small and reviewable; it changes two pages plus three Playwright specs at once.
+- Move the Rollout panel into a Modal Dialog — held for the next Planning Horizon; a separate write surface on the same two pages.
+- Move the Attach a segment panel into a Modal Dialog — held for the next Planning Horizon; each of the five write surfaces is its own one-deliverable phase.
+- Move the create-segment form on the segment list page into a Modal Dialog — held for the next Planning Horizon; a third page with its own tests.
+- Add a confirmation before the rollback action on the versions page — the operator complaint enumerated deletes; rollback is arguably destructive but was not requested and no decision exists on whether it counts.
+- Add a dedicated /env/<env>/flags route so the Flags menu item is a page of its own — speculative; the environment page root already serves as the Flags view, and a new route is only justified once the current-snapshot and version sections actually move off it.
+- Split environment-page.ts into per-section view modules — its private section renderers are already separated and nothing this horizon is blocked by the split.
+- Split the ~1700-line http-server.test.ts — no new routes are added this horizon, so it does not grow here.
+
+## Success Criteria
+
+- On the dashboard, served by the existing node:http server: (1) a persistent left Side Menu is present on the environment, versions and segment-list pages and navigates between the Flags, Versions and Segments views, with the current view marked by aria-current, replacing the sticky in-page section nav; (2) the page shell uses the available viewport width instead of the 60rem .container cap, with per-region readability caps (raw-JSON pre at 80ch, the auto-fit .meta and .merge-sides grids upper-bounded), the 640px-and-below layout still usable and no horizontal page scroll at any viewport; (3) the New flag form is rendered inside a <dialog> opened from a trigger rather than inline in the page flow, and a rejected submit (400/422) re-opens it with the operator draft values via the existing data-open-on-load mechanism; (4) all three destructive actions — delete flag, detach segment, remove rollout — require an explicit confirmation dialog naming the exact flag key, segment key or rule index before the POST is issued; (5) every dialog keeps the existing no-JavaScript inline-card fallback, so the page works with scripting disabled; (6) all existing behaviour is unchanged — same routes, same 200/400/422 inline re-render, same same-origin and expected-current-version guards, same URL-state query keys echoed through every write form via BOTH the form action and hidden inputs; (7) the repo gates are green: pnpm verify at 100% line/branch/function/statement coverage over packages/*/src/**/*.ts, ESLint layer boundaries clean, the LocalStack integration suite passing, and the Playwright e2e suite updated by the phase that breaks it and passing. NOT in this bar: the other four write-form surfaces (edit-flag, rollout, attach-segment, create-segment), which stay inline this horizon.
+- Add full-width page shell with navigation slot: A full-width .page-shell page frame with an optional left navigation region, replacing the 60rem .container cap, with no horizontal page scroll at a wide viewport or at 640px and below and every existing page otherwise unchanged.
+- Add Side Menu linking Flags, Versions, Segments: A persistent Side Menu module rendered in the shell's nav slot on the environment, versions and segment-list pages, with the current view marked by aria-current.
+- Extract reusable Modal Dialog from publish dialog: A reusable modal-dialog view module with its own stylesheet, with the publish dialog rendered through it and behaving exactly as before.
+- Move New flag form into Modal Dialog: The new-flag form rendered inside a modal dialog opened from a trigger, re-opening with the operator's draft values after a rejected submit.
+- Add confirmation dialog before every destructive action: All three destructive actions — delete flag, detach segment, remove rollout — require an explicit confirmation naming the affected flag, segment or rule before posting.
+
+## Alignment Preview
+
+The preview critique raised five concerns. Four were acted on:
+
+- *The three-phase size cut would ship the layout and none of the dialogs* — the user chose to keep all six planned phases, merged into five by folding the nav slot and the width change into one page-shell phase (both edit the same two files).
+- *The success bar was written wider than the horizon delivers* — narrowed to exactly what ships, with the four remaining write-form surfaces named as excluded.
+- *Delete-flag, the one action the operator named, was the one deferred* — pulled into the confirmation phase, so all three destructive actions now confirm identically instead of two different ways.
+- *The full-width phase had no done-ness bar* — concrete values (raw-JSON `pre` at 80ch, upper-bounded auto-fit grids) and one settling check (no horizontal scroll at wide and at 640px) written into the phase and its rubric.
+
+One concern was considered and **not** applied: *fold the reusable-dialog extraction into the new-flag phase, since its only outcome is that nothing changes.* The premise was that the extraction has one consumer; with delete-flag pulled in it has two (the New flag dialog and all three confirmations), so extracting it once is now cheaper than copying it twice. Recorded rather than silently dropped.
+
+The user redirected once, at the first preview.
+
+## Quality Gate
+
+Path: full (existing system, several view modules, blocking preview checkpoint). One critic iteration, as the method prescribes.
+
+- **Blockers:** 0 raised, 0 discarded on evidence, 0 downgraded, 0 confirmed.
+- **Healed (1 major):** `grounded-in-discovery` scored 5 against a bar of 6. The discovery finding *"Flag page reuses the same form"* establishes that every change to `feature-edit-form.ts` lands on both `/env/<env>` and `/env/<env>/features/<key>`, but the confirmation phase listed neither `flag-page.ts` nor `flag-page.test.ts`, so the executor would have hit an unlisted broken test and been tempted to loosen it. Fixed by adding `flag-page.test.ts` to that phase's files, a change bullet explaining why, and a pass criterion requiring it green in the same diff. Applied directly by the orchestrator because the critic's fix proposal was fully specified — a healer round-trip would have rewritten the whole roadmap to add two fields.
+- **Accepted debt (9 minor, none healed):** the eight passing dimensions' minor notes, plus one piece of optional polish — if phase 1 runs long, the per-region readability caps could split into a follow-on phase, since they touch stylesheets other than `layout.css` and `shell.css`.
+- **Verification call:** not made — the evidence screen left no blocker undecided.
+- **Verdict:** passed after one major healed.
+
+## Cost
+
+Budget stated before Stage 1: 8–10 Agent calls for the full path with Discovery. Actual: **6** — analyze, discovery, decompose, preview concerns, next-horizon brief, invent rubrics, critic (7 counting the critic; the healer call was replaced by a direct orchestrator fix, and no blocker-verification call was needed). No stage overran. Zero of the two available phase-patch calls were used: the one name over eight words was rewritten mechanically.
+
+## Full analysis
+
+**Domain shape:** technical — The objective is about the dashboard's page shell, navigation chrome, dialog mechanics and layout — frontend presentation machinery — not about flag, segment or snapshot rules, which this horizon deliberately leaves untouched. The critic re-scored this independently and agreed: no phase goal, input or expected result encodes a flag, segment or snapshot rule.
+
+### Ubiquitous language
+
+| Term | Meaning |
+|---|---|
+| **Environment Page** | The server-rendered page at /env/<env> that today shows current snapshot, flags and version history as one long scrolling list. |
+| **Side Menu** | The persistent left-hand navigation, present on every environment-scoped page, linking Flags / Versions / Segments and marking the current one. |
+| **Page Shell** | The layout frame around page content (header, Side Menu, content region) whose width currently comes from the 60rem .container cap in styles/layout.css. |
+| **Modal Dialog** | A <dialog>-based overlay holding a write form, opened by a trigger via app.js and falling back to an inline card when scripting is unavailable. |
+| **Confirmation Dialog** | A Modal Dialog that names the exact flag or rule being removed and requires an explicit confirm before a delete or detach POST is issued. |
+| **Write Form** | Any of the dashboard's POST forms (new flag, edit flag, rollout, create segment, attach segment, detach, delete, publish, rollback) that re-renders inline with 200/400/422 and draft values. |
+| **URL State** | The query-string-carried UI state (filter text, open flag rows, paging) owned by infrastructure/url-state.ts and echoed through every Write Form. |
+| **Progressive Enhancement** | The rule that app.js only improves an already-working server-rendered page, because app.js sits outside the 100% coverage gate. |
+
+### Assumptions
+
+- DECISION CARRIED FORWARD (item 5, next horizon, do not re-derive): a pending draft is kept against the version it started from; if the environment's current version moves underneath it, the review dialog WARNS at review time and lets the operator publish anyway or discard — it never hard-blocks and never silently auto-replays.
+- The existing <dialog> + data-open-dialog + data-open-on-load + .is-enhanced pattern already shipped for the publish dialog (views/environment-page.ts, scripts/app.js, styles/components.css) is the pattern every new modal follows; no dialog library and no new client framework is introduced.
+- Progressive enhancement remains binding: with JavaScript off, every dialog still renders as an inline card whose form submits normally, because that is how the publish dialog already behaves and app.js sits outside the coverage gate.
+- The Side Menu navigates by ordinary server-rendered links between the existing routes/anchors (environment page, versions page, segment list page); it is not a client-side router and adds no new application-layer port.
+- Binding horizon-25 decisions hold unchanged: redirect-after-POST stays rejected, write POSTs re-render inline with 200/400/422 and draft values, UI state lives in the query string via infrastructure/url-state.ts, and the retained app.js live filter stays as progressive enhancement.
+- environment-page.ts (188 lines, already absorbing Section Nav, the GET filter form and row openness) will need splitting into view modules to hold the shell, the menu and the dialogs; per the repo's stylesheet convention each new area gets its own CSS file under views/styles/ registered in stylesheet.ts, never one growing file.
+- The existing sticky Section Nav (views/section-nav.ts, styles/section-nav.css) is the seed of the Side Menu and is replaced or reshaped by it rather than kept alongside as a second navigation.
+- No change to @featuresync/core, /aws, /nestjs, /cli or /deploy is required; this horizon is confined to packages/dashboard plus its tests and e2e specs.
+
+### Risks
+
+- A confirmation dialog is a usability guard, not a security or correctness guard: it runs in the browser and can be bypassed by a direct POST. The server-side Origin/Host guard, CAS (expectedCurrentVersion) and validation MUST remain exactly as they are — dropping or weakening any of them because 'the operator now confirms' would trade a real invariant for a UI affordance.
+- The 100% branch coverage gate over hand-written HTML template strings: every new dialog state (open/closed, enhanced/fallback, draft/no-draft, confirm/cancel) multiplies branches in view modules, and http-server.test.ts is already ~1700+ lines. Budget for the coverage cost per phase or the gate fails late.
+- Dialog open/close behaviour lives in app.js, which is permanently outside the coverage include glob (horizon-18 decision). Any logic richer than 'show/hide this dialog' must move into covered .ts, or the behaviour is provable only by Playwright.
+- Existing e2e specs (flag-list, concurrent-edits, segment-picker, segment-upload-rollout, url-state) assert on the current inline-form markup and click .flag-row > summary; moving forms into dialogs will break them and rewriting them risks weakening what horizon 19-25 proved. The mutation-check discipline (disable the mechanism, spec must fail) should be preserved.
+- Every POST reloads the page and collapses disclosures; combined with URL-state row openness and app.js's additive force-open, a dialog that must re-open after a rejected draft has three competing owners of visible state and can end up open-and-empty or closed-with-an-unseen-error.
+- Removing the 60rem .container cap affects EVERY page, not just the environment page (home, versions, flag, segment, segment list, error), and long unbounded lines of raw JSON/table content degrade readability at wide viewports if no per-region max-width replaces it.
+- Item 5's deferral means this horizon ships more modal surfaces that still write straight to S3 on submit; the next horizon must re-route all of them through the pending draft, so any dialog whose markup hard-codes 'submit = publish' will have to be reopened.
+- Scope pressure: four operator complaints plus a likely environment-page.ts split is more than one 3-5 phase horizon comfortably holds; cutting the shell/menu and the dialog work into one horizon each may be the honest slice.
+

@@ -1,0 +1,44 @@
+.side-menu {
+  position: sticky;
+  /* Clears the update banner, which sticks at top 0.5rem and is about 2.5rem tall; a lower stacking
+     order than the banner's 10 keeps the banner on top wherever the two still meet. */
+  top: 3.25rem;
+  z-index: 9;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.side-menu-item {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap);
+  padding: 0 0.75rem;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.side-menu-item:hover {
+  color: var(--accent);
+  background: var(--surface-muted);
+}
+
+.side-menu-item.is-current {
+  color: var(--text);
+  background: var(--surface-muted);
+  font-weight: 600;
+}
+
+@media (max-width: 639px) {
+  .side-menu {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}

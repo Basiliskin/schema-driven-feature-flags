@@ -64,3 +64,39 @@ test.describe('publish dialog', () => {
     expect(env.features()).toHaveProperty('beta-search');
   });
 });
+
+test.describe('new flag dialog', () => {
+  test('opens from the flags section and creates the flag', async ({ page, env, openEnvironment }) => {
+    await openEnvironment();
+    await expect(page.getByLabel('Key', { exact: true })).toBeHidden();
+
+    await page.getByRole('button', { name: 'New flag' }).click();
+    const dialog = page.getByRole('dialog', { name: 'New flag' });
+    await expect(dialog).toBeVisible();
+
+    await dialog.getByLabel('Key').fill('beta-search');
+    await dialog.getByLabel('Enabled').check();
+    await dialog.getByRole('button', { name: 'Create flag' }).click();
+
+    await expect(page.locator('[data-flag="beta-search"]')).toBeVisible();
+    expect(env.features()).toHaveProperty('beta-search');
+  });
+
+  test('re-opens with the typed draft and the error when the create is rejected', async ({ page, env, openEnvironment }) => {
+    await openEnvironment();
+    await page.getByRole('button', { name: 'New flag' }).click();
+    const dialog = page.getByRole('dialog', { name: 'New flag' });
+
+    await dialog.getByLabel('Key').fill('limits');
+    await dialog.getByLabel('Type').selectOption('config');
+    await dialog.getByLabel('Default JSON (config flags only)').fill('{');
+    await dialog.getByRole('button', { name: 'Create flag' }).click();
+
+    const reopened = page.getByRole('dialog', { name: 'New flag' });
+    await expect(reopened).toBeVisible();
+    await expect(reopened.getByText('The default value is not valid JSON.')).toBeVisible();
+    await expect(reopened.getByLabel('Key')).toHaveValue('limits');
+    await expect(reopened.getByLabel('Default JSON (config flags only)')).toHaveValue('{');
+    expect(env.currentVersion).toBe(1);
+  });
+});

@@ -5,8 +5,10 @@ import { NO_URL_STATE, withUrlState, type DashboardUrlState } from '../url-state
 import { environmentPath, escapeHtml } from './escape.js';
 import type { EditDraft } from './feature-edit-form.js';
 import { renderPage, renderRawJson, renderTimestamp, type Notice } from './layout.js';
-import { renderNewFlagForm, type CreateDraft } from './new-flag-form.js';
-import { CURRENT_SECTION, FLAGS_SECTION, VERSIONS_SECTION, renderSectionNav, type SectionLink } from './section-nav.js';
+import { NEW_FLAG_DIALOG_ID, NEW_FLAG_TITLE, renderNewFlagForm, type CreateDraft } from './new-flag-form.js';
+import { renderDialogTrigger, renderModalDialog } from './modal-dialog.js';
+import { renderSideMenu } from './side-menu.js';
+import { renderUpdateWatch } from './update-watch.js';
 import { segmentListPath } from './segment-list-page.js';
 import { renderSnapshotContents } from './snapshot-contents.js';
 import { stateInputs } from './state-fields.js';
@@ -99,13 +101,15 @@ const renderFlags = (view: PublishedView, state: EnvironmentPageState): string =
   const flags = noMatch
     ? '<ul class="flag-list"></ul>'
     : renderSnapshotContents(contents.status === 'valid' ? { ...contents, flags: matching } : contents, editable, urlState);
-  const newFlag = contents.status === 'valid' ? `\n${renderNewFlagForm({ ...context, ...(createDraft === undefined ? {} : { draft: createDraft }) })}` : '';
+  const creatable = contents.status === 'valid';
+  const newFlag = creatable ? `\n${renderNewFlagForm({ ...context, ...(createDraft === undefined ? {} : { draft: createDraft }) })}` : '';
+  const newFlagTrigger = creatable ? renderDialogTrigger({ dialogId: NEW_FLAG_DIALOG_ID, label: NEW_FLAG_TITLE }) : '';
   const filterable = contents.status === 'valid' && contents.flags.length > 0;
   const filter = filterable ? renderFilterForm(view.environment, urlState) : '';
   // The message stays in the markup while rows match, because the in-browser instant filter reveals it without a reload.
   const noMatchMessage = filterable ? `\n<p class="muted" data-filter-empty${noMatch ? '' : ' hidden'}>No flags match.</p>` : '';
   return `<section class="section" aria-labelledby="flags-heading">
-<div class="section-head"><h2 id="flags-heading">Flags</h2>${filter}</div>
+<div class="section-head"><h2 id="flags-heading">Flags</h2>${filter}${newFlagTrigger}</div>
 <div class="stack">
 ${flags}${noMatchMessage}${newFlag}
 </div>
@@ -122,53 +126,27 @@ ${[...view.versions]
 </ol>
 </section>`;
 
-// A modal dialog keeps the raw-JSON editor out of the way until it is asked for. It opens on load when
-// a publish was rejected, so the operator lands back on their draft; without JavaScript it renders inline.
-// On a conflict the review dialog opens first, and offers to return to this draft from there.
-const renderPublishDialog = (view: EnvironmentView, state: EnvironmentPageState, urlState: DashboardUrlState): string => `<dialog id="publish-dialog" class="publish-dialog" aria-labelledby="publish-heading"${state.draft === undefined || state.conflict !== undefined ? '' : ' data-open-on-load'}>
-<div class="dialog-head"><h2 id="publish-heading">Publish a new version</h2>
-<form method="dialog"><button type="submit" class="button-secondary" aria-label="Close">Close</button></form></div>
-<p class="muted">Starts from the current snapshot. <code>version</code>, <code>previousVersion</code> and <code>createdAt</code> are set when you publish.</p>
+// Opens on load when a publish was rejected, so the operator lands back on their draft; on a conflict
+// the review dialog opens first and offers to return to this draft from there.
+const renderPublishDialog = (view: EnvironmentView, state: EnvironmentPageState, urlState: DashboardUrlState): string =>
+  renderModalDialog({
+    id: 'publish-dialog',
+    headingId: 'publish-heading',
+    title: 'Publish a new version',
+    openOnLoad: state.draft !== undefined && state.conflict === undefined,
+    body: `<p class="muted">Starts from the current snapshot. <code>version</code>, <code>previousVersion</code> and <code>createdAt</code> are set when you publish.</p>
 <form method="post" action="${escapeHtml(withUrlState(`${environmentPath(view.environment)}/publish`, urlState))}" class="stack">
 ${stateInputs(urlState)}${view.status === 'published' ? `<input type="hidden" name="baseVersion" value="${String(view.currentVersion)}">\n` : ''}<label for="snapshot">Snapshot JSON</label>
 <textarea id="snapshot" name="snapshot" rows="16" required spellcheck="false">${escapeHtml(state.draft ?? prefill(view))}</textarea>
 <div class="actions"><button type="submit">Publish</button></div>
-</form>
-</dialog>`;
+</form>`,
+  });
 
-// Filled in by the page script when a newer version shows up; hidden until then and without JavaScript.
-const renderUpdateWatch = (view: PublishedView, conflict: EnvironmentPageState['conflict']): string => {
-  const review =
-    conflict === undefined
-      ? ''
-      : ` data-review-since="${String(conflict.since)}"${conflict.key === undefined ? '' : ` data-review-key="${escapeHtml(conflict.key)}"`}`;
-  const message =
-    conflict === undefined
-      ? 'Someone published version <strong data-latest-version></strong> after you opened this page.'
-      : `${conflict.key === undefined ? 'Your snapshot draft was based on' : `Your edit to <code>${escapeHtml(conflict.key)}</code> was made on`} version ${String(conflict.since)}; the page now shows version <strong data-latest-version>${String(view.currentVersion)}</strong>.`;
-  return `<div data-watch-version="${String(view.currentVersion)}" data-watch-path="${escapeHtml(environmentPath(view.environment))}"${review} hidden></div>
-<div id="update-banner" class="update-banner" role="status"${conflict === undefined ? ' hidden' : ''}>
-<p>${message}</p>
-<button type="button" data-review-changes>Review changes</button>
-</div>
-<div id="merge-notice" class="notice warning" role="status" hidden><p></p></div>
-<dialog id="changes-dialog" class="publish-dialog" aria-labelledby="changes-heading">
-<div class="dialog-head"><h2 id="changes-heading">What changed</h2>
-<form method="dialog"><button type="submit" class="button-secondary">Close</button></form></div>
-<div id="changes-body"></div>
-</dialog>`;
-};
-
-// The nav only offers sections the page actually rendered, so a link never points at a missing anchor.
-const renderPublished = (view: PublishedView, state: EnvironmentPageState, urlState: DashboardUrlState): string => {
-  const flags = renderFlags(view, state);
-  const sections: SectionLink[] = [CURRENT_SECTION, ...(flags === '' ? [] : [FLAGS_SECTION]), VERSIONS_SECTION];
-  return `${renderUpdateWatch(view, state.conflict)}
-${renderSectionNav(view.environment, urlState, sections)}
+const renderPublished = (view: PublishedView, state: EnvironmentPageState, urlState: DashboardUrlState): string =>
+  `${renderUpdateWatch(view.environment, view.currentVersion, state.conflict)}
 ${renderCurrentCard(view)}
-${flags}
+${renderFlags(view, state)}
 ${renderVersions(view, urlState)}`;
-};
 
 export const renderEnvironmentPage = (view: EnvironmentView, state: EnvironmentPageState = {}): string => {
   const urlState = state.urlState ?? NO_URL_STATE;
@@ -180,9 +158,10 @@ export const renderEnvironmentPage = (view: EnvironmentView, state: EnvironmentP
     view.environment,
     `<div class="page-head page-head-actions"><div><p class="eyebrow">Environment</p><h1>Environment ${escapeHtml(view.environment)}</h1></div>
 <a href="${escapeHtml(segmentListPath(view.environment))}">Segments</a>
-<button type="button" data-open-dialog="publish-dialog" hidden>Publish new version</button></div>
+${renderDialogTrigger({ dialogId: 'publish-dialog', label: 'Publish new version' })}</div>
 ${summary}
 ${renderPublishDialog(view, state, urlState)}`,
     state.notices,
+    renderSideMenu(view.environment, 'flags', urlState),
   );
 };

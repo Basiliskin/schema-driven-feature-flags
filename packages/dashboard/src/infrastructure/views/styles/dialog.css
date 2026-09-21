@@ -1,0 +1,44 @@
+/* Modal dialog; inline card when scripting is unavailable. */
+.modal-dialog {
+  display: block;
+  position: static;
+  width: auto;
+  margin: 2rem 0 0;
+  padding: 1rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.modal-dialog.is-enhanced {
+  display: none;
+  position: fixed;
+  width: min(48rem, calc(100vw - 2 * var(--gutter)));
+  max-height: calc(100vh - 2 * var(--gutter));
+  margin: auto;
+  overflow: auto;
+}
+
+.modal-dialog.is-enhanced[open] {
+  display: block;
+}
+
+.modal-dialog::backdrop {
+  background: rgb(0 0 0 / 45%);
+}
+
+.dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.dialog-head h2 {
+  margin: 0;
+}
+
+.modal-dialog:not(.is-enhanced) .dialog-head form {
+  display: none;
+}

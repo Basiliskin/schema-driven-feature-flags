@@ -16,7 +16,18 @@ const renderNotice = (notice: Notice): string => {
   return `<div class="notice ${notice.kind}" role="status"><p>${escapeHtml(notice.message)}</p>${details}</div>`;
 };
 
-export const renderPage = (title: string, body: string, notices: readonly Notice[] = []): string => `<!doctype html>
+const renderMain = (body: string, notices: readonly Notice[]): string => `<main class="container">
+${notices.map(renderNotice).join('\n')}
+${body}
+</main>`;
+
+/** `nav` is pre-rendered HTML; when given, the page becomes a two-column shell with it on the left. */
+export const renderPage = (
+  title: string,
+  body: string,
+  notices: readonly Notice[] = [],
+  nav?: string,
+): string => `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -27,10 +38,14 @@ export const renderPage = (title: string, body: string, notices: readonly Notice
 </head>
 <body>
 <header class="site-header"><div class="container"><a class="brand" href="/">FeatureSync dashboard</a></div></header>
-<main class="container">
-${notices.map(renderNotice).join('\n')}
-${body}
-</main>
+${
+  nav === undefined
+    ? renderMain(body, notices)
+    : `<div class="page-shell">
+<aside class="page-shell-nav">${nav}</aside>
+${renderMain(body, notices)}
+</div>`
+}
 <script src="${escapeHtml(CLIENT_SCRIPT_HREF)}" defer></script>
 </body>
 </html>

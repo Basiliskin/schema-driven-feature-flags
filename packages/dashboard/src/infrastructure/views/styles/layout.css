@@ -1,8 +1,6 @@
 /* Page frame: header, container and section spacing. */
 .container {
   width: 100%;
-  max-width: 60rem;
-  margin: 0 auto;
   padding: 0 var(--gutter);
 }
 

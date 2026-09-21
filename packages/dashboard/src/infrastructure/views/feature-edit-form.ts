@@ -1,7 +1,9 @@
 import type { FlagDefinitionView } from '../../application/browse-environment.js';
 import type { PublishedSegmentsView } from '../../application/list-published-segments.js';
 import { withUrlState, type DashboardUrlState } from '../url-state.js';
+import { renderConfirmation } from './confirm-dialog.js';
 import { escapeHtml, flagPath } from './escape.js';
+import { dialogId } from './modal-dialog.js';
 import { renderRolloutForms } from './rollout-form.js';
 import { renderSegmentAttachForm } from './segment-attach-form.js';
 import { stateInputs, type WriteFormContext } from './state-fields.js';
@@ -60,15 +62,18 @@ const writeFormContext = (flag: FlagDefinitionView, context: EditContext): Write
   stateInputs: stateInputs(context.urlState),
 });
 
-// A <details> disclosure is the confirmation step, so the page needs no JavaScript confirm().
 const renderDeleteControl = (flag: FlagDefinitionView, form: WriteFormContext): string =>
-  `<details class="danger-zone"><summary>Delete</summary>
-<form method="post" action="${escapeHtml(form.action)}">
-${form.baseVersionInput}${form.stateInputs}
-<p>Delete ${escapeHtml(flag.key)}? This publishes a new version without it.</p>
-<button type="submit" class="button-danger" name="field" value="delete">Delete ${escapeHtml(flag.key)}</button>
-</form>
-</details>`;
+  renderConfirmation(
+    {
+      id: dialogId('confirm-delete', flag.key),
+      title: `Delete ${flag.key}`,
+      prompt: `Delete <code>${escapeHtml(flag.key)}</code>? This publishes a new version without it.`,
+      triggerLabel: 'Delete',
+      confirmLabel: `Delete ${flag.key}`,
+      field: 'delete',
+    },
+    form,
+  );
 
 export const renderFeatureEditForm = (flag: FlagDefinitionView, context: EditContext): string => {
   const draft = context.draft?.key === flag.key ? context.draft : undefined;

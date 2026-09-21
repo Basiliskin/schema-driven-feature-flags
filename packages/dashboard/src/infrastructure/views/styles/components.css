@@ -26,7 +26,7 @@
 
 .meta {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 24rem));
   gap: 0.75rem;
   margin: 0 0 0.75rem;
 }
@@ -77,18 +77,10 @@ details[open] > summary {
   margin-bottom: 0.5rem;
 }
 
-.danger-zone > summary {
-  color: var(--danger);
-}
-
-.danger-zone[open] {
-  padding: 0.75rem;
-  border-radius: var(--radius-sm);
-  background: var(--danger-bg);
-}
 
 pre {
   margin: 0;
+  max-width: 80ch;
   max-height: 24rem;
   overflow: auto;
   padding: 0.75rem;
@@ -223,7 +215,7 @@ pre {
   max-width: 18rem;
 }
 
-/* Publish dialog; inline card when scripting is unavailable. */
+/* Page heading with its actions alongside. */
 .page-head-actions {
   display: flex;
   flex-wrap: wrap;
@@ -232,51 +224,7 @@ pre {
   gap: 0.75rem;
 }
 
-.publish-dialog {
-  display: block;
-  position: static;
-  width: auto;
-  margin: 2rem 0 0;
-  padding: 1rem;
-  color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-
-.publish-dialog.is-enhanced {
-  display: none;
-  position: fixed;
-  width: min(48rem, calc(100vw - 2 * var(--gutter)));
-  max-height: calc(100vh - 2 * var(--gutter));
-  margin: auto;
-  overflow: auto;
-}
-
-.publish-dialog.is-enhanced[open] {
-  display: block;
-}
-
-.publish-dialog::backdrop {
-  background: rgb(0 0 0 / 45%);
-}
-
-.dialog-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-
-.dialog-head h2 {
-  margin: 0;
-}
-
-.publish-dialog:not(.is-enhanced) .dialog-head form {
-  display: none;
-}
-
-/* Update banner and changes dialog. */
+/* Update banner. */
 .update-banner {
   position: sticky;
   top: 0.5rem;
@@ -378,7 +326,7 @@ pre {
 
 .merge-sides {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 24rem));
   gap: 0.5rem;
 }
 

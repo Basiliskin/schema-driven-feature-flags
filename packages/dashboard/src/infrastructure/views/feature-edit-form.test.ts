@@ -127,13 +127,28 @@ describe('renderFeatureEditForm', () => {
     expect(html).toContain('<textarea name="rules" rows="4">[{&quot;when&quot;</textarea>');
   });
 
-  it('puts delete in a separate form behind a <details> confirmation, with no inline script', () => {
+  it('puts delete in a separate form behind a confirmation dialog naming the flag, with no inline script', () => {
     const html = renderFeatureEditForm({ ...BOOLEAN, key: '<b>' }, CONTEXT);
-    const deleteSection = html.slice(html.indexOf('<details class="danger-zone">'));
-    expect(deleteSection).toMatch(/^<details class="danger-zone"><summary>Delete<\/summary>\n<form method="post" action="\/env\/production\/features\/%3Cb%3E">/);
+    const id = 'confirm-delete__003cb_003e';
+    const deleteSection = html.slice(html.indexOf(`<button type="button" data-open-dialog="${id}"`));
+
+    expect(deleteSection).toContain(`<button type="button" data-open-dialog="${id}" hidden>Delete</button>`);
+    expect(deleteSection).toContain(`<dialog id="${id}" class="modal-dialog" aria-labelledby="${id}-heading">`);
+    expect(deleteSection).toContain(`<h2 id="${id}-heading">Delete &lt;b&gt;</h2>`);
+    expect(deleteSection).toContain('<form method="post" action="/env/production/features/%3Cb%3E">');
     expect(deleteSection).toContain('<input type="hidden" name="baseVersion" value="7">');
+    expect(deleteSection).toContain('<p>Delete <code>&lt;b&gt;</code>? This publishes a new version without it.</p>');
     expect(deleteSection).toContain('<button type="submit" class="button-danger" name="field" value="delete">Delete &lt;b&gt;</button>');
+    expect(html).not.toContain('danger-zone');
     expect(html).not.toMatch(/onclick|confirm\(|<script/);
+  });
+
+  it('gives two flags two different delete dialog ids', () => {
+    const first = renderFeatureEditForm(BOOLEAN, CONTEXT);
+    const second = renderFeatureEditForm({ ...BOOLEAN, key: 'checkout.limits/v2' }, CONTEXT);
+
+    expect(first).toContain('data-open-dialog="confirm-delete_new-dashboard"');
+    expect(second).toContain('data-open-dialog="confirm-delete_checkout_002elimits_002fv2"');
   });
 
   it('ignores a draft that belongs to another feature', () => {
@@ -165,8 +180,8 @@ describe('renderSnapshotContents', () => {
     expect(rowOf(html, 'new-dashboard')).toContain('Default <code>true</code> · 0 rules');
     expect(rowOf(html, 'checkout-limits')).toContain('<span class="badge">config</span><span class="badge">Off</span>');
     expect(rowOf(html, 'checkout-limits')).toContain('· 1 rule</p>');
-    // Per feature: the edit form, the attach form and the delete-confirmation form, plus one rollout form per rule.
-    expect(html.match(/<form /g)).toHaveLength(7);
+    // Per feature: the edit form, the attach form, the delete confirmation and its dialog-close form, plus one rollout form per rule.
+    expect(html.match(/<form /g)).toHaveLength(9);
   });
 
   it('shows the draft error only on the matching row', () => {
@@ -216,7 +231,7 @@ describe('renderEnvironmentPage edit forms', () => {
   it('puts the publish form in a dialog opened from the page header', () => {
     const html = renderEnvironmentPage(view);
     expect(html).toContain('data-open-dialog="publish-dialog"');
-    expect(html).toContain('<dialog id="publish-dialog" class="publish-dialog" aria-labelledby="publish-heading">');
+    expect(html).toContain('<dialog id="publish-dialog" class="modal-dialog" aria-labelledby="publish-heading">');
     const rejected = renderEnvironmentPage(view, { draft: '{}' });
     expect(rejected).toContain('aria-labelledby="publish-heading" data-open-on-load>');
   });
@@ -227,9 +242,12 @@ describe('renderEnvironmentPage edit forms', () => {
     expect(html).toContain('<input type="hidden" name="baseVersion" value="7">');
   });
 
-  it('renders the new-flag form against the current version', () => {
+  it('renders the new-flag form in a closed dialog opened from its own trigger', () => {
     const html = renderEnvironmentPage(view);
-    expect(html).toContain('<details class="card">\n<summary>New flag</summary>\n<form method="post" action="/env/production/features" class="stack">');
+    expect(html).toContain('<button type="button" data-open-dialog="new-flag-dialog" hidden>New flag</button>');
+    expect(html).toContain('<dialog id="new-flag-dialog" class="modal-dialog" aria-labelledby="new-flag-heading">');
+    expect(html).not.toContain('data-open-on-load');
+    expect(html).toContain('<form method="post" action="/env/production/features" class="stack">');
     expect(html).toContain('<option value="boolean" selected>boolean</option><option value="config">config</option>');
     expect(html).toContain('<textarea name="default" rows="3">null</textarea>');
   });
@@ -245,8 +263,9 @@ describe('renderEnvironmentPage edit forms', () => {
         issues: ['why'],
       },
     });
-    const newFlag = html.slice(html.indexOf('<summary>New flag</summary>'));
-    expect(html).toContain('<details class="card" open>\n<summary>New flag</summary>');
+    const newFlag = html.slice(html.indexOf('<dialog id="new-flag-dialog"'));
+    expect(html).toContain('<dialog id="new-flag-dialog" class="modal-dialog" aria-labelledby="new-flag-heading" data-open-on-load>');
+    expect(newFlag).toContain('<h2 id="new-flag-heading">New flag</h2>');
     expect(newFlag).toContain('name="key" required value="&quot;&gt;&lt;x"');
     expect(newFlag).toContain('<option value="config" selected>config</option>');
     expect(newFlag).toContain('<input type="checkbox" name="enabled" checked> Enabled');

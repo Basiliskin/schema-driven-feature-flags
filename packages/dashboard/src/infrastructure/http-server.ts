@@ -482,7 +482,9 @@ function createDashboardRequestHandler(
         handle: async (_request, response, url) => {
           const page = parsePageNumber(url.searchParams.get('page'), 1, PAGE_MESSAGE);
           const pageSize = parsePageNumber(url.searchParams.get('pageSize'), DEFAULT_VERSION_PAGE_SIZE, PAGE_SIZE_MESSAGE);
-          send(response, 200, renderVersionListPage(await listVersionPage(ports, environment, page, pageSize)));
+          send(response, 200, renderVersionListPage(await listVersionPage(ports, environment, page, pageSize), {
+            urlState: parseUrlState(url.searchParams),
+          }));
         },
       };
     }

@@ -71,6 +71,16 @@ describe('the single-flag page', () => {
     expect(inputNames(standalone)).toEqual(inputNames(cardOf(inList, 'new-dashboard')));
   });
 
+  it('confirms a delete behind the same dialog the environment page uses for that flag', () => {
+    const html = renderFlagPage(published(validContents), 'new-dashboard', NO_SEGMENTS) as string;
+    const id = 'confirm-delete_new-dashboard';
+
+    expect(html).toContain(`<button type="button" data-open-dialog="${id}" hidden>Delete</button>`);
+    expect(html).toContain(`<h2 id="${id}-heading">Delete new-dashboard</h2>`);
+    expect(html).toContain('<button type="submit" class="button-danger" name="field" value="delete">Delete new-dashboard</button>');
+    expect(html).not.toContain('danger-zone');
+  });
+
   it('carries the current version as the edit form base version', () => {
     const html = renderFlagPage(published(validContents), 'new-dashboard', NO_SEGMENTS) as string;
 

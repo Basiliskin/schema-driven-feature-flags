@@ -131,3 +131,19 @@ describe('the URL state the rollback form carries', () => {
     expect(html).not.toContain('name="page" value=');
   });
 });
+
+describe('the side menu and the update watch on the version history', () => {
+  it('marks Versions as the current view and watches the newest version', () => {
+    const html = renderVersionListPage(page());
+
+    expect(html).toContain('<a href="/env/production/versions" class="side-menu-item is-current" aria-current="page">Versions</a>');
+    expect(html).toContain('data-watch-version="3"');
+  });
+
+  it('renders no update watch for an environment that has never published', () => {
+    const html = renderVersionListPage(page({ totalVersions: 0, entries: [] }));
+
+    expect(html).toContain('aria-current="page">Versions</a>');
+    expect(html).not.toContain('data-watch-version');
+  });
+});

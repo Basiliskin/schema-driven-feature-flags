@@ -182,3 +182,21 @@ describe('the create segment form', () => {
     expect(html).toContain('<input type="hidden" name="csv" value="">');
   });
 });
+
+describe('the side menu and the update watch', () => {
+  const LIST: SegmentListPageView = { environment: 'production', listing: { status: 'listed', rows: [] } };
+
+  it('marks Segments as the current view and watches the version it was given', () => {
+    const html = renderSegmentListPage(LIST, { currentVersion: 4 });
+
+    expect(html).toContain('<a href="/env/production/segments" class="side-menu-item is-current" aria-current="page">Segments</a>');
+    expect(html).toContain('data-watch-version="4"');
+  });
+
+  it('renders no update watch when no current version is known', () => {
+    const html = renderSegmentListPage(LIST);
+
+    expect(html).toContain('aria-current="page">Segments</a>');
+    expect(html).not.toContain('data-watch-version');
+  });
+});

@@ -77,3 +77,58 @@ test('lists a published segment and attaches it to a flag through the chooser', 
   await page.goto(segmentsUrl);
   await expect(row.locator('[data-label="Used by flags"]')).toHaveText(SEED_FLAG);
 });
+
+test('detaches a segment only after the confirmation naming it is accepted', async ({
+  page,
+  s3,
+  bucket,
+  environment,
+  dashboard,
+  seedSegment,
+}) => {
+  const segmentKey = uniqueSegmentKey();
+  await seedSegment({
+    key: segmentKey,
+    version: SEGMENT_VERSION,
+    memberAttribute: SEGMENT_ATTRIBUTE,
+    members: ['a-1'],
+  });
+
+  await page.goto(`${dashboard.url}/env/${environment}`);
+  const flag = page.locator(`[data-flag="${SEED_FLAG}"]`);
+  await flag.getByRole('link', { name: 'Expand' }).click();
+
+  const attach = flag.locator('details.segment-attach');
+  await attach.locator('summary').click();
+  await attach.getByLabel('Segment').selectOption(segmentKey);
+  await attach.getByLabel('Value for members').fill(ATTACHED_VALUE);
+  await attach.getByRole('button', { name: 'Attach segment' }).click();
+
+  await flag.locator('details.rollouts > summary').click();
+  const segmentRow = flag.locator('.rule-segment').filter({ hasText: segmentKey });
+  await expect(segmentRow).toBeVisible();
+
+  await segmentRow.getByRole('button', { name: 'Detach', exact: true }).click();
+  const confirmation = page.getByRole('dialog', { name: `Detach ${segmentKey} from ${SEED_FLAG}` });
+  await expect(confirmation).toBeVisible();
+  await expect(confirmation).toContainText(segmentKey);
+
+  // Closing the confirmation must leave the attachment alone: only the confirm button detaches.
+  await confirmation.getByRole('button', { name: 'Close' }).click();
+  await expect(confirmation).toBeHidden();
+  const stillAttached = await readJson(s3, bucket, `${environment}/current.json`);
+  const beforeSnapshot = await readJson(s3, bucket, stillAttached.snapshotKey as string);
+  expect(JSON.stringify(beforeSnapshot)).toContain(segmentKey);
+
+  await segmentRow.getByRole('button', { name: 'Detach', exact: true }).click();
+  await confirmation.getByRole('button', { name: `Detach ${segmentKey}` }).click();
+
+  await expect(page.getByText(`Published version 3 to ${environment}.`)).toBeVisible();
+  await flag.locator('details.rollouts > summary').click();
+  await expect(flag.locator('.rule-segment').filter({ hasText: segmentKey })).toHaveCount(0);
+
+  const pointer = await readJson(s3, bucket, `${environment}/current.json`);
+  const snapshot = await readJson(s3, bucket, pointer.snapshotKey as string);
+  const { features } = snapshot as { features: Record<string, { rules: unknown[] }> };
+  expect(JSON.stringify(features[SEED_FLAG]?.rules ?? [])).not.toContain(segmentKey);
+});

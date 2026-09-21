@@ -36,12 +36,12 @@ describe('renderRolloutForms', () => {
     expect(html).toContain('No rollout');
   });
 
-  it('renders one form per rule, each carrying its own rule index and the base version', () => {
+  it('renders one form per rule plus a confirmation form for the rule that has a rollout', () => {
     const html = render([ROLLED_OUT_RULE, PLAIN_RULE]);
-    expect(html.match(/<form method="post"/g)).toHaveLength(2);
+    expect(html.match(/<form method="post"/g)).toHaveLength(3);
     expect(html).toContain('<input type="hidden" name="ruleIndex" value="0">');
     expect(html).toContain('<input type="hidden" name="ruleIndex" value="1">');
-    expect(html.match(/name="baseVersion" value="7"/g)).toHaveLength(2);
+    expect(html.match(/name="baseVersion" value="7"/g)).toHaveLength(3);
   });
 
   it('labels rules from one while indexing them from zero', () => {
@@ -51,9 +51,27 @@ describe('renderRolloutForms', () => {
     expect(second).toContain('name="ruleIndex" value="1"');
   });
 
-  it('offers Remove only where a rollout exists', () => {
-    expect(render([ROLLED_OUT_RULE])).toContain('value="removeRollout"');
-    expect(render([PLAIN_RULE])).not.toContain('value="removeRollout"');
+  it('offers Remove only where a rollout exists, behind a confirmation naming the flag and the rule', () => {
+    const html = render([ROLLED_OUT_RULE]);
+    expect(html).toContain('<button type="button" data-open-dialog="confirm-remove-rollout_checkout_0" hidden>Remove</button>');
+    expect(html).toContain('<h2 id="confirm-remove-rollout_checkout_0-heading">Remove the rollout on rule 1 of checkout</h2>');
+    expect(html).toContain('Remove the 25% rollout on rule 1 of <code>checkout</code>?');
+    expect(html).toContain('<button type="submit" class="button-danger" name="field" value="removeRollout">Remove the rule 1 rollout</button>');
+    expect(render([PLAIN_RULE])).not.toContain('removeRollout');
+  });
+
+  it('keeps the Remove confirmation out of the rollout form, so confirming cannot also save a percentage', () => {
+    const html = render([ROLLED_OUT_RULE]);
+    const confirmForm = html.slice(html.lastIndexOf('<form method="post"', html.indexOf('value="removeRollout"')));
+    expect(confirmForm).not.toContain('name="percentage"');
+    expect(confirmForm).toContain('<input type="hidden" name="ruleIndex" value="0">');
+    expect(confirmForm).toContain('name="baseVersion" value="7"');
+  });
+
+  it('gives each rule of a flag its own remove-rollout dialog id', () => {
+    const html = render([ROLLED_OUT_RULE, { ...ROLLED_OUT_RULE, rollout: { percentage: 60, bucketBy: 'userId', salt: 's' } }]);
+    expect(html).toContain('data-open-dialog="confirm-remove-rollout_checkout_0"');
+    expect(html).toContain('data-open-dialog="confirm-remove-rollout_checkout_1"');
   });
 
   it('prefills the form from the existing rollout and defaults an empty rule', () => {
@@ -67,9 +85,10 @@ describe('renderRolloutForms', () => {
     const html = render([
       { when: { userId: { inSegment: 'beta-testers' }, accountId: { inSegment: 'beta-testers' }, org: { inSegment: 'vips' } }, enabled: true },
     ]);
-    expect(html).toContain('<code>beta-testers</code>');
-    expect(html).toContain('<code>vips</code>');
-    expect(html.match(/beta-testers/g)).toHaveLength(1);
+    const listed = html.slice(html.indexOf('<li class="rule-segment">'), html.indexOf('badge-segment'));
+    expect(listed).toContain('<code>beta-testers</code>');
+    expect(listed).toContain('<code>vips</code>');
+    expect(listed.match(/beta-testers/g)).toHaveLength(1);
   });
 
   it('shows no segment line for a rule whose conditions reference none', () => {
@@ -141,11 +160,30 @@ describe('the attached segments of a flag', () => {
     expect(detachForm).toContain('name="baseVersion" value="7"');
   });
 
-  it('offers the percentage input and the Detach button on one row under the same index', () => {
+  it('offers the percentage input, the Detach button and the Remove confirmation on one row under the same index', () => {
     const row = render([PLAIN_RULE, SEGMENT_RULE_25]).split('<li class="rule-rollout">')[2] ?? '';
     expect(row).toContain('value="detachSegment"');
-    expect(row.match(/name="ruleIndex" value="1"/g)).toHaveLength(2);
+    expect(row.match(/name="ruleIndex" value="1"/g)).toHaveLength(3);
     expect(row).not.toContain('value="0"');
+  });
+
+  it('names the exact segment and flag in the Detach confirmation, one dialog per rule', () => {
+    const html = render([SEGMENT_RULE_25, SEGMENT_RULE_FULL]);
+    expect(html).toContain('<button type="button" data-open-dialog="confirm-detach_checkout_0" hidden>Detach</button>');
+    expect(html).toContain('<h2 id="confirm-detach_checkout_0-heading">Detach beta-testers from checkout</h2>');
+    expect(html).toContain('Detach <code>beta-testers</code> from <code>checkout</code>? This publishes a new version of the flag without rule 1.');
+    expect(html).toContain('<button type="submit" class="button-danger" name="field" value="detachSegment">Detach beta-testers</button>');
+    expect(html).toContain('<h2 id="confirm-detach_checkout_1-heading">Detach vips from checkout</h2>');
+    expect(html).toContain('<button type="submit" class="button-danger" name="field" value="detachSegment">Detach vips</button>');
+  });
+
+  it('escapes a flag key into an id that is unique and safe to select on', () => {
+    const dotted = renderRolloutForms(
+      { ...flagWith([SEGMENT_RULE_FULL]), key: 'checkout.limits/v2' },
+      { action: ACTION, baseVersionInput: BASE_VERSION_INPUT, stateInputs: '' },
+    );
+    expect(dotted).toContain('data-open-dialog="confirm-detach_checkout_002elimits_002fv2_0"');
+    expect(dotted).toContain('<dialog id="confirm-detach_checkout_002elimits_002fv2_0"');
   });
 
   it('offers no Detach for a rule that targets no segment', () => {
@@ -178,7 +216,7 @@ describe('the URL state the rollout and detach forms carry', () => {
     const html = render([{ when: { plan: { inSegment: 'beta-testers' } }, rollout: { percentage: 40, bucketBy: 'userId', salt: '' } }]);
     const forms = html.split('<form method="post"').slice(1);
 
-    expect(forms).toHaveLength(2);
+    expect(forms).toHaveLength(3);
     for (const body of forms) expect(body).toContain(STATE_INPUTS);
     expect(html).toContain('value="detachSegment"');
   });

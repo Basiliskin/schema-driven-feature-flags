@@ -488,7 +488,7 @@ describe('startDashboardServer', () => {
       expect(reply.body).toContain('Someone else published version 5 meanwhile, so your edit was not saved.');
       expect(reply.body).toContain('data-watch-version="5" data-watch-path="/env/production" data-review-since="3" hidden>');
       expect(reply.body).toContain('Your snapshot draft was based on version 3');
-      expect(reply.body).toContain('<dialog id="publish-dialog" class="publish-dialog" aria-labelledby="publish-heading">');
+      expect(reply.body).toContain('<dialog id="publish-dialog" class="modal-dialog" aria-labelledby="publish-heading">');
       expect(reply.body).toContain('<input type="hidden" name="baseVersion" value="5">');
     });
 

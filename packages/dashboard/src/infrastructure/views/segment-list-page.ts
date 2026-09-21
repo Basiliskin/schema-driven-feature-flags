@@ -1,7 +1,10 @@
 import type { PublishedSegmentRow, PublishedSegmentsView } from '../../application/list-published-segments.js';
+import { NO_URL_STATE, type DashboardUrlState } from '../url-state.js';
 import { environmentPath, escapeHtml } from './escape.js';
 import { renderPage, type Notice } from './layout.js';
 import { segmentPath } from './segment-page.js';
+import { renderSideMenu } from './side-menu.js';
+import { renderUpdateWatch } from './update-watch.js';
 
 export interface SegmentListPageView {
   readonly environment: string;
@@ -17,6 +20,10 @@ export interface SegmentDraft {
 export interface SegmentListPageState {
   readonly notices?: readonly Notice[];
   readonly draft?: SegmentDraft;
+  /** Carried only so the menu can return the operator to the flag list they built. */
+  readonly urlState?: DashboardUrlState;
+  /** Absent when nothing has been published yet, which is also when the environment page shows no watch. */
+  readonly currentVersion?: number;
 }
 
 export const segmentListPath = (environment: string): string => `${environmentPath(environment)}/segments`;
@@ -73,13 +80,16 @@ const renderCreateForm = (environment: string, draft: SegmentDraft | undefined):
 
 export const renderSegmentListPage = (view: SegmentListPageView, state: SegmentListPageState = {}): string => {
   const heading = `${view.environment} · segments`;
+  const watch =
+    state.currentVersion === undefined ? '' : `${renderUpdateWatch(view.environment, state.currentVersion)}\n`;
   return renderPage(
     heading,
     `<p><a class="back-link" href="${escapeHtml(environmentPath(view.environment))}">Back to ${escapeHtml(view.environment)}</a></p>
-<div class="page-head"><h1>${escapeHtml(heading)}</h1></div>
+${watch}<div class="page-head"><h1>${escapeHtml(heading)}</h1></div>
 <p class="muted">Every segment published in this environment, with the version its Segment Pointer names, the Member attribute its rows are matched on, and the flags whose rules use it. Members are never listed here.</p>
 ${renderTable(view)}
 ${renderCreateForm(view.environment, state.draft)}`,
     state.notices ?? [],
+    renderSideMenu(view.environment, 'segments', state.urlState ?? NO_URL_STATE),
   );
 };

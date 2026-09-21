@@ -1,0 +1,25 @@
+/* Two-column page frame used by pages that pass a nav to renderPage. */
+.page-shell {
+  display: grid;
+  grid-template-columns: 16rem minmax(0, 1fr);
+  align-items: start;
+}
+
+.page-shell-nav {
+  padding: 1.5rem 0 3rem var(--gutter);
+  min-width: 0;
+}
+
+.page-shell > main.container {
+  min-width: 0;
+}
+
+@media (max-width: 639px) {
+  .page-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .page-shell-nav {
+    padding: 1.5rem var(--gutter) 0;
+  }
+}

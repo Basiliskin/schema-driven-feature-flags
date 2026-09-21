@@ -2,7 +2,11 @@ import type { FlagType } from '../../domain/flag-edit.js';
 import { withUrlState, type DashboardUrlState } from '../url-state.js';
 import { environmentPath, escapeHtml } from './escape.js';
 import { renderDraftError } from './feature-edit-form.js';
+import { renderModalDialog } from './modal-dialog.js';
 import { stateInputs } from './state-fields.js';
+
+export const NEW_FLAG_DIALOG_ID = 'new-flag-dialog';
+export const NEW_FLAG_TITLE = 'New flag';
 
 export interface CreateDraft {
   readonly key: string;
@@ -27,10 +31,13 @@ export const renderNewFlagForm = (context: NewFlagContext): string => {
   const { draft } = context;
   const type = draft?.type ?? 'boolean';
   const action = withUrlState(`${environmentPath(context.environment)}/features`, context.urlState);
-  // Opened when a create draft was rejected, so the operator sees the error next to their input.
-  return `<details class="card"${draft === undefined ? '' : ' open'}>
-<summary>New flag</summary>
-${draft === undefined ? '' : renderDraftError(draft)}<form method="post" action="${escapeHtml(action)}" class="stack">
+  return renderModalDialog({
+    id: NEW_FLAG_DIALOG_ID,
+    headingId: 'new-flag-heading',
+    title: NEW_FLAG_TITLE,
+    // Opens on load when a create draft was rejected, so the operator sees the error next to their input.
+    openOnLoad: draft !== undefined,
+    body: `${draft === undefined ? '' : renderDraftError(draft)}<form method="post" action="${escapeHtml(action)}" class="stack">
 <input type="hidden" name="baseVersion" value="${String(context.baseVersion)}">${stateInputs(context.urlState)}
 <div class="form-row">
 <label>Key <input type="text" name="key" required value="${escapeHtml(draft?.key ?? '')}" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
@@ -39,6 +46,6 @@ ${draft === undefined ? '' : renderDraftError(draft)}<form method="post" action=
 <label class="check"><input type="checkbox" name="enabled"${draft?.enabled === true ? ' checked' : ''}> Enabled</label>
 <label>Default JSON (config flags only) <textarea name="default" rows="3">${escapeHtml(draft?.defaultJson ?? 'null')}</textarea></label>
 <div class="actions"><button type="submit">Create flag</button></div>
-</form>
-</details>`;
+</form>`,
+  });
 };

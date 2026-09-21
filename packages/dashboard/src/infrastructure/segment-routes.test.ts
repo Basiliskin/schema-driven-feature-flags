@@ -405,6 +405,19 @@ describe('creating a segment from the list page', () => {
     });
   });
 
+  it('renders the list without the update watch when the environment has no published version', async () => {
+    const dashboard = await start({
+      ...listFakes({ status: 'listed', segments: [published('beta', 'userId')] }, ['beta']),
+      readCurrentVersion: () => Promise.resolve(undefined),
+    });
+
+    const page = await call(dashboard, 'GET', LIST_PATH);
+
+    expect(page.status).toBe(200);
+    expect(page.body).toContain('>beta</a>');
+    expect(page.body).not.toContain('data-watch-version');
+  });
+
   it('still renders the list on GET', async () => {
     const dashboard = await start(listFakes({ status: 'listed', segments: [published('beta', 'userId')] }, ['beta']));
 
@@ -412,7 +425,7 @@ describe('creating a segment from the list page', () => {
 
     expect(page.status).toBe(200);
     expect(page.body).toContain('>beta</a>');
-    expect(page.body).not.toContain('class="notice');
+    expect(page.body).not.toContain('<div class="notice');
   });
 
   it.each(['a.b', 'has space', '', '-leading', 'x'.repeat(65)])('answers 400 for the malformed key %j and publishes nothing', async (key) => {

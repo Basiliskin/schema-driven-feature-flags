@@ -3,6 +3,7 @@ import { segmentKeySchema } from '@featuresync/core';
 import { listPublishedSegments, type ListPublishedSegmentsPorts } from '../application/list-published-segments.js';
 import { uploadSegment, type SegmentUploadFailureReason, type SegmentUploadPorts } from '../application/upload-segment.js';
 import { HttpError, decodeSegment, readForm, send, type HttpMethod, type Route } from './http-primitives.js';
+import { NO_URL_STATE, parseUrlState, type DashboardUrlState } from './url-state.js';
 import type { Notice } from './views/layout.js';
 import { renderSegmentListPage, type SegmentDraft } from './views/segment-list-page.js';
 import { renderSegmentPage } from './views/segment-page.js';
@@ -37,8 +38,8 @@ const parseExpectedVersion = (value: string | null): number | null => {
   return Number(value);
 };
 
-// The segment routes carry no filter/open state: that state describes the environment page's flag list, and
-// segments are their own pages. Leaving it out here is deliberate, not an oversight.
+// The segment routes read filter/open state only so the Side Menu's link back to the flag list keeps the view
+// the operator built; nothing on these pages uses it, and the write forms here still carry none of it.
 export function matchSegmentRoute(
   ports: SegmentRoutePorts,
   environment: string,
@@ -53,18 +54,23 @@ export function matchSegmentRoute(
       status: number,
       notices: readonly Notice[],
       draft?: SegmentDraft,
+      urlState: DashboardUrlState = NO_URL_STATE,
     ): Promise<void> => {
       const listing = await listPublishedSegments(ports, environment);
+      const currentVersion = await ports.readCurrentVersion(environment);
       send(
         response,
         status,
-        renderSegmentListPage({ environment, listing }, draft === undefined ? { notices } : { notices, draft }),
+        renderSegmentListPage(
+          { environment, listing },
+          { notices, urlState, ...(draft === undefined ? {} : { draft }), ...(currentVersion === undefined ? {} : { currentVersion }) },
+        ),
       );
     };
 
     const handlers = {
-      GET: async (_request: IncomingMessage, response: ServerResponse) => {
-        await sendList(response, 200, []);
+      GET: async (_request: IncomingMessage, response: ServerResponse, url: URL) => {
+        await sendList(response, 200, [], undefined, parseUrlState(url.searchParams));
       },
       POST: async (request: IncomingMessage, response: ServerResponse) => {
         const fields = await readForm(request, MAX_SEGMENT_CSV_BYTES);

@@ -83,3 +83,13 @@
 - 2026-09-21 | horizon 25 | Can the browser e2e suite move off the InMemoryEnvironment fake onto LocalStack fixtures, which is what e2e coverage of the rollback POST's state echo would need?
 - 2026-09-21 | horizon 25 | Where should the growing set of path helpers live, now that only versionsPath was folded into the contract module and four others stay scattered?
 - 2026-09-21 | horizon 25 | @featuresync/core file-snapshot-source.test.ts "pushes a bundle when watching" fails under full-monorepo load (vi.waitFor 1000ms, 0 calls) but passes alone — real fs.watch flake or a too-tight timeout?
+- 2026-09-21 | horizon 26 | Where does a pending draft physically live between two HTTP requests, given the dashboard is a stateless 127.0.0.1 node:http server with no store and no session concept — in-process — see horizon-26 roadmap.md
+- 2026-09-21 | horizon 26 | Is a pending draft an accumulated full snapshot document (what mergeDraft and snapshot-diff already consume) or an ordered list of FlagEdit operations replayed at publish time?
+- 2026-09-21 | horizon 26 | What expectedCurrentVersion does the single Update publish send, and what does 'publish anyway' after a drift warning mean at the S3 layer — override CAS, or publish against latest?
+- 2026-09-21 | horizon 26 | Once edits are staged rather than published, is a 400/422 still returned inline at stage time, or does validation move to the Update click where several accumulated edits could fail at once?
+- 2026-09-21 | horizon 26 | Do segment upload and rollback belong in the staged model at all — segment publishing has its own pointer and its own CAS, and rollback writes a new version from an old one.
+- 2026-09-21 | horizon 26 | Must an unpublished draft survive a dashboard restart? That answer alone forces or rules out in-memory storage.
+- 2026-09-21 | horizon 26 | Can any pending-draft logic live in app.js given it is permanently outside the coverage gate — i.e. must horizon 27 finally settle the standing app.js rule?
+- 2026-09-21 | horizon 26 | Should a confirmation also guard the rollback action on the versions page? It is arguably destructive but the operator's complaint enumerated deletes.
+- 2026-09-21 | horizon 26 | Should the four remaining write-form surfaces (edit-flag, rollout, attach-segment, create-segment) move into dialogs before or after the write-model change, given a staged-write — see horizon-26 roadmap.md
+- 2026-09-21 | horizon 26 | Does app.js's form[action$="/features"] selector silently drop carried-over new-flag edits whenever the page carries URL state, and is that worth fixing given app.js is outside the coverage gate?

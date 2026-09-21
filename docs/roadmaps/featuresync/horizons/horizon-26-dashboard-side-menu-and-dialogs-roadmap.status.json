@@ -1,0 +1,366 @@
+{
+  "roadmapFile": "docs/roadmaps/featuresync/horizons/horizon-26-dashboard-side-menu-and-dialogs-roadmap.json",
+  "roadmapTask": "Redesign the FeatureSync dashboard UI (packages/dashboard): replace the one long scrolling environment page with a persistent left side menu navigating Segments / Versions / Flags, use the wasted horizontal space at the sides, move new/edit actions into modal dialogs instead of inline forms, and put every delete/detach action behind a confirmation dialog. A fifth operator request — accumulate edits as a pending draft and publish to S3 only on an explicit Update, with a review-pending-changes dialog — is deferred to the next horizon.",
+  "createdAt": "2026-09-21T14:06:38Z",
+  "updatedAt": "2026-09-21T16:14:15Z",
+  "roadmapRevision": 0,
+  "phases": [
+    {
+      "phaseId": "full-width-page-shell",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-21T14:06:38Z",
+      "baseRef": "402907f8a188708079134a86ec26e6f2257e064e",
+      "baseDirty": true,
+      "notes": "Already dirty at start (not this phase's changes): docs/roadmaps/featuresync/{blockers,decisions,discoveries,next-horizon-brief,state}.md and the untracked horizon-26 roadmap .json/.md. | Changed: layout.ts (optional 4th nav param -> .page-shell grid with <aside class=\"page-shell-nav\">, nav-absent output byte-identical), styles/layout.css (dropped .container max-width:60rem and margin auto, kept --gutter padding), styles/shell.css (new: 16rem + minmax(0,1fr) grid, single column below 640px), styles/components.css (pre max-width:80ch; .meta and .merge-sides auto-fit upper bound 24rem), stylesheet.ts (shell.css registered right after layout.css), layout.test.ts (new: 4 tests covering both nav branches), stylesheet.test.ts (shell.css ordering + presence in the served sheet). Gates and grade NOT run - this is an EXECUTE stop at awaiting-verification. | VERIFY: both gates green. Extra evidence beyond the gates: old-vs-new renderPage byte-identity for 0/1/2 notices; browser measurement at 1920/1280/640/375 (no horizontal scroll, gutters 24/16px, stacked .flag-table card layout intact at 375px); .meta columns capped at 384px and pre at 674.3px (80ch) at 1920px; built dist stylesheet.js imported with shell.css present and .page-shell cascading after .container. Graded 9,10,10,10,10 - overallPass, no phase has a compensation. No 10 was demoted: each named something above the 8-bar.",
+      "unplannedFiles": [
+        "packages/dashboard/src/infrastructure/views/styles/components.css",
+        "packages/dashboard/src/infrastructure/views/stylesheet.test.ts"
+      ],
+      "amendments": [
+        {
+          "at": "2026-09-21T14:07:58Z",
+          "by": "execute",
+          "reason": "The contract described renderPage as taking an options object with a `nav` field, and listed only layout.ts/layout.css/shell.css/stylesheet.ts/layout.test.ts. The repo has renderPage as a positional function (title, body, notices) called positionally by all 8 page renderers, and the three readability caps the phase must reintroduce (pre, .meta, .merge-sides) all live in components.css, not layout.css. The goal, deliverable, layer and rubric are unchanged.",
+          "grounding": "packages/dashboard/src/infrastructure/views/layout.ts (positional signature); grep of views/styles/*.css placing the pre/.meta/.merge-sides rules at components.css:90/27/379.",
+          "before": {
+            "changes": [
+              "Add an optional `nav` (pre-rendered HTML string) field to renderPage's options; when present, wrap it in an <aside class=\"page-shell-nav\"> sibling of <main> inside a <div class=\"page-shell\"> grid container. When absent, emit exactly the markup renderPage emits today so the pages that pass nothing are byte-identical.",
+              "Remove the max-width: 60rem from the .container rule in layout.css so the header and content span the viewport, keeping the existing --gutter side padding.",
+              "Create views/styles/shell.css holding ONLY the .page-shell grid (a fixed ~16rem nav column plus a content column that takes the rest) and its single-column stacking below the repo's existing 640px breakpoint; do not restyle anything else.",
+              "Reintroduce readability caps per region now that the page cap is gone, with concrete values: <pre> raw-JSON blocks get max-width: 80ch (they already have max-height: 24rem); the auto-fit .meta and .merge-sides grids get a repeat(auto-fit, minmax(<existing min>, 24rem)) upper bound so their columns stop growing.",
+              "Register 'shell.css' in the ordered STYLE_FILES array in stylesheet.ts immediately after layout.css so it cascades over the base layout rules, and confirm the new file ships with the package build (stylesheet.ts reads it at runtime via readFileSync relative to the module URL).",
+              "Extend the layout unit tests to cover both the nav-present and nav-absent branches for 100% branch coverage."
+            ],
+            "filesAffected": [
+              "packages/dashboard/src/infrastructure/views/layout.ts",
+              "packages/dashboard/src/infrastructure/views/styles/layout.css",
+              "packages/dashboard/src/infrastructure/views/styles/shell.css",
+              "packages/dashboard/src/infrastructure/views/stylesheet.ts",
+              "packages/dashboard/src/infrastructure/views/layout.test.ts"
+            ]
+          },
+          "after": {
+            "changes": [
+              "Add an optional 4th `nav` parameter (pre-rendered HTML string) to renderPage's positional signature (title, body, notices, nav); when present, wrap it in an <aside class=\"page-shell-nav\"> sibling of <main> inside a <div class=\"page-shell\"> grid container. When absent, emit exactly the markup renderPage emits today so the pages that pass nothing are byte-identical.",
+              "Remove the max-width: 60rem from the .container rule in layout.css so the header and content span the viewport, keeping the existing --gutter side padding.",
+              "Create views/styles/shell.css holding ONLY the .page-shell grid (a fixed ~16rem nav column plus a content column that takes the rest) and its single-column stacking below the repo's existing 640px breakpoint; do not restyle anything else.",
+              "Reintroduce readability caps per region in components.css now that the page cap is gone: <pre> gets max-width: 80ch beside its existing max-height: 24rem; .meta and .merge-sides get repeat(auto-fit, minmax(<existing min>, 24rem)) upper bounds.",
+              "Register 'shell.css' in the ordered STYLE_FILES array in stylesheet.ts immediately after layout.css so it cascades over the base layout rules, and confirm the new file ships with the package build (stylesheet.ts reads it at runtime via readFileSync relative to the module URL).",
+              "Extend the layout unit tests to cover both the nav-present and nav-absent branches for 100% branch coverage."
+            ],
+            "filesAffected": [
+              "packages/dashboard/src/infrastructure/views/layout.ts",
+              "packages/dashboard/src/infrastructure/views/styles/layout.css",
+              "packages/dashboard/src/infrastructure/views/styles/shell.css",
+              "packages/dashboard/src/infrastructure/views/stylesheet.ts",
+              "packages/dashboard/src/infrastructure/views/layout.test.ts",
+              "packages/dashboard/src/infrastructure/views/styles/components.css"
+            ]
+          }
+        }
+      ],
+      "completedAt": "2026-09-21T14:14:20Z",
+      "gateRun": "pnpm verify (build x5 packages, typecheck, eslint --max-warnings=0, vitest run --coverage @ 100% gate): pass | pnpm --filter @featuresync/dashboard test:e2e (full Playwright suite): pass",
+      "gradeResult": {
+        "phaseId": "full-width-page-shell",
+        "dimensionScores": [
+          {
+            "dimensionId": "nav-absent-markup-identical",
+            "score": 9,
+            "pass": true,
+            "evidence": "Nav-absent branch compared character-for-character against 402907f for 0, 1 (with details) and 2 notices - identical in all three (only the content-hashed stylesheet href normalised). layout.test.ts pins the main/script substring plus not.toContain('page-shell') and not.toContain('<aside'). Short of 10 because the committed tests assert large substrings rather than full-string equality; the byte-identity proof was an out-of-repo harness, not a standing test."
+          },
+          {
+            "dimensionId": "width-cap-removed-no-overflow",
+            "score": 10,
+            "pass": true,
+            "evidence": "Measured in a real browser at 1920/1280/640/375, all scrollWidth === clientWidth, beyond the 8-bar of wide+640. Narrow case verified structurally too: at 375px .flag-table td computes display flex with ::before 'Flag', so the stacked card layout still wins at the same 640px breakpoint the shell collapses at. max-width 60rem and margin auto gone, --gutter padding measured 24px/16px, grid uses 16rem minmax(0, 1fr)."
+          },
+          {
+            "dimensionId": "readability-caps-per-region",
+            "score": 10,
+            "pass": true,
+            "evidence": "All three regions capped (pre max-width 80ch beside max-height 24rem; .meta minmax(10rem, 24rem); .merge-sides minmax(12rem, 24rem)) AND confirmed by rendered measurement at 1920px: .meta computes '384px 384px 384px 0px' inside an 1838px container, pre renders 674.3px with computed max-width 674.297px = exactly 80ch. No cap moved to a shared container, none uses width."
+          },
+          {
+            "dimensionId": "shell-css-registered-and-shipped",
+            "score": 10,
+            "pass": true,
+            "evidence": "Ordering confirmed by character offset in the concatenated sheet (.container at 2260, .page-shell at 3497) loaded from the BUILT dist stylesheet.js - the packed artifact was imported and exercised, proving both the cpSync of styles/ into dist and the absence of a readFileSync ENOENT, not just that the file exists in src. A new unit test pins the index relationship so ordering cannot silently regress."
+          },
+          {
+            "dimensionId": "shell-branch-coverage",
+            "score": 10,
+            "pass": true,
+            "evidence": "Past 'both branches asserted': one exact substring pins the full nested structure (page-shell > aside + main), so a refactor moving the aside outside the grid fails the test. Real nav === undefined conditional, not nav ?? '', keeps the branch genuine; nav-absent test adds negative assertions on both page-shell and <aside>; pnpm verify passed the 100% coverage gate with no istanbul-ignore."
+          }
+        ],
+        "overallPass": true
+      }
+    },
+    {
+      "phaseId": "environment-side-menu",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-21T14:18:25Z",
+      "baseRef": "402907f8a188708079134a86ec26e6f2257e064e",
+      "baseDirty": true,
+      "notes": "Dirty at start from phase 1 (already done) and project memory: views/{layout.ts,stylesheet.ts,stylesheet.test.ts,layout.test.ts,styles/{layout,components,shell}.css} plus docs/roadmaps/featuresync/*. | Changed: NEW views/side-menu.ts (renderSideMenu over Flags/Versions/Segments, route-based, aria-current + is-current on exactly one item, every href through withUrlState), NEW views/update-watch.ts (renderUpdateWatch extracted from environment-page, now (environment, currentVersion, conflict?)), NEW views/styles/side-menu.css, registered in STYLE_FILES right after shell.css. DELETED section-nav.ts, section-nav.css, section-nav.test.ts and the section-nav.css STYLE_FILES entry; environment-page no longer renders in-page section anchors and passes the menu into renderPage's nav slot. version-list-page and segment-list-page now render the menu plus the update watch (versions keyed on totalVersions, segments on a currentVersion the route supplies). http-server passes parseUrlState into the versions page; segment-routes' list GET parses url state and reads ports.readCurrentVersion. Tests: NEW side-menu.test.ts (5 cases incl. per-view active marking and reserved-character encoding), environment-page.test.ts's 'section nav' block REPLACED by a 'side menu' block, stylesheet.test.ts swapped to side-menu.css ordering plus a no-section-nav-remnant assertion. Ran during implementation (NOT verification): dashboard typecheck clean, and vitest over views = 13 files / 183 tests pass. Gates and grade NOT run. | VERIFY: first pnpm verify run had 2 reds. (a) segment-routes.test.ts \"still renders the list on GET\" asserted not.toContain(class=\"notice) - the update watch this phase adds to the segments list always renders a hidden <div id=\"merge-notice\" class=\"notice warning\">, so the assertion was tightened to not.toContain(<div class=\"notice) which still catches every flash notice (they render with no id). (b) core file-snapshot-source.test.ts \"pushes a bundle when watching\" failed once and passes in isolation and on every rerun - fs-watch timing flake in an untouched package, not this phase. Second run: 100% branch coverage gate failed at 99.87% on the two new no-currentVersion branches (segment-list-page.ts, version-list-page.ts); added 4 tests (segment-routes.test.ts no-published-version GET, segment-list-page.test.ts and version-list-page.test.ts side-menu + update-watch blocks) - branches back to 100% (1581/1581). Stale dist/ section-nav.{js,d.ts,js.map} and styles/section-nav.css from before the deletion were removed and the package rebuilt, so the repo-wide section-nav grep is clean. Both gates green. Graded 9,8,9,8 - overallPass (minScore 7 on all four). No dimension scored 10, so no 10->9 demotion applied. Phase has no compensation.",
+      "unplannedFiles": [
+        "packages/dashboard/src/infrastructure/views/update-watch.ts",
+        "packages/dashboard/src/infrastructure/views/stylesheet.ts",
+        "packages/dashboard/src/infrastructure/views/stylesheet.test.ts",
+        "packages/dashboard/src/infrastructure/views/environment-page.test.ts",
+        "packages/dashboard/src/infrastructure/views/side-menu.test.ts",
+        "packages/dashboard/src/infrastructure/http-server.ts",
+        "packages/dashboard/src/infrastructure/segment-routes.ts"
+      ],
+      "amendments": [
+        {
+          "at": "2026-09-21T14:21:40Z",
+          "by": "execute",
+          "reason": "The contract said to 'keep the existing update-banner / changes-dialog machinery rendering on every page that shows the menu', but that machinery rendered ONLY on the environment page, inside renderPublished — the Versions and Segments pages had none of it. The rubric dimension update-machinery-survives-on-all-views requires it on all three, so this phase ADDS it: renderUpdateWatch is extracted into its own module and the two routes are widened to supply the current version and the URL state the menu carries back. filesAffected also omitted stylesheet.ts (needed by its own 'register side-menu.css' bullet) and the test files the deletion of section-nav forces. Goal, layer, dependsOn and rubric unchanged.",
+          "grounding": "views/environment-page.ts renderPublished was the only renderUpdateWatch call site; infrastructure/segment-routes.ts:40 documented the segment routes as deliberately carrying no url state; application/list-published-segments.ts:71 reads currentVersion without exposing it on PublishedSegmentsView.",
+          "before": {
+            "changes": [
+              "Create side-menu.ts exporting renderSideMenu(env, current, urlState): a <nav aria-label=\"Views\"> of ordinary server-rendered links to the environment page (Flags), /env/<env>/versions and the segment list route, each built through the existing withUrlState helper so the filter/open/page query keys survive navigation.",
+              "Mark the active item with aria-current=\"page\" and a modifier class; do NOT introduce a new query-string key for view selection — the route is the selector.",
+              "Pass the rendered menu into renderPage's nav slot from the environment page, the versions page and the segment list page.",
+              "Delete section-nav.ts and section-nav.css, remove the call site and the rule that filtered out the Flags anchor when no flags rendered, and rewrite section-nav.test.ts as side-menu tests covering each active-item branch (its current exact-string toBe() assertion is replaced, not adapted).",
+              "Create styles/side-menu.css for the menu only and register it in STYLE_FILES after shell.css.",
+              "Keep the existing update-banner / changes-dialog machinery rendering on every page that shows the menu, so concurrent-edit notices are not silently lost on the Versions and Segments views."
+            ],
+            "filesAffected": [
+              "packages/dashboard/src/infrastructure/views/side-menu.ts",
+              "packages/dashboard/src/infrastructure/views/styles/side-menu.css",
+              "packages/dashboard/src/infrastructure/views/section-nav.ts",
+              "packages/dashboard/src/infrastructure/views/environment-page.ts",
+              "packages/dashboard/src/infrastructure/views/version-list-page.ts",
+              "packages/dashboard/src/infrastructure/views/segment-list-page.ts"
+            ]
+          },
+          "after": {
+            "changes": [
+              "Create side-menu.ts exporting renderSideMenu(env, current, urlState): a <nav aria-label=\"Views\"> of ordinary server-rendered links to the environment page (Flags), /env/<env>/versions and the segment list route, each built through the existing withUrlState helper so the filter/open/page query keys survive navigation.",
+              "Mark the active item with aria-current=\"page\" and a modifier class; do NOT introduce a new query-string key for view selection — the route is the selector.",
+              "Pass the rendered menu into renderPage's nav slot from the environment page, the versions page and the segment list page.",
+              "Delete section-nav.ts and section-nav.css, remove the call site and the rule that filtered out the Flags anchor when no flags rendered, and rewrite section-nav.test.ts as side-menu tests covering each active-item branch (its current exact-string toBe() assertion is replaced, not adapted).",
+              "Create styles/side-menu.css for the menu only and register it in STYLE_FILES after shell.css.",
+              "ADD the update-banner / merge-notice / changes-dialog machinery to the Versions and Segments views (it rendered only on the environment page), by extracting renderUpdateWatch into views/update-watch.ts keyed on (environment, currentVersion, conflict?) so all three pages share it; the segments route reads the current version through ports.readCurrentVersion and its GET parses url state so the menu's link back to the flag list keeps the operator's view."
+            ],
+            "filesAffected": [
+              "packages/dashboard/src/infrastructure/views/side-menu.ts",
+              "packages/dashboard/src/infrastructure/views/styles/side-menu.css",
+              "packages/dashboard/src/infrastructure/views/section-nav.ts",
+              "packages/dashboard/src/infrastructure/views/environment-page.ts",
+              "packages/dashboard/src/infrastructure/views/version-list-page.ts",
+              "packages/dashboard/src/infrastructure/views/segment-list-page.ts",
+              "packages/dashboard/src/infrastructure/views/update-watch.ts",
+              "packages/dashboard/src/infrastructure/views/stylesheet.ts",
+              "packages/dashboard/src/infrastructure/views/stylesheet.test.ts",
+              "packages/dashboard/src/infrastructure/views/environment-page.test.ts",
+              "packages/dashboard/src/infrastructure/http-server.ts",
+              "packages/dashboard/src/infrastructure/segment-routes.ts"
+            ]
+          }
+        }
+      ],
+      "completedAt": "2026-09-21T14:32:04Z",
+      "gradeResult": {
+        "phaseId": "environment-side-menu",
+        "dimensionScores": [
+          {
+            "dimensionId": "menu-links-routes-not-fragments",
+            "score": 9,
+            "pass": true,
+            "evidence": "All three anchors are plain route hrefs built through withUrlState + escapeHtml (side-menu.ts:24-25): /env/<e>, /env/<e>/versions, /env/<e>/segments, matching http-server's 2/3-segment matcher and segment-routes. side-menu.test.ts asserts filter/open/page carried on all three links and that 'pro d' + 'a&b c' encode to /env/pro%20d?filter=a%26b%20c; grep -rn 'view=' is empty, no fragment targets. Short of 10 only because link reachability rests on the existing e2e suite rather than an explicit no-JS click-through of each of the three routes."
+          },
+          {
+            "dimensionId": "active-item-marking",
+            "score": 8,
+            "pass": true,
+            "evidence": "Marking is route/enum-driven (item.view === current), never a path startsWith, so exactly one item gets both aria-current=\"page\" and is-current; side-menu.test.ts it.each over all three views asserts match counts of 1 for each marker and that the marked href is the right path, and environment-page/version-list/segment-list tests each assert their own page's marked item. Not higher because the version-detail page /env/<e>/versions/<n> renders no menu at all, so the Versions view is unmarked there - the exact navigation case one failureExample calls out, even though that page is outside the stated three."
+          },
+          {
+            "dimensionId": "section-nav-fully-removed",
+            "score": 9,
+            "pass": true,
+            "evidence": "section-nav.ts/.css/.test.ts deleted, the STYLE_FILES entry replaced by side-menu.css directly after shell.css (stylesheet.ts:5), and stylesheet.test.ts asserts both the ordering and the negatives plus that '.side-menu {' is in the served sheet; repo-wide grep for section-nav/SECTION_NAV/*_SECTION returns only those negative assertions, stale dist artifacts rebuilt. The old brittle exact-string nav test was rewritten as a fresh side-menu.test.ts, and the empty-flags section filtering was dropped with it. Not 10: the sticky top: 3.25rem rule survives, deliberately re-authored in side-menu.css."
+          },
+          {
+            "dimensionId": "update-machinery-survives-on-all-views",
+            "score": 8,
+            "pass": true,
+            "evidence": "renderUpdateWatch extracted to update-watch.ts and rendered once on all three views; the segments and versions page sources contain the watch div, #update-banner, #merge-notice and a single <dialog id=\"changes-dialog\">, with no-current-version branches covered by new tests, and .update-banner z-index 10 sits above the menu's 9. Held at the stated 8 because the 10 criterion - an out-of-band publish from a second session observed banner-ing on each view - was not run, and no viewport-width check of banner/menu overlap was made."
+          }
+        ],
+        "overallPass": true
+      },
+      "gateRun": "pnpm verify (build x5 packages, pnpm -r typecheck, eslint --max-warnings=0, vitest run --coverage @ 100% gate): pass | pnpm --filter @featuresync/dashboard test:e2e (full Playwright suite): pass"
+    },
+    {
+      "phaseId": "reusable-modal-dialog",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-21T14:34:02Z",
+      "baseRef": "402907f8a188708079134a86ec26e6f2257e064e",
+      "baseDirty": true,
+      "notes": "Already dirty at start (phases 1-2, both done, plus project memory and the horizon-26 files): docs/roadmaps/featuresync/blockers.md docs/roadmaps/featuresync/decisions.md docs/roadmaps/featuresync/discoveries.md docs/roadmaps/featuresync/next-horizon-brief.md docs/roadmaps/featuresync/state.md packages/dashboard/src/infrastructure/http-server.ts packages/dashboard/src/infrastructure/segment-routes.test.ts packages/dashboard/src/infrastructure/segment-routes.ts packages/dashboard/src/infrastructure/views/environment-page.test.ts packages/dashboard/src/infrastructure/views/environment-page.ts packages/dashboard/src/infrastructure/views/layout.ts packages/dashboard/src/infrastructure/views/section-nav.test.ts packages/dashboard/src/infrastructure/views/section-nav.ts packages/dashboard/src/infrastructure/views/segment-list-page.test.ts packages/dashboard/src/infrastructure/views/segment-list-page.ts packages/dashboard/src/infrastructure/views/styles/components.css packages/dashboard/src/infrastructure/views/styles/layout.css packages/dashboard/src/infrastructure/views/styles/section-nav.css packages/dashboard/src/infrastructure/views/stylesheet.test.ts packages/dashboard/src/infrastructure/views/stylesheet.ts packages/dashboard/src/infrastructure/views/version-list-page.test.ts packages/dashboard/src/infrastructure/views/version-list-page.ts docs/roadmaps/featuresync/horizons/horizon-26-dashboard-side-menu-and-dialogs-roadmap.json docs/roadmaps/featuresync/horizons/horizon-26-dashboard-side-menu-and-dialogs-roadmap.md docs/roadmaps/featuresync/horizons/horizon-26-dashboard-side-menu-and-dialogs-roadmap.status.json docs/roadmaps/featuresync/horizons/horizon-26-dashboard-side-menu-and-dialogs-roadmap.status.json.last_good.json docs/roadmaps/featuresync/horizons/horizon-26-dashboard-side-menu-and-dialogs-roadmap.status.last_good.json packages/dashboard/src/infrastructure/views/layout.test.ts packages/dashboard/src/infrastructure/views/side-menu.test.ts packages/dashboard/src/infrastructure/views/side-menu.ts packages/dashboard/src/infrastructure/views/styles/shell.css packages/dashboard/src/infrastructure/views/styles/side-menu.css packages/dashboard/src/infrastructure/views/update-watch.ts  | Changed: NEW views/modal-dialog.ts (renderModalDialog({id, headingId, title, body, openOnLoad}) and renderDialogTrigger({dialogId, label}); openOnLoad emits data-open-on-load as a bare attribute or omits it entirely, never =\"false\"), NEW views/styles/dialog.css (all four rule groups moved verbatim from components.css under .modal-dialog: inline-card default, .is-enhanced overlay, [open], ::backdrop, .dialog-head, close-hidden-when-not-enhanced), NEW views/modal-dialog.test.ts (9 cases: naming/heading, close control, both openOnLoad branches, title and label escaping, trigger hidden+data-open-dialog, dialog-emits-no-trigger, and the four served rule groups). components.css: the dialog block deleted, .page-head-actions kept under its own comment, the Update banner comment no longer mentions the changes dialog. stylesheet.ts: dialog.css registered directly after components.css. environment-page.ts: publish dialog and its header button now render through the helper. update-watch.ts: the changes dialog too (1 amendment - see amendments). Exact-string class assertions updated in http-server.test.ts and feature-edit-form.test.ts, and stylesheet.test.ts gained the dialog.css ordering plus a no-.publish-dialog assertion. The only byte difference in the rendered publish dialog is the class token: both exact-open-tag assertions failed on that token alone and on nothing else, and app.js and e2e/ have zero changes this phase. Ran during implementation (NOT verification): dashboard typecheck clean, vitest over packages/dashboard/src = 473 tests pass. Gates and grade NOT run. | VERIFY: both gates green on the first run, no healer retry needed. Graded 9,10,8,9 against minScores 8,7,7,8 - overallPass. The one 10 (css-moved-not-copied) earned it on evidence beyond the criteria - the two standing invariants stylesheet.test.ts now pins: dialog.css immediately after components.css, and no .publish-dialog anywhere in the served sheet - so no 10->9 demotion applied. Open quality note carried forward, not a block: renderDialogTrigger's test uses whole-string toBe(), which that dimension's own passCriteria asks new dialog tests to avoid; it cost the dimension its higher score but still passed at 8. Phase has no compensation.",
+      "unplannedFiles": [
+        "packages/dashboard/src/infrastructure/views/update-watch.ts",
+        "packages/dashboard/src/infrastructure/views/stylesheet.ts",
+        "packages/dashboard/src/infrastructure/views/stylesheet.test.ts",
+        "packages/dashboard/src/infrastructure/views/modal-dialog.test.ts",
+        "packages/dashboard/src/infrastructure/http-server.test.ts",
+        "packages/dashboard/src/infrastructure/views/feature-edit-form.test.ts"
+      ],
+      "amendments": [
+        {
+          "at": "2026-09-21T14:36:06Z",
+          "by": "execute",
+          "reason": "filesAffected named environment-page.ts as the only dialog call site, but the changes dialog (the second user of the old .publish-dialog class) was extracted into views/update-watch.ts by phase 2, after this horizon was planned; the rules registration also lives in stylesheet.ts, which filesAffected did not name. Same goal, same deliverable - two more files carry it.",
+          "grounding": "grep -rn publish-dialog over packages/dashboard/src: update-watch.ts:29 declared <dialog id=\"changes-dialog\" class=\"publish-dialog\">, which the rubric failureExample for publish-e2e-still-green calls out as a must-migrate; STYLE_FILES lives in stylesheet.ts.",
+          "before": {
+            "filesAffected": [
+              "packages/dashboard/src/infrastructure/views/modal-dialog.ts",
+              "packages/dashboard/src/infrastructure/views/styles/dialog.css",
+              "packages/dashboard/src/infrastructure/views/styles/components.css",
+              "packages/dashboard/src/infrastructure/views/environment-page.ts"
+            ]
+          },
+          "after": {
+            "filesAffected": [
+              "packages/dashboard/src/infrastructure/views/modal-dialog.ts",
+              "packages/dashboard/src/infrastructure/views/styles/dialog.css",
+              "packages/dashboard/src/infrastructure/views/styles/components.css",
+              "packages/dashboard/src/infrastructure/views/environment-page.ts",
+              "packages/dashboard/src/infrastructure/views/update-watch.ts",
+              "packages/dashboard/src/infrastructure/views/stylesheet.ts"
+            ]
+          }
+        }
+      ],
+      "completedAt": "2026-09-21T14:40:31Z",
+      "gradeResult": {
+        "phaseId": "reusable-modal-dialog",
+        "dimensionScores": [
+          {
+            "dimensionId": "rendered-attributes-unchanged",
+            "score": 9,
+            "pass": true,
+            "evidence": "renderModalDialog emits <dialog id=\"publish-dialog\" class=\"modal-dialog\" aria-labelledby=\"publish-heading\"> with data-open-on-load as a bare attribute or omitted entirely, and the openOnLoad expression state.draft !== undefined && state.conflict === undefined is the exact negation of the old inline ternary; renderDialogTrigger keeps hidden and data-open-dialog=\"publish-dialog\", matching app.js's hasAttribute/getElementById/classList checks; app.js has zero changes; modal-dialog.test.ts pins both the present and absent cases. Not a 10 because no actual before/after rendered-HTML diff was produced - byte identity rests on the two exact open-tag assertions failing only on the class token, which covers the open tag but not the rest of the markup mechanically."
+          },
+          {
+            "dimensionId": "css-moved-not-copied",
+            "score": 10,
+            "pass": true,
+            "evidence": "All four rule groups (default inline card, .is-enhanced/[open] overlay, ::backdrop, close-hidden-when-not-enhanced) plus .dialog-head live in dialog.css under .modal-dialog, components.css's block is deleted (grep for publish-dialog in styles/ and dialog in components.css both empty). Beyond meeting the criteria, it adds two standing invariants a plain move would not: stylesheet.test.ts asserts STYLE_FILES.indexOf('dialog.css') === indexOf('components.css') + 1, mechanically pinning the ordering hazard named in the failure examples, and expect(STYLESHEET).not.toContain('.publish-dialog') pins the dead-duplicate hazard."
+          },
+          {
+            "dimensionId": "modal-dialog-branch-coverage",
+            "score": 8,
+            "pass": true,
+            "evidence": "Both openOnLoad paths are asserted directly and by markup difference (absence of the token vs the bare aria-labelledby=\"publish-heading\" data-open-on-load> form), the default-parameter path is exercised separately from the explicit false, escaping is covered for both title and label, a trigger test asserts hidden + data-open-dialog, and a dialog-without-trigger test asserts no button is emitted; the global 100% coverage gate passed. Short of higher because one passCriteria is deviated from: the trigger test uses whole-string toBe(...), the brittle pattern the criteria explicitly ask new dialog tests to avoid."
+          },
+          {
+            "dimensionId": "publish-e2e-still-green",
+            "score": 9,
+            "pass": true,
+            "evidence": "Full Playwright suite exit 0 with git diff --stat HEAD -- packages/dashboard/e2e empty, so flag-list.spec.ts's publish dialog and concurrent-edits.spec.ts's 'What changed' / 'Merge your draft' resolve unedited; the heading ids (publish-heading, changes-heading) and aria-labelledby are passed through verbatim, and the changes dialog in update-watch.ts was migrated to the helper rather than left orphaned by the class rename - the failure example that would have broken its styling. Not a 10 because the shared close control gives the changes dialog an aria-label=\"Close\" it did not have, a small (harmless but real) accessible-name change the helper introduced rather than a pure no-op migration."
+          }
+        ],
+        "overallPass": true
+      },
+      "gateRun": "pnpm verify (build x5 packages, pnpm -r typecheck, eslint --max-warnings=0, vitest run --coverage @ global 100% gate): pass, first run | pnpm --filter @featuresync/dashboard test:e2e (full Playwright suite): pass, first run"
+    },
+    {
+      "phaseId": "new-flag-dialog",
+      "status": "done",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-21T14:44:54Z",
+      "baseRef": "402907f8a188708079134a86ec26e6f2257e064e",
+      "baseDirty": true,
+      "notes": "Already dirty at start (phases 1-3, all done, plus project memory and the horizon-26 files): docs/roadmaps/featuresync/blockers.md docs/roadmaps/featuresync/decisions.md docs/roadmaps/featuresync/discoveries.md docs/roadmaps/featuresync/next-horizon-brief.md docs/roadmaps/featuresync/state.md packages/dashboard/src/infrastructure/http-server.test.ts packages/dashboard/src/infrastructure/http-server.ts packages/dashboard/src/infrastructure/segment-routes.test.ts packages/dashboard/src/infrastructure/segment-routes.ts packages/dashboard/src/infrastructure/views/environment-page.test.ts packages/dashboard/src/infrastructure/views/environment-page.ts packages/dashboard/src/infrastructure/views/feature-edit-form.test.ts packages/dashboard/src/infrastructure/views/layout.ts packages/dashboard/src/infrastructure/views/section-nav.test.ts packages/dashboard/src/infrastructure/views/section-nav.ts packages/dashboard/src/infrastructure/views/segment-list-page.test.ts packages/dashboard/src/infrastructure/views/segment-list-page.ts packages/dashboard/src/infrastructure/views/styles/components.css packages/dashboard/src/infrastructure/views/styles/layout.css packages/dashboard/src/infrastructure/views/styles/section-nav.css packages/dashboard/src/infrastructure/views/stylesheet.test.ts packages/dashboard/src/infrastructure/views/stylesheet.ts packages/dashboard/src/infrastructure/views/version-list-page.test.ts packages/dashboard/src/infrastructure/views/version-list-page.ts docs/roadmaps/featuresync/horizons/horizon-26-dashboard-side-menu-and-dialogs-roadmap.json docs/roadmaps/featuresync/horizons/horizon-26-dashboard-side-menu-and-dialogs-roadmap.md docs/roadmaps/featuresync/horizons/horizon-26-dashboard-side-menu-and-dialogs-roadmap.status.json docs/roadmaps/featuresync/horizons/horizon-26-dashboard-side-menu-and-dialogs-roadmap.status.last_good.json packages/dashboard/src/infrastructure/views/layout.test.ts packages/dashboard/src/infrastructure/views/modal-dialog.test.ts packages/dashboard/src/infrastructure/views/modal-dialog.ts packages/dashboard/src/infrastructure/views/side-menu.test.ts packages/dashboard/src/infrastructure/views/side-menu.ts packages/dashboard/src/infrastructure/views/styles/dialog.css packages/dashboard/src/infrastructure/views/styles/shell.css packages/dashboard/src/infrastructure/views/styles/side-menu.css packages/dashboard/src/infrastructure/views/update-watch.ts  | Changed: new-flag-form.ts (the <details class=\"card\"><summary>New flag</summary> wrapper replaced by renderModalDialog with id new-flag-dialog / headingId new-flag-heading / title New flag; openOnLoad is the pre-existing draft !== undefined condition; the <form> body, its withUrlState action, baseVersion input and stateInputs are byte-identical to before; exports NEW_FLAG_DIALOG_ID and NEW_FLAG_TITLE). environment-page.ts (renderFlags gained a creatable flag driving both the dialog and a renderDialogTrigger in the .section-head, so an invalid/unavailable/empty snapshot still renders neither). feature-edit-form.test.ts (the closed-branch test now asserts the hidden trigger, the dialog open tag and the absence of data-open-on-load; the draft test asserts data-open-on-load and the dialog heading). environment-page.test.ts (URL-state slice keyed on the dialog rather than the old summary). e2e/flag-list.spec.ts (NEW describe: trigger-opens-dialog-and-creates-the-flag end to end via getByRole(dialog, {name}), and rejected-create re-opens with the typed key/JSON and the error inside the dialog). No stylesheet change was needed: .section-head is already flex/space-between and dialog.css already renders the not-enhanced inline card and hides its close control. Ran during implementation (NOT verification): dashboard typecheck clean, vitest over src/infrastructure = 18 files / 473 tests pass, full Playwright suite 15/15 pass. Gates (pnpm verify, LocalStack) and grade NOT run. | VERIFY: all three gates green, no healer retry needed. Graded 9,9,8,10 against minScores 7,8,8,8 - overallPass. The one 10 (flag-list-e2e-updated) named what a 9 lacks - the create test asserts both the rendered row and the persisted store, and the rejection test pins currentVersion to 1, above the dimension own 10-bar - so no 10->9 demotion applied. Phase has no compensation. Open quality note carried forward, not a block: the no-JS fallback was confirmed from dialog.css and the emitted markup, not from a real JS-disabled browser run, which is why that dimension scored 8.",
+      "unplannedFiles": [],
+      "amendments": [
+        {
+          "at": "2026-09-21T14:47:30Z",
+          "by": "execute",
+          "reason": "filesAffected named packages/dashboard/src/infrastructure/views/new-flag-form.test.ts, which does not exist - the new-flag form has no test file of its own; its unit tests live in feature-edit-form.test.ts (markup and draft cases) and environment-page.test.ts (URL-state echo). It also assumed e2e/flag-list.spec.ts asserted on the New flag form; that spec covered only the flag rows, the filter and the publish dialog, so the affordance change needed new e2e coverage there rather than an update.",
+          "grounding": "grep for renderNewFlagForm / New flag across packages/dashboard/{src,e2e}: hits in feature-edit-form.test.ts:232,248,276 and environment-page.test.ts:193, none in e2e/ and no new-flag-form.test.ts on disk.",
+          "before": {
+            "filesAffected": [
+              "packages/dashboard/src/infrastructure/views/new-flag-form.ts",
+              "packages/dashboard/src/infrastructure/views/environment-page.ts",
+              "packages/dashboard/src/infrastructure/views/new-flag-form.test.ts",
+              "packages/dashboard/e2e/flag-list.spec.ts"
+            ]
+          },
+          "after": {
+            "filesAffected": [
+              "packages/dashboard/src/infrastructure/views/new-flag-form.ts",
+              "packages/dashboard/src/infrastructure/views/environment-page.ts",
+              "packages/dashboard/src/infrastructure/views/feature-edit-form.test.ts",
+              "packages/dashboard/src/infrastructure/views/environment-page.test.ts",
+              "packages/dashboard/e2e/flag-list.spec.ts"
+            ]
+          }
+        }
+      ],
+      "completedAt": "2026-09-21T16:04:18Z",
+      "gradeResult": {
+        "phaseId": "new-flag-dialog",
+        "dimensionScores": [
+          {
+            "dimensionId": "rejected-draft-reopens-with-values",
+            "score": 9,
+            "pass": true,
+            "evidence": "openOnLoad is the pre-existing draft !== undefined condition, so data-open-on-load appears only on a rejection; renderDraftError is inside the dialog body so the overlay cannot cover it; the Playwright rejection test confirms the reopened dialog shows the error and retains key and textarea with currentVersion still 1. Not 10: only one rejection status is exercised."
+          },
+          {
+            "dimensionId": "url-state-both-mechanisms",
+            "score": 9,
+            "pass": true,
+            "evidence": "withUrlState action and stateInputs both retained inside the <form> in the dialog body; environment-page.test.ts slices from the dialog tag and asserts the action query plus the hidden input, excluding the outside-the-form failure; stateInputs derives from serialiseUrlState so all four keys are covered. Not 10: no filtered+paged+row-open URL round-trip through create and rejection."
+          },
+          {
+            "dimensionId": "no-js-inline-fallback",
+            "score": 8,
+            "pass": true,
+            "evidence": "Verified structurally, not in a JS-disabled browser. dialog.css defaults .modal-dialog to display:block/position:static with display:none only under .is-enhanced, no hidden attribute on the dialog; the close control is hidden by .modal-dialog:not(.is-enhanced) .dialog-head form; renderDialogTrigger emits the bare hidden attribute and app.js only unhides after confirming showModal. Held at 8 because the checks were CSS/markup rather than a real no-JS run."
+          },
+          {
+            "dimensionId": "flag-list-e2e-updated",
+            "score": 10,
+            "pass": true,
+            "evidence": "New describe follows the publish-dialog idiom via getByRole('dialog', { name: 'New flag' }), resolvable only because aria-labelledby matches the emitted h2, so no brittle #id locator; the pre-trigger hidden-form regression check is kept, not deleted; full 15-test suite green including url-state.spec.ts and the Save default disclosure. Above a 9: the create test asserts both the rendered row and the persisted env.features(), and the rejection test pins currentVersion to 1, exceeding the rubric's own 10-level bar."
+          }
+        ],
+        "overallPass": true
+      },
+      "gateRun": "pnpm verify: pass (exit 0) | pnpm --filter @featuresync/dashboard test:e2e: pass (15/15) | pnpm test:integration: pass on rerun (exit 0); first run had one failure in @featuresync/aws s3-segment-publisher.localstack concurrent-pointer test, a package with zero changes this phase, confirmed flaky (3/3 in isolation, green on full rerun)"
+    },
+    {
+      "phaseId": "destructive-action-confirmation",
+      "status": "awaiting-verification",
+      "attempts": 1,
+      "compensationInvoked": false,
+      "startedAt": "2026-09-21T16:09:30Z",
+      "baseRef": "402907f8a188708079134a86ec26e6f2257e064e",
+      "baseDirty": true,
+      "notes": "Already dirty at start (phases 1-4, all done, plus project memory and the horizon-26 files): docs/roadmaps/featuresync/blockers.md docs/roadmaps/featuresync/decisions.md docs/roadmaps/featuresync/discoveries.md docs/roadmaps/featuresync/next-horizon-brief.md docs/roadmaps/featuresync/state.md packages/dashboard/e2e/flag-list.spec.ts packages/dashboard/src/infrastructure/http-server.test.ts packages/dashboard/src/infrastructure/http-server.ts packages/dashboard/src/infrastructure/segment-routes.test.ts packages/dashboard/src/infrastructure/segment-routes.ts packages/dashboard/src/infrastructure/views/environment-page.test.ts packages/dashboard/src/infrastructure/views/environment-page.ts packages/dashboard/src/infrastructure/views/feature-edit-form.test.ts packages/dashboard/src/infrastructure/views/layout.ts packages/dashboard/src/infrastructure/views/new-flag-form.ts packages/dashboard/src/infrastructure/views/section-nav.test.ts packages/dashboard/src/infrastructure/views/section-nav.ts packages/dashboard/src/infrastructure/views/segment-list-page.test.ts packages/dashboard/src/infrastructure/views/segment-list-page.ts packages/dashboard/src/infrastructure/views/styles/components.css packages/dashboard/src/infrastructure/views/styles/layout.css packages/dashboard/src/infrastructure/views/styles/section-nav.css packages/dashboard/src/infrastructure/views/stylesheet.test.ts packages/dashboard/src/infrastructure/views/stylesheet.ts packages/dashboard/src/infrastructure/views/version-list-page.test.ts packages/dashboard/src/infrastructure/views/version-list-page.ts docs/roadmaps/featuresync/horizons/horizon-26-dashboard-side-menu-and-dialogs-roadmap.json docs/roadmaps/featuresync/horizons/horizon-26-dashboard-side-menu-and-dialogs-roadmap.md docs/roadmaps/featuresync/horizons/horizon-26-dashboard-side-menu-and-dialogs-roadmap.status.json docs/roadmaps/featuresync/horizons/horizon-26-dashboard-side-menu-and-dialogs-roadmap.status.last_good.json packages/dashboard/src/infrastructure/views/layout.test.ts packages/dashboard/src/infrastructure/views/modal-dialog.test.ts packages/dashboard/src/infrastructure/views/modal-dialog.ts packages/dashboard/src/infrastructure/views/side-menu.test.ts packages/dashboard/src/infrastructure/views/side-menu.ts packages/dashboard/src/infrastructure/views/styles/dialog.css packages/dashboard/src/infrastructure/views/styles/shell.css packages/dashboard/src/infrastructure/views/styles/side-menu.css packages/dashboard/src/infrastructure/views/update-watch.ts  | Changed: NEW views/confirm-dialog.ts (renderConfirmation = hidden renderDialogTrigger + renderModalDialog whose body is the real destructive POST form: action, baseVersionInput, stateInputs, caller hidden inputs, prompt, one button-danger submit carrying name=\"field\"; never openOnLoad). modal-dialog.ts gained dialogId(...parts), which escapes every non [A-Za-z0-9-] char as _<4-hex> and joins with _ (injective, so checkout.limits/v2 and two rules never collide). rollout-form.ts: the one-click Detach button and the Remove button that sat INSIDE the rollout form are both now confirmations - detach id confirm-detach_<key>_<ruleIndex> titled \"Detach <segments> from <flag>\", remove id confirm-remove-rollout_<key>_<ruleIndex> titled \"Remove the rollout on rule <n> of <flag>\"; remove moved out of the rollout form into its own POST form (forms cannot nest), so confirming a removal can no longer also save a percentage. feature-edit-form.ts: <details class=\"danger-zone\"> and the comment calling that disclosure the confirmation step are gone, replaced by confirm-delete_<key>; styles/components.css lost the two .danger-zone rules. Tests: NEW confirm-dialog.test.ts (5 cases incl. the hiddenInputs default branch and escaping), modal-dialog.test.ts +4 dialogId cases (separator-collision and dotted/slashed keys), rollout-form.test.ts rewritten for the new form counts plus 4 new cases (per-subject naming, per-rule ids, confirmation-outside-rollout-form, dotted-key id), feature-edit-form.test.ts delete case rewritten + a two-flags-two-ids case + the per-card <form count 7 -> 9, flag-page.test.ts gained a single-flag-page delete-confirmation case. e2e/segment-picker.spec.ts gained a second test: attach, open the detach confirmation, Close it and assert the snapshot still carries the segment, then confirm and assert both the row and the stored rules lose it. Server untouched: no change to http-server.ts, segment-routes.ts, application/ or domain/. Ran during implementation (NOT verification): dashboard typecheck clean, eslint clean, vitest src = 488 tests pass with every views file at 100%, full Playwright suite 16/16 pass against LocalStack. Gates (pnpm verify) and grade NOT run - this is an EXECUTE stop at awaiting-verification.",
+      "unplannedFiles": [
+        "packages/dashboard/src/infrastructure/views/confirm-dialog.ts",
+        "packages/dashboard/src/infrastructure/views/confirm-dialog.test.ts",
+        "packages/dashboard/src/infrastructure/views/modal-dialog.ts",
+        "packages/dashboard/src/infrastructure/views/modal-dialog.test.ts",
+        "packages/dashboard/src/infrastructure/views/styles/components.css"
+      ]
+    }
+  ]
+}

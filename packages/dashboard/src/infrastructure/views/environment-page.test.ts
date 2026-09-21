@@ -190,7 +190,7 @@ describe('the URL state the new-flag and publish forms carry', () => {
 
   it('sends it with a new flag, in the form and in its action', () => {
     const html = render('filter=new&open=new-dashboard');
-    const body = html.slice(html.indexOf('<summary>New flag</summary>'));
+    const body = html.slice(html.indexOf('<dialog id="new-flag-dialog"'));
 
     expect(body).toContain('action="/env/production/features?filter=new&amp;open=new-dashboard"');
     expect(body).toContain('<input type="hidden" name="filter" value="new">');
@@ -214,33 +214,26 @@ describe('the URL state the new-flag and publish forms carry', () => {
   });
 });
 
-describe('section nav', () => {
-  it('renders above the current snapshot card with links to the sections the page rendered', () => {
+describe('side menu', () => {
+  it('renders the Views menu in the shell nav slot with Flags marked current', () => {
     const html = renderEnvironmentPage(publishedView(2), { urlState: { ...parseUrlState(new URLSearchParams()), filter: 'dark' } });
-    const nav = /<nav class="section-nav" aria-label="Sections">([\s\S]*?)<\/nav>/.exec(html);
-    expect(nav).not.toBeNull();
-    expect((nav as RegExpExecArray)[1]).toBe(
-      '<a href="/env/production?filter=dark#current-heading">Current snapshot</a>' +
-        '<a href="/env/production?filter=dark#flags-heading">Flags</a>' +
-        '<a href="/env/production?filter=dark#versions-heading">Version history</a>',
-    );
-    expect(html.indexOf('class="section-nav"')).toBeLessThan(html.indexOf('id="current-heading"'));
+    expect(html).toContain('<aside class="page-shell-nav"><nav class="side-menu" aria-label="Views">');
+    expect(html).toContain('<a href="/env/production?filter=dark" class="side-menu-item is-current" aria-current="page">Flags</a>');
+    expect(html).toContain('<a href="/env/production/versions?filter=dark" class="side-menu-item">Versions</a>');
+    expect(html).toContain('<a href="/env/production/segments?filter=dark" class="side-menu-item">Segments</a>');
   });
 
-  it('links only the anchors the page actually renders, so no link points at a missing section', () => {
-    const view = publishedView(2);
-    const html = renderEnvironmentPage(view);
-    for (const id of ['current-heading', 'flags-heading', 'versions-heading']) {
-      expect(html).toContain(`id="${id}"`);
-      expect(html).toContain(`#${id}"`);
-    }
+  it('marks only the Flags item, and renders the menu outside main', () => {
+    const html = renderEnvironmentPage(publishedView(2));
+    expect(html.match(/aria-current="page"/g)).toHaveLength(1);
+    expect(html.indexOf('class="side-menu"')).toBeLessThan(html.indexOf('<main class="container">'));
   });
 
-  it('drops the flags link when the current snapshot file is unavailable', () => {
-    const view = publishedView(2);
-    const html = renderEnvironmentPage({ ...view, current: { environment: 'production', version: 7, status: 'not-available' } });
+  it('no longer renders the replaced in-page section anchors', () => {
+    const html = renderEnvironmentPage(publishedView(2));
+    expect(html).not.toContain('section-nav');
+    expect(html).not.toContain('#current-heading');
     expect(html).not.toContain('#flags-heading');
-    expect(html).toContain('#current-heading');
-    expect(html).toContain('#versions-heading');
+    expect(html).not.toContain('#versions-heading');
   });
 });

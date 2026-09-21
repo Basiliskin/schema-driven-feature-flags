@@ -3,6 +3,8 @@ import { DEFAULT_VERSION_PAGE_SIZE, type VersionPage } from '../../application/l
 import { NO_URL_STATE, withUrlState, type DashboardUrlState } from '../url-state.js';
 import { environmentPath, escapeHtml } from './escape.js';
 import { renderPage, renderTimestamp } from './layout.js';
+import { renderSideMenu } from './side-menu.js';
+import { renderUpdateWatch } from './update-watch.js';
 import { stateInputs } from './state-fields.js';
 
 /** What a version entry needs to know about the environment it belongs to, so both pages render the same item. */
@@ -65,13 +67,22 @@ ${view.entries.map((entry) => renderVersionItem(context, entry)).join('\n')}
 </ol>`;
 };
 
-export const renderVersionListPage = (view: VersionPage): string => {
+/** The state the menu needs to carry back to the flag list, which this page itself does not use. */
+export interface VersionListPageState {
+  readonly urlState?: DashboardUrlState;
+}
+
+export const renderVersionListPage = (view: VersionPage, state: VersionListPageState = {}): string => {
   const heading = `${view.environment} · version history`;
+  const urlState = state.urlState ?? { ...NO_URL_STATE, page: view.page, pageSize: view.pageSize };
+  const watch = view.totalVersions === 0 ? '' : `${renderUpdateWatch(view.environment, view.totalVersions)}\n`;
   return renderPage(
     heading,
     `<p><a class="back-link" href="${escapeHtml(environmentPath(view.environment))}">Back to ${escapeHtml(view.environment)}</a></p>
-<div class="page-head"><h1>${escapeHtml(heading)}</h1></div>
+${watch}<div class="page-head"><h1>${escapeHtml(heading)}</h1></div>
 <p class="muted">Newest first, ${String(view.pageSize)} per page. Restoring a version publishes its contents as a new version.</p>
 ${renderEntries(view)}${renderPager(view)}`,
+    [],
+    renderSideMenu(view.environment, 'versions', urlState),
   );
 };
