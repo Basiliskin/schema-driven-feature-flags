@@ -412,6 +412,28 @@ describe('applyFlagEdit', () => {
       });
     });
 
+    it.each(['', '   '])('defaults an empty (or blank) salt to <key>-rule-<index> instead of failing', (salt) => {
+      const result = applyFlagEdit(rolloutText, { ...setFirst, salt }, meta);
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(rulesOf(result.value, 'new-dashboard')[0]?.rollout).toEqual({
+        percentage: 12.34,
+        bucketBy: 'userId',
+        salt: 'new-dashboard-rule-0',
+      });
+    });
+
+    it('keeps an explicit salt untouched', () => {
+      const result = applyFlagEdit(rolloutText, { ...setFirst, salt: 'explicit' }, meta);
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(
+        (rulesOf(result.value, 'new-dashboard')[0]?.rollout as { salt: string } | undefined)?.salt,
+      ).toBe('explicit');
+    });
+
     it.each(['setRollout', 'removeRollout'] as const)('reports an unknown Feature for %s', (kind) => {
       expect(applyFlagEdit(rolloutText, { ...setFirst, kind, key: 'missing' }, meta)).toEqual({
         ok: false,

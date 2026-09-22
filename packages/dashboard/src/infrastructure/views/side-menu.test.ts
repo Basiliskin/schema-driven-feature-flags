@@ -25,11 +25,11 @@ describe('renderSideMenu', () => {
     expect((marked as RegExpExecArray)[1]).toBe(expectedPath);
   });
 
-  it('carries the filter, open rows and paging onto every link, so navigating back keeps the view', () => {
-    const html = renderSideMenu('production', 'versions', { ...NO_URL_STATE, filter: 'dark', openFlags: ['a'], page: 2 });
-    expect(html).toContain('<a href="/env/production?filter=dark&amp;open=a&amp;page=2" class="side-menu-item">Flags</a>');
-    expect(html).toContain('href="/env/production/versions?filter=dark&amp;open=a&amp;page=2"');
-    expect(html).toContain('href="/env/production/segments?filter=dark&amp;open=a&amp;page=2"');
+  it('carries the filter and paging onto every link, so navigating back keeps the view', () => {
+    const html = renderSideMenu('production', 'versions', { ...NO_URL_STATE, filter: 'dark', page: 2 });
+    expect(html).toContain('<a href="/env/production?filter=dark&amp;page=2" class="side-menu-item">Flags</a>');
+    expect(html).toContain('href="/env/production/versions?filter=dark&amp;page=2"');
+    expect(html).toContain('href="/env/production/segments?filter=dark&amp;page=2"');
   });
 
   it('encodes the environment and a filter containing reserved characters', () => {

@@ -109,37 +109,33 @@ describe('the flag filter form', () => {
     expect(html).toContain('This snapshot defines no flags.');
   });
 
+  it('renders one shared, empty flag dialog for the page script to fill by moving a row’s panel into it', () => {
+    const html = renderEnvironmentPage(viewWithFlags());
+
+    expect(html).toContain('<dialog id="flag-dialog" class="modal-dialog" aria-labelledby="flag-dialog-heading">');
+    expect(html).toContain('<div id="flag-dialog-body"></div>');
+    // Each flag's own panel content lives once, inside its row — not duplicated into the dialog server-side.
+    expect((html.match(/class="flag-panel"/g) ?? []).length).toBe(FLAGS.length);
+  });
+
+  it('omits the flag dialog along with the filter form when the snapshot defines no flags', () => {
+    const html = renderEnvironmentPage(publishedView(2));
+
+    expect(html).not.toContain('id="flag-dialog"');
+  });
+
   it('escapes an ampersand in the attribute and percent-encodes it in a carried value', () => {
-    const html = render(`filter=${encodeURIComponent('a & b')}&open=${encodeURIComponent('a&b')}`);
+    const html = render(`filter=${encodeURIComponent('a & b')}`);
 
     expect(html).toContain('name="filter" value="a &amp; b"');
-    expect(html).toContain('<input type="hidden" name="open" value="a&amp;b">');
     expect(serialiseUrlState({ filter: 'a & b' })).toBe('filter=a%20%26%20b');
   });
 
-  describe('rows opened by the URL', () => {
-    it('renders the row named in the open list expanded and the others collapsed', () => {
-      const html = render('open=checkout-limits');
+  it('renders every flag row with its panel hidden', () => {
+    const html = render('');
 
-      expect(html).toContain('<li class="card flag" data-flag="checkout-limits"');
-      expect(html.slice(html.indexOf('data-flag="checkout-limits"'))).toContain('<details class="flag-row" open>');
-      expect(html.slice(html.indexOf('data-flag="new-dashboard"'))).toContain('<details class="flag-row">');
-    });
-
-    it('gives each row a toggle link that keeps the filter and the other open keys', () => {
-      const html = render('filter=e&open=checkout-limits');
-
-      expect(html).toContain('data-open-toggle href="/env/production?filter=e"');
-      expect(html).toContain('data-open-toggle href="/env/production?filter=e&amp;open=checkout-limits%2Cnew-dashboard"');
-    });
-
-    it('renders every row collapsed with an add-only toggle link when the page is asked for with no query', () => {
-      const html = renderEnvironmentPage(viewWithFlags());
-
-      expect(html).not.toContain('<details class="flag-row" open>');
-      expect(html).toContain('data-open-toggle href="/env/production?open=new-dashboard"');
-      expect(html).toContain('data-open-toggle href="/env/production?open=checkout-limits"');
-    });
+    expect(html).not.toContain('<div class="flag-panel">');
+    expect((html.match(/<div class="flag-panel" hidden>/g) ?? []).length).toBe(FLAGS.length);
   });
 });
 
@@ -159,12 +155,11 @@ describe('the URL state the new-flag and publish forms carry', () => {
     renderEnvironmentPage(viewWithFlags(), { urlState: parseUrlState(new URLSearchParams(query)) });
 
   it('sends it with a new flag, in the form and in its action', () => {
-    const html = render('filter=new&open=new-dashboard');
+    const html = render('filter=new');
     const body = html.slice(html.indexOf('<dialog id="new-flag-dialog"'));
 
-    expect(body).toContain('action="/env/production/features?filter=new&amp;open=new-dashboard"');
+    expect(body).toContain('action="/env/production/features?filter=new"');
     expect(body).toContain('<input type="hidden" name="filter" value="new">');
-    expect(body).toContain('<input type="hidden" name="open" value="new-dashboard">');
   });
 
   it('sends it with a published snapshot, so a rejected publish comes back to the same view', () => {

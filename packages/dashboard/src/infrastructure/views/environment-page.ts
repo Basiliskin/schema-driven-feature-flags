@@ -59,6 +59,18 @@ const prefill = (view: EnvironmentView): string => {
 const renderFilterForm = (environment: string, urlState: DashboardUrlState, pending: PendingChangeSet | undefined): string =>
   `<form class="flag-filter-form" method="get" action="${escapeHtml(environmentPath(environment))}">${stateInputs({ ...urlState, filter: '' })}${pendingInputs(pending)}<input type="search" class="flag-filter" data-filter="flag-list" name="filter" value="${escapeHtml(urlState.filter)}" placeholder="Filter flags…" aria-label="Filter flags by key, type or on/off"><button type="submit" class="button-secondary">Filter</button></form>`;
 
+// A single shared overlay: the page script moves the clicked flag's own `.flag-panel` node in here (and back
+// out on close), rather than re-rendering it, so the confirmation dialogs and rollout forms nested inside
+// keep their one set of ids instead of existing twice on the page. Without JS the flag-name link falls back
+// to its href and opens the full flag page instead.
+const renderFlagDialog = (): string =>
+  renderModalDialog({
+    id: 'flag-dialog',
+    headingId: 'flag-dialog-heading',
+    title: 'Flag',
+    body: '<div id="flag-dialog-body"></div>',
+  });
+
 const renderFlags = (view: PublishedView, state: EnvironmentPageState): string => {
   const { current } = view;
   if (current.status !== 'available') return '';
@@ -78,7 +90,7 @@ const renderFlags = (view: PublishedView, state: EnvironmentPageState): string =
   const editable = { ...context, ...(editDraft === undefined ? {} : { draft: editDraft }) };
   const flags = noMatch
     ? '<ul class="flag-list"></ul>'
-    : renderSnapshotContents(contents.status === 'valid' ? { ...contents, flags: matching } : contents, editable, urlState);
+    : renderSnapshotContents(contents.status === 'valid' ? { ...contents, flags: matching } : contents, editable);
   const creatable = contents.status === 'valid';
   const newFlag = creatable ? `\n${renderNewFlagForm({ ...context, ...(createDraft === undefined ? {} : { draft: createDraft }) })}` : '';
   const newFlagTrigger = creatable ? renderDialogTrigger({ dialogId: NEW_FLAG_DIALOG_ID, label: NEW_FLAG_TITLE }) : '';
@@ -91,10 +103,11 @@ const renderFlags = (view: PublishedView, state: EnvironmentPageState): string =
   const filter = filterable ? renderFilterForm(view.environment, urlState, state.pending) : '';
   // The message stays in the markup while rows match, because the in-browser instant filter reveals it without a reload.
   const noMatchMessage = filterable ? `\n<p class="muted" data-filter-empty${noMatch ? '' : ' hidden'}>No flags match.</p>` : '';
+  const flagDialog = filterable ? `\n${renderFlagDialog()}` : '';
   return `<section class="section" aria-labelledby="flags-heading">
 <div class="section-head"><h2 id="flags-heading">Flags</h2>${filter}${reviewTrigger}${newFlagTrigger}</div>
 <div class="stack">
-${flags}${noMatchMessage}${newFlag}${reviewDialog}
+${flags}${noMatchMessage}${newFlag}${reviewDialog}${flagDialog}
 </div>
 </section>`;
 };

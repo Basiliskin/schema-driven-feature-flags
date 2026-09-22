@@ -1,11 +1,12 @@
 import { expandFlag, expect, test } from './support/fixtures.js';
 
 test.describe('flag list', () => {
-  test('shows each flag as a collapsed row that expands to its editor', async ({ page, openEnvironment }) => {
+  test('shows each flag as a collapsed row whose name opens its editor in a dialog', async ({ page, openEnvironment }) => {
     await openEnvironment();
-    await expect(page.locator('[data-flag="checkout-limits"]').getByRole('button', { name: 'Save default' })).toBeHidden();
-    const row = await expandFlag(page, 'checkout-limits');
-    await expect(row.getByRole('button', { name: 'Save default' })).toBeVisible();
+    await expect(page.locator('[data-flag="checkout-limits"]').getByLabel('Default JSON')).toBeHidden();
+    const dialog = await expandFlag(page, 'checkout-limits');
+    await expect(dialog.getByLabel('Default JSON')).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Save', exact: true })).toBeVisible();
   });
 
   test('filters flags by key, type and on/off as you type', async ({ page, openEnvironment }) => {

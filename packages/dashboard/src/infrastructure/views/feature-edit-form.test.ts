@@ -47,10 +47,30 @@ const rowOf = (html: string, key: string): string => {
 };
 
 describe('renderFeatureEditForm', () => {
-  it('posts to the URL-encoded feature path with the exact base version', () => {
+  it('puts one Save and one Delete at the top of the panel, ahead of every field', () => {
     const html = renderFeatureEditForm(BOOLEAN, CONTEXT);
-    expect(html).toContain('<form method="post" action="/env/production/features/new-dashboard">');
+    const head = html.slice(html.indexOf('<div class="panel-head">'), html.indexOf('</div>'));
+    expect(head).toContain('name="field" value="save"');
+    expect(head).toContain('data-open-dialog="confirm-delete_new-dashboard"');
+    expect(html.indexOf('<div class="panel-head">')).toBeLessThan(html.indexOf('<form method="post"'));
+    // Exactly one Save and one field=save submit in the whole panel — every other control stages into it.
+    expect(html.match(/>Save</g)).toHaveLength(1);
+    expect(html.match(/name="field" value="save"/g)).toHaveLength(1);
+  });
+
+  it('posts the one form to the URL-encoded feature path with the exact base version', () => {
+    const html = renderFeatureEditForm(BOOLEAN, CONTEXT);
+    expect(html).toContain('<form method="post"');
+    expect(html).toContain(`action="/env/production/features/new-dashboard">`);
     expect(html).toContain('<input type="hidden" name="baseVersion" value="7">');
+  });
+
+  it('the Save button submits the form by id from outside it, so it can sit in the panel head', () => {
+    const html = renderFeatureEditForm(BOOLEAN, CONTEXT);
+    const saveButton = /<button type="submit" form="([^"]+)" name="field" value="save">Save<\/button>/.exec(html);
+    const formId = saveButton?.[1] ?? '';
+    expect(saveButton).not.toBeNull();
+    expect(html).toContain(`<form method="post" id="${formId}"`);
   });
 
   it('URL-encodes slashes in the key and the environment', () => {
@@ -67,7 +87,6 @@ describe('renderFeatureEditForm', () => {
   it('gives a boolean feature a checkbox and no default textarea', () => {
     const html = renderFeatureEditForm(BOOLEAN, CONTEXT);
     expect(html).toContain('<input type="checkbox" name="enabled" checked>');
-    expect(html).toContain('<button type="submit" name="field" value="enabled">Save enabled</button>');
     expect(html).not.toContain('name="default"');
     expect(html).not.toContain('value="default"');
   });
@@ -77,7 +96,6 @@ describe('renderFeatureEditForm', () => {
     expect(html).toContain('<input type="checkbox" name="enabled">');
     expect(html).not.toContain(' checked');
     expect(html).toContain(`<textarea name="default" rows="4">{\n  &quot;max&quot;: 3\n}</textarea>`);
-    expect(html).toContain('<button type="submit" class="button-secondary" name="field" value="default">Save default</button>');
   });
 
   it('escapes a stored default that tries to close the textarea', () => {
@@ -114,22 +132,7 @@ describe('renderFeatureEditForm', () => {
     expect(html).toContain('<input type="checkbox" name="enabled" checked>');
   });
 
-  it('prefills the rules textarea with the stored rules, escaped', () => {
-    const html = renderFeatureEditForm({ ...CONFIG, rules: [{ when: { plan: '</textarea>' }, value: 1 }] }, CONTEXT);
-    expect(html).toContain('<textarea name="rules" rows="4">[\n  {\n    &quot;when&quot;: {\n      &quot;plan&quot;: &quot;&lt;/textarea&gt;&quot;');
-    expect(html).toContain('<button type="submit" class="button-secondary" name="field" value="rules">Save rules</button>');
-    expect(html).not.toContain('</textarea>&quot;');
-  });
-
-  it('keeps the rules draft text for the matching feature', () => {
-    const html = renderFeatureEditForm(BOOLEAN, {
-      ...CONTEXT,
-      draft: { key: 'new-dashboard', rulesJson: '[{"when"', message: 'Bad rules', issues: [] },
-    });
-    expect(html).toContain('<textarea name="rules" rows="4">[{&quot;when&quot;</textarea>');
-  });
-
-  it('puts delete in a separate form behind a confirmation dialog naming the flag, with no inline script', () => {
+  it('puts delete behind a confirmation dialog naming the flag, with no inline script', () => {
     const html = renderFeatureEditForm({ ...BOOLEAN, key: '<b>' }, CONTEXT);
     const id = 'confirm-delete__003cb_003e';
     const deleteSection = html.slice(html.indexOf(`<button type="button" data-open-dialog="${id}"`));
@@ -182,8 +185,9 @@ describe('renderSnapshotContents', () => {
     expect(rowOf(html, 'new-dashboard')).toContain('Default <code>true</code> · 0 rules');
     expect(rowOf(html, 'checkout-limits')).toContain('<span class="badge">config</span><span class="badge">Off</span>');
     expect(rowOf(html, 'checkout-limits')).toContain('· 1 rule</p>');
-    // Per feature: the edit form, the attach form, the delete confirmation and its dialog-close form, plus one rollout form per rule.
-    expect(html.match(/<form /g)).toHaveLength(9);
+    // Per feature: the one edit form (Enabled, Default, Rollout, Attach), the delete confirmation's own
+    // submit and the dialog's own Close form.
+    expect(html.match(/<form /g)).toHaveLength(6);
   });
 
   it('shows the draft error only on the matching row', () => {
@@ -205,14 +209,14 @@ describe('renderEnvironmentPage edit forms', () => {
     current: { environment: 'production', version: 7, status: 'available', contents: CONTENTS },
   };
 
-  it('collapses every flag row unless it holds a rejected draft', () => {
+  it('hides every flag panel unless it holds a rejected draft', () => {
     const closed = renderEnvironmentPage(view);
-    expect(rowOf(closed, 'checkout-limits')).toContain('<details class="flag-row">');
+    expect(rowOf(closed, 'checkout-limits')).toContain('<div class="flag-panel" hidden>');
     const html = renderEnvironmentPage(view, {
       editDraft: { key: 'checkout-limits', defaultJson: '{}', message: 'Bad', issues: [] },
     });
-    expect(rowOf(html, 'checkout-limits')).toContain('<details class="flag-row" open>');
-    expect(rowOf(html, 'new-dashboard')).toContain('<details class="flag-row">');
+    expect(rowOf(html, 'checkout-limits')).toContain('<div class="flag-panel">');
+    expect(rowOf(html, 'new-dashboard')).toContain('<div class="flag-panel" hidden>');
   });
 
   it('indexes each flag for the filter by key, type and on/off state', () => {
@@ -221,13 +225,13 @@ describe('renderEnvironmentPage edit forms', () => {
     expect(html).toMatch(/data-flag="new-dashboard" data-search="new-dashboard boolean (on|off)"/);
   });
 
-  it('links each flag key to its own page without wrapping the row summary', () => {
+  it('links each flag key to its own page, leading the row summary', () => {
     const row = rowOf(renderEnvironmentPage(view), 'new-dashboard');
 
     expect(row).toContain(
-      '<span class="flag-key"><a href="/env/production/features/new-dashboard">new-dashboard</a></span>',
+      '<span class="flag-key"><a href="/env/production/features/new-dashboard" data-open-flag="new-dashboard">new-dashboard</a></span>',
     );
-    expect(row).toContain('<summary><span class="flag-key">');
+    expect(row).toContain('<div class="flag-row-summary"><span class="flag-key">');
   });
 
   it('puts the publish form in a dialog opened from the page header', () => {
@@ -380,10 +384,9 @@ describe('renderVersionPage', () => {
   });
 });
 
-const VIEWED: DashboardUrlState = { filter: 'dark mode', openFlags: ['new-dashboard', 'a&b'], page: 2, pageSize: 5 };
+const VIEWED: DashboardUrlState = { filter: 'dark mode', page: 2, pageSize: 5 };
 const VIEWED_INPUTS =
   '<input type="hidden" name="filter" value="dark mode">' +
-  '<input type="hidden" name="open" value="new-dashboard,a&amp;b">' +
   '<input type="hidden" name="page" value="2">' +
   '<input type="hidden" name="pageSize" value="5">';
 
@@ -392,7 +395,7 @@ describe('the URL state every write form carries', () => {
 
   it('puts the state in the edit form and in the delete form, so either one comes back to the same view', () => {
     const forms = rendered.split('<form method="post"').slice(1);
-    const editing = forms.filter((body) => body.includes('name="field" value="enabled"') || body.includes('value="delete"'));
+    const editing = forms.filter((body) => body.includes('name="baseVersion"'));
 
     expect(editing).toHaveLength(2);
     for (const body of editing) expect(body).toContain(VIEWED_INPUTS);
@@ -400,7 +403,7 @@ describe('the URL state every write form carries', () => {
 
   it('also appends the state to each action URL, escaped as an attribute', () => {
     expect(rendered).toContain(
-      'action="/env/production/features/checkout-limits?filter=dark%20mode&amp;open=new-dashboard%2Ca%26b&amp;page=2&amp;pageSize=5"',
+      'action="/env/production/features/checkout-limits?filter=dark%20mode&amp;page=2&amp;pageSize=5"',
     );
   });
 
@@ -421,7 +424,7 @@ describe('the staged draft every write form carries', () => {
 
   it('appends it after the view state, never between the state inputs', () => {
     const forms = rendered.split('<form method="post"').slice(1);
-    const editing = forms.filter((body) => body.includes('name="field" value="enabled"') || body.includes('value="delete"'));
+    const editing = forms.filter((body) => body.includes('name="baseVersion"'));
 
     expect(editing).toHaveLength(2);
     for (const body of editing) expect(body).toContain(VIEWED_INPUTS + pendingInputs(PENDING));
@@ -430,7 +433,7 @@ describe('the staged draft every write form carries', () => {
   it('puts it in every form that posts, so no submit drops the draft', () => {
     const posting = rendered.match(/<form method="post"/g) ?? [];
 
-    expect(posting.length).toBeGreaterThan(2);
+    expect(posting.length).toBeGreaterThan(1);
     expect(rendered.match(/name="pending"/g)).toHaveLength(posting.length);
   });
 

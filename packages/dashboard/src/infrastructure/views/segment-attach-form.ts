@@ -1,7 +1,6 @@
 import type { PublishedSegmentRow, PublishedSegmentsView } from '../../application/list-published-segments.js';
 import type { FlagDefinitionView } from '../../application/browse-environment.js';
 import { escapeHtml } from './escape.js';
-import type { WriteFormContext } from './state-fields.js';
 
 /** The attach fields of a rejected submission, echoed back so the operator keeps their choice. */
 export interface AttachDraft {
@@ -9,7 +8,7 @@ export interface AttachDraft {
   readonly segmentValue?: string;
 }
 
-export interface AttachContext extends WriteFormContext {
+export interface AttachContext {
   /** Every segment published in the Environment — the only keys the form offers. */
   readonly segments: PublishedSegmentsView;
   readonly draft?: AttachDraft;
@@ -17,8 +16,7 @@ export interface AttachContext extends WriteFormContext {
 
 export const UNKNOWN_ATTRIBUTE_LABEL = 'attribute unknown';
 
-const wrap = (body: string): string =>
-  `<details class="segment-attach"><summary>Attach a segment</summary>\n${body}\n</details>`;
+const wrap = (body: string): string => `<details class="segment-attach"><summary>Attach a segment</summary>\n${body}\n</details>`;
 
 // Segments published before the attribute was recorded on the pointer stay listed but unselectable: the
 // operator can see the segment exists and that re-uploading it is what makes it attachable.
@@ -35,7 +33,12 @@ const renderValueControl = (flag: FlagDefinitionView, draft: AttachDraft | undef
 <p class="muted">A plain word, a number or true/false is fine — you do not have to type JSON.</p>`
     : '';
 
-export const renderSegmentAttachForm = (flag: FlagDefinitionView, context: AttachContext): string => {
+/**
+ * The fields of the "Attach a segment" block only — no `<form>`, no submit of its own. It is nested inside
+ * the single flag-edit form (see feature-edit-form.ts) and staged, along with every other change on the
+ * flag, when the operator clicks the one Save button. Leaving Segment on its placeholder submits nothing.
+ */
+export const renderSegmentAttachFields = (flag: FlagDefinitionView, context: AttachContext): string => {
   const { draft, segments } = context;
   if (segments.status === 'unavailable') {
     return wrap('<p class="muted">The list of published segments could not be read, so there is nothing to choose from right now.</p>');
@@ -44,11 +47,7 @@ export const renderSegmentAttachForm = (flag: FlagDefinitionView, context: Attac
     return wrap('<p class="muted">No segments are published in this environment yet. Upload a segment first, then attach it here.</p>');
   }
   const options = segments.rows.map((row) => renderOption(row, draft?.segmentKey)).join('');
-  return wrap(`<form method="post" action="${escapeHtml(context.action)}" class="stack">
-${context.baseVersionInput}${context.stateInputs}${context.pendingInputs}
-<label>Segment <select name="segmentKey" required><option value="" disabled${segments.rows.some((row) => row.segmentKey === draft?.segmentKey) ? '' : ' selected'}>Choose a segment…</option>${options}</select></label>
+  return wrap(`<label>Segment <select name="segmentKey"><option value=""${segments.rows.some((row) => row.segmentKey === draft?.segmentKey) ? '' : ' selected'}>Choose a segment…</option>${options}</select></label>
 <p class="muted">Each segment is listed with the member attribute it was published with; members are matched on it.</p>
-${renderValueControl(flag, draft)}
-<div class="actions"><button type="submit" name="field" value="attachSegment">Attach segment</button></div>
-</form>`);
+${renderValueControl(flag, draft)}`);
 };

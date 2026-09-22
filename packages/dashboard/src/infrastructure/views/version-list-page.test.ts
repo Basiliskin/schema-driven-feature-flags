@@ -98,13 +98,12 @@ describe('the shared version item', () => {
 describe('the URL state the rollback form carries', () => {
   it('sends it with the restore, in the form and in its action', () => {
     const item = renderVersionItem(
-      { environment: 'production', currentVersion: 3, urlState: { filter: 'dark', openFlags: ['a&b'], page: 1, pageSize: 20 } },
+      { environment: 'production', currentVersion: 3, urlState: { filter: 'dark', page: 1, pageSize: 20 } },
       { version: 2, metadata },
     );
 
-    expect(item).toContain('action="/env/production/rollback?filter=dark&amp;open=a%26b"');
+    expect(item).toContain('action="/env/production/rollback?filter=dark"');
     expect(item).toContain('<input type="hidden" name="filter" value="dark">');
-    expect(item).toContain('<input type="hidden" name="open" value="a&amp;b">');
   });
 
   it('carries the page being viewed, so restoring from page 2 of the history comes back to page 2', () => {

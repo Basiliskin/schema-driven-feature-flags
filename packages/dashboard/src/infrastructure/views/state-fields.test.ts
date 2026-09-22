@@ -9,9 +9,8 @@ describe('stateInputs', () => {
   });
 
   it('renders one hidden input per non-default value', () => {
-    expect(stateInputs({ filter: 'dark', openFlags: ['a', 'b'], page: 3, pageSize: 5 })).toBe(
+    expect(stateInputs({ filter: 'dark', page: 3, pageSize: 5 })).toBe(
       '<input type="hidden" name="filter" value="dark">' +
-        '<input type="hidden" name="open" value="a,b">' +
         '<input type="hidden" name="page" value="3">' +
         '<input type="hidden" name="pageSize" value="5">',
     );

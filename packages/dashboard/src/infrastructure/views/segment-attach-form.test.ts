@@ -3,10 +3,8 @@ import { NO_URL_STATE } from '../url-state.js';
 import type { FlagDefinitionView } from '../../application/browse-environment.js';
 import type { PublishedSegmentRow, PublishedSegmentsView } from '../../application/list-published-segments.js';
 import { renderFeatureEditForm, type EditContext } from './feature-edit-form.js';
-import { renderSegmentAttachForm, type AttachContext } from './segment-attach-form.js';
+import { renderSegmentAttachFields, type AttachContext } from './segment-attach-form.js';
 import { STYLESHEET } from './stylesheet.js';
-
-const BASE_VERSION_INPUT = '<input type="hidden" name="baseVersion" value="7">';
 
 const flag = (type: 'boolean' | 'config', key = 'checkout'): FlagDefinitionView => ({
   key,
@@ -29,31 +27,22 @@ const listed = (...rows: readonly PublishedSegmentRow[]): PublishedSegmentsView 
 const BETA_AND_VIPS = listed(row('beta-testers', 'userId'), row('vips', 'accountId'));
 
 const render = (of: FlagDefinitionView, context: Partial<AttachContext> = {}): string =>
-  renderSegmentAttachForm(of, {
-    action: '/env/production/features/checkout',
-    baseVersionInput: BASE_VERSION_INPUT,
-    stateInputs: '',
-    pendingInputs: '',
-    segments: BETA_AND_VIPS,
-    ...context,
-  });
+  renderSegmentAttachFields(of, { segments: BETA_AND_VIPS, ...context });
 
 /** Every value the browser would actually submit — a disabled option cannot be chosen. */
 const selectableValues = (html: string): readonly string[] =>
   [...html.matchAll(/<option value="([^"]*)"(?![^>]*\bdisabled\b)/g)].map((match) => match[1] ?? '');
 
-describe('renderSegmentAttachForm', () => {
-  it('posts the attach field and the base version to the flag’s own edit action', () => {
-    const html = render(flag('boolean'));
-    expect(html).toContain('<form method="post" action="/env/production/features/checkout"');
-    expect(html).toContain('name="field" value="attachSegment"');
-    expect(html).toContain(BASE_VERSION_INPUT);
+describe('renderSegmentAttachFields', () => {
+  it('carries no form of its own, since it is nested inside the single flag-edit form', () => {
+    expect(render(flag('boolean'))).not.toContain('<form');
   });
 
-  it('offers a required select whose selectable values are exactly the published segment keys', () => {
+  it('offers a select, leaving the placeholder selectable so leaving it chosen attaches nothing', () => {
     const html = render(flag('boolean'));
-    expect(html).toContain('<select name="segmentKey" required>');
-    expect(selectableValues(html)).toEqual(['beta-testers', 'vips']);
+    expect(html).toContain('<select name="segmentKey">');
+    expect(html).toContain('<option value=""');
+    expect(selectableValues(html)).toEqual(['', 'beta-testers', 'vips']);
   });
 
   it('labels each option with its segment key and stored member attribute', () => {
@@ -71,29 +60,27 @@ describe('renderSegmentAttachForm', () => {
     expect(html).not.toContain('<textarea');
   });
 
-  it('starts on a placeholder that cannot be submitted, so no segment is attached by accident', () => {
+  it('starts on the placeholder', () => {
     const html = render(flag('boolean'));
-    expect(html).toContain('<option value="" disabled selected>Choose a segment…</option>');
+    expect(html).toContain('<option value="" selected>Choose a segment…</option>');
   });
 
   it('lists a segment with no stored attribute as unselectable and says the attribute is unknown', () => {
     const html = render(flag('boolean'), { segments: listed(row('beta-testers', 'userId'), row('legacy')) });
     expect(html).toContain('<option value="legacy" disabled>legacy · attribute unknown</option>');
-    expect(selectableValues(html)).toEqual(['beta-testers']);
+    expect(selectableValues(html)).toEqual(['', 'beta-testers']);
   });
 
-  it('explains itself and renders no form when the environment has no published segments', () => {
+  it('explains itself and renders no select when the environment has no published segments', () => {
     const html = render(flag('boolean'), { segments: listed() });
     expect(html).toContain('No segments are published in this environment yet');
     expect(html).not.toContain('<select');
-    expect(html).not.toContain('<form');
   });
 
-  it('explains itself and renders no form when the segment list could not be read', () => {
+  it('explains itself and renders no select when the segment list could not be read', () => {
     const html = render(flag('boolean'), { segments: { status: 'unavailable' } });
     expect(html).toContain('could not be read');
     expect(html).not.toContain('<select');
-    expect(html).not.toContain('<form');
   });
 
   it('offers a plain-text value field for a config flag and says JSON is not needed', () => {
@@ -109,19 +96,19 @@ describe('renderSegmentAttachForm', () => {
   it('re-selects the segment and the value a rejected submission had chosen', () => {
     const html = render(flag('config'), { draft: { segmentKey: 'vips', segmentValue: 'gold' } });
     expect(html).toContain('<option value="vips" selected>');
-    expect(html).toContain('<option value="" disabled>Choose a segment…</option>');
+    expect(html).toContain('<option value="">Choose a segment…</option>');
     expect(html).toContain('name="value" value="gold"');
   });
 
   it('keeps the placeholder selected when the draft names a segment that is no longer published', () => {
     const html = render(flag('config'), { draft: { segmentKey: 'gone' } });
-    expect(html).toContain('<option value="" disabled selected>');
+    expect(html).toContain('<option value="" selected>');
     expect(html).not.toContain('selected>gone');
   });
 
   it('falls back to the placeholder when a draft carries none of the attach fields', () => {
     const html = render(flag('config'), { draft: {} });
-    expect(html).toContain('<option value="" disabled selected>');
+    expect(html).toContain('<option value="" selected>');
     expect(html).toContain('name="value" value=""');
   });
 
@@ -174,13 +161,5 @@ describe('the stylesheet', () => {
     expect(STYLESHEET).toContain('.segment-attach');
     expect(STYLESHEET).toContain('.rule-segment');
     expect(STYLESHEET).toContain('.badge-segment');
-  });
-});
-
-describe('the URL state the attach form carries', () => {
-  it('submits it beside the base version, so attaching keeps the view the operator was on', () => {
-    const html = render(flag('boolean'), { stateInputs: '<input type="hidden" name="open" value="checkout">' });
-
-    expect(html).toContain('<input type="hidden" name="open" value="checkout">');
   });
 });

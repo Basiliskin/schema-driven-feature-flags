@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MAX_FILTER_LENGTH, MAX_OPEN_KEYS } from '../../src/infrastructure/url-state.js';
+import { MAX_FILTER_LENGTH } from '../../src/infrastructure/url-state.js';
 import { startDashboardServer, type DashboardPorts, type RunningDashboard } from '../../src/infrastructure/http-server.js';
 import { call, fakes, form, publishError, type Reply } from '../support/dashboard-harness.js';
 
@@ -16,31 +16,30 @@ const start = async (ports: DashboardPorts) => {
 };
 
 /** The two flags the fake snapshot defines; only `new-dashboard` matches the filter these tests submit. */
-const VIEW = { filter: 'new', open: 'new-dashboard' };
+const VIEW = { filter: 'new' };
 const MATCHING = 'new-dashboard';
 const OTHER = 'checkout-limits';
 
 const flagKeys = (body: string): readonly string[] =>
   [...body.matchAll(/<li class="card flag" data-flag="([^"]+)"/g)].map((match) => match[1] ?? '');
 
-/** A row's own disclosure is the first one after its marker, so that opening tag says whether the row is open. */
+/** A row's own panel is the first one after its marker, so its `hidden` attribute says whether the row is open. */
 const isOpen = (body: string, key: string): boolean => {
   const row = body.slice(body.indexOf(`data-flag="${key}"`));
-  return row.slice(row.indexOf('<details class="flag-row')).startsWith('<details class="flag-row" open>');
+  return row.slice(row.indexOf('<div class="flag-panel')).startsWith('<div class="flag-panel">');
 };
 
 const expectsTheViewBack = (reply: Reply, status: number): void => {
   expect(reply.status).toBe(status);
   expect(reply.headers.location).toBeUndefined();
   expect(flagKeys(reply.body)).toEqual([MATCHING]);
-  expect(isOpen(reply.body, MATCHING)).toBe(true);
 };
 
 const conflicted = () => fakes({}, { publish: () => Promise.reject(publishError('CONFLICT')) });
 
 /**
  * Every write POST re-renders the page in place, so each of the four page-rendering routes has to put the
- * operator back on the filtered, expanded view they submitted from — at every status it can answer with.
+ * operator back on the filtered view they submitted from — at every status it can answer with.
  */
 describe('the view a write POST comes back to', () => {
   describe('creating a flag', () => {
@@ -85,17 +84,18 @@ describe('the view a write POST comes back to', () => {
       const dashboard = await start(fakes().ports);
 
       const reply = await call(dashboard, 'POST', path, {
-        body: form({ ...VIEW, baseVersion: '3', field: 'enabled' }),
+        body: form({ ...VIEW, baseVersion: '3', field: 'save' }),
       });
 
       expectsTheViewBack(reply, 200);
+      expect(isOpen(reply.body, MATCHING)).toBe(false);
     });
 
     it('applies it when the submitted value is invalid, alongside the draft the operator must correct', async () => {
       const dashboard = await start(fakes().ports);
 
       const reply = await call(dashboard, 'POST', `/env/production/features/${OTHER}`, {
-        body: form({ ...VIEW, baseVersion: '3', field: 'attachSegment', segmentKey: 'not-published', value: 'x' }),
+        body: form({ ...VIEW, baseVersion: '3', field: 'save', segmentKey: 'not-published', value: 'x' }),
       });
 
       expect(reply.status).toBe(400);
@@ -104,14 +104,15 @@ describe('the view a write POST comes back to', () => {
       expect(reply.body).toContain('Choose a segment from the list');
     });
 
-    it('applies it when the edit is rejected', async () => {
+    it('applies it when the edit is rejected, and leaves that row’s panel open on the draft', async () => {
       const dashboard = await start(fakes().ports);
 
       const reply = await call(dashboard, 'POST', path, {
-        body: form({ ...VIEW, baseVersion: '3', field: 'default', default: '1' }),
+        body: form({ ...VIEW, baseVersion: '3', field: 'save', default: '1' }),
       });
 
       expectsTheViewBack(reply, 422);
+      expect(isOpen(reply.body, MATCHING)).toBe(true);
     });
   });
 
@@ -168,14 +169,15 @@ describe('the view a write POST comes back to', () => {
     });
   });
 
-  it('renders the whole, collapsed list when a POST carries no state at all', async () => {
+  it('renders the whole list with every panel hidden when a POST carries no state at all', async () => {
     const dashboard = await start(fakes().ports);
 
     const reply = await call(dashboard, 'POST', '/env/production/rollback', { body: form({ version: '2' }) });
 
     expect(reply.status).toBe(200);
     expect(flagKeys(reply.body)).toEqual([MATCHING, OTHER]);
-    expect(reply.body).not.toContain('<details class="flag-row" open>');
+    expect(isOpen(reply.body, MATCHING)).toBe(false);
+    expect(isOpen(reply.body, OTHER)).toBe(false);
   });
 });
 
@@ -185,17 +187,6 @@ describe('state arriving as form fields rather than in the URL', () => {
     const dashboard = await start(fakes().ports);
     return call(dashboard, 'POST', '/env/production/rollback', { body: form({ version: '2', ...fields }) });
   };
-
-  it('keeps no more open keys than the URL path would', async () => {
-    const keys = Array.from({ length: 500 }, (_, index) => `flag-${String(index)}`);
-
-    const reply = await post({ open: keys.join(',') });
-
-    expect(reply.body.match(/data-open-toggle href="[^"]*open=/g)).toHaveLength(2);
-    expect(new URL(`http://x${/data-open-toggle href="([^"]+)"/.exec(reply.body)?.[1] ?? ''}`).searchParams.get('open')?.split(',')).toHaveLength(
-      MAX_OPEN_KEYS + 1,
-    );
-  });
 
   it('truncates an over-long filter to the same cap', async () => {
     const reply = await post({ filter: 'x'.repeat(10_000) });

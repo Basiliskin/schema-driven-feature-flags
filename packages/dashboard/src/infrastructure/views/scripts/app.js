@@ -28,6 +28,38 @@
     button.addEventListener('click', function () { dialog.showModal(); });
   });
 
+  // Clicking a flag's name opens its row's own edit panel in the shared overlay instead of navigating to the
+  // full flag page. The panel node is moved into the dialog (not cloned), so the confirmation dialogs and
+  // rollout forms nested inside it keep the one set of ids they were rendered with; it moves back to its row
+  // when the dialog closes, so the flag list behaves exactly as before once the overlay is gone.
+  var flagDialog = document.getElementById('flag-dialog');
+  if (flagDialog && flagDialog.classList.contains('is-enhanced')) {
+    var flagDialogBody = document.getElementById('flag-dialog-body');
+    var flagDialogHeading = document.getElementById('flag-dialog-heading');
+    var flagPanelHome = null; // { parent, next, hidden } to put the panel back where it came from
+    var closeFlagDialog = function () {
+      if (!flagPanelHome || !flagDialogBody.firstChild) return;
+      flagDialogBody.firstChild.hidden = flagPanelHome.hidden;
+      flagPanelHome.parent.insertBefore(flagDialogBody.firstChild, flagPanelHome.next);
+      flagPanelHome = null;
+    };
+    document.querySelectorAll('[data-open-flag]').forEach(function (link) {
+      link.addEventListener('click', function (event) {
+        var row = link.closest('[data-flag]');
+        var panel = row && row.querySelector(':scope > .flag-row > .flag-panel');
+        if (!panel) return;
+        event.preventDefault();
+        closeFlagDialog();
+        flagPanelHome = { parent: panel.parentNode, next: panel.nextSibling, hidden: panel.hidden };
+        panel.hidden = false;
+        flagDialogHeading.textContent = link.getAttribute('data-open-flag');
+        flagDialogBody.appendChild(panel);
+        flagDialog.showModal();
+      });
+    });
+    flagDialog.addEventListener('close', closeFlagDialog);
+  }
+
   document.querySelectorAll('[data-filter]').forEach(function (input) {
     var list = document.querySelector('.' + input.getAttribute('data-filter'));
     if (!list) return;
@@ -266,7 +298,7 @@
     if (inConflict() && action === 'keep') {
       changesDialog.close();
       var row = document.querySelector('[data-flag="' + CSS.escape(reviewKey) + '"]');
-      row.querySelector('details').open = true;
+      row.querySelector('.flag-panel').hidden = false;
       row.scrollIntoView({ block: 'center' });
       return;
     }
@@ -297,6 +329,8 @@
       if (!field) { lost.push(edit.flag || 'publish draft'); return; }
       if (field.type === 'checkbox') field.checked = edit.value; else field.value = edit.value;
       field.classList.add('is-carried');
+      var panel = field.closest('.flag-panel');
+      if (panel) panel.hidden = false;
       var details = field.closest('details');
       while (details) { details.open = true; details = details.parentElement.closest('details'); }
     });

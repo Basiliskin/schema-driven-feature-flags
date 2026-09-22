@@ -2,18 +2,17 @@ import type { FlagDefinitionView } from '../../application/browse-environment.js
 import type { PublishedSegmentsView } from '../../application/list-published-segments.js';
 import type { PendingChangeSet } from '../../domain/pending-change-set.js';
 import { withUrlState, type DashboardUrlState } from '../url-state.js';
-import { renderConfirmation } from './confirm-dialog.js';
+import { renderConfirmationParts } from './confirm-dialog.js';
 import { escapeHtml, flagPath } from './escape.js';
 import { dialogId } from './modal-dialog.js';
-import { renderRolloutForms } from './rollout-form.js';
-import { renderSegmentAttachForm } from './segment-attach-form.js';
+import { renderRolloutFields } from './rollout-form.js';
+import { renderSegmentAttachFields } from './segment-attach-form.js';
 import { pendingInputs, stateInputs, type WriteFormContext } from './state-fields.js';
 
 export interface EditDraft {
   readonly key: string;
   readonly enabled?: boolean;
   readonly defaultJson?: string;
-  readonly rulesJson?: string;
   readonly segmentKey?: string;
   /** The attached value exactly as typed, so a rejected submission re-renders it rather than its decoded form. */
   readonly segmentValue?: string;
@@ -41,19 +40,7 @@ export const renderDraftError = (draft: { readonly message: string; readonly iss
 
 const renderDefaultControl = (flag: FlagDefinitionView, draft: EditDraft | undefined): string => {
   const text = draft?.defaultJson ?? JSON.stringify(flag.defaultValue, null, 2);
-  return `<label>Default JSON <textarea name="default" rows="4">${escapeHtml(text)}</textarea></label>
-<div class="actions"><button type="submit" class="button-secondary" name="field" value="default">Save default</button></div>`;
-};
-
-// Collapsed unless the operator is fixing a rejected rules draft, so long rule lists don't crowd a phone screen.
-const renderRulesControl = (flag: FlagDefinitionView, draft: EditDraft | undefined): string => {
-  const text = draft?.rulesJson ?? JSON.stringify(flag.rules, null, 2);
-  return `<details${draft?.rulesJson === undefined ? '' : ' open'}><summary>Edit rules</summary>
-<div class="stack">
-<label>Rules JSON <textarea name="rules" rows="4">${escapeHtml(text)}</textarea></label>
-<div class="actions"><button type="submit" class="button-secondary" name="field" value="rules">Save rules</button></div>
-</div>
-</details>`;
+  return `<label>Default JSON <textarea name="default" rows="4">${escapeHtml(text)}</textarea></label>`;
 };
 
 const baseVersionInput = (context: EditContext): string =>
@@ -66,8 +53,19 @@ const writeFormContext = (flag: FlagDefinitionView, context: EditContext): Write
   pendingInputs: pendingInputs(context.pending),
 });
 
-const renderDeleteControl = (flag: FlagDefinitionView, form: WriteFormContext): string =>
-  renderConfirmation(
+/**
+ * Every editable part of a flag — Enabled, Default, every rule's rollout and detach, and Attach a segment —
+ * lives in ONE form behind ONE Save button, so staging a change never means picking which of several
+ * save buttons applies it. Save and Delete sit together at the top of the panel (Close is the dialog's own
+ * header button, added where the panel is shown); Delete stays its own confirmed, immediately-published
+ * action, since removing a whole flag is not a value you can quietly stage and reconsider like a field edit.
+ */
+export const renderFeatureEditForm = (flag: FlagDefinitionView, context: EditContext): string => {
+  const draft = context.draft?.key === flag.key ? context.draft : undefined;
+  const enabled = draft?.enabled ?? flag.enabled;
+  const form = writeFormContext(flag, context);
+  const formId = dialogId('edit-form', flag.key);
+  const { trigger: deleteTrigger, dialog: deleteDialog } = renderConfirmationParts(
     {
       id: dialogId('confirm-delete', flag.key),
       title: `Delete ${flag.key}`,
@@ -78,23 +76,19 @@ const renderDeleteControl = (flag: FlagDefinitionView, form: WriteFormContext): 
     },
     form,
   );
-
-export const renderFeatureEditForm = (flag: FlagDefinitionView, context: EditContext): string => {
-  const draft = context.draft?.key === flag.key ? context.draft : undefined;
-  const enabled = draft?.enabled ?? flag.enabled;
-  const form = writeFormContext(flag, context);
-  return `${draft === undefined ? '' : renderDraftError(draft)}<form method="post" action="${escapeHtml(form.action)}" class="stack">
+  return `${draft === undefined ? '' : renderDraftError(draft)}<div class="panel-head">
+<button type="submit" form="${escapeHtml(formId)}" name="field" value="save">Save</button>
+${deleteTrigger}
+</div>
+<form method="post" id="${escapeHtml(formId)}" action="${escapeHtml(form.action)}" class="stack">
 ${form.baseVersionInput}${form.stateInputs}${form.pendingInputs}
-<div class="form-row"><label class="check"><input type="checkbox" name="enabled"${enabled ? ' checked' : ''}> Enabled</label>
-<button type="submit" name="field" value="enabled">Save enabled</button></div>
+<label class="check"><input type="checkbox" name="enabled"${enabled ? ' checked' : ''}> Enabled</label>
 ${flag.type === 'config' ? renderDefaultControl(flag, draft) : ''}
-${renderRulesControl(flag, draft)}
-</form>
-${renderRolloutForms(flag, form)}
-${renderSegmentAttachForm(flag, {
-    ...form,
+${renderRolloutFields(flag)}
+${renderSegmentAttachFields(flag, {
     segments: context.publishedSegments ?? { status: 'unavailable' },
     ...(draft === undefined ? {} : { draft }),
   })}
-${renderDeleteControl(flag, form)}`;
+</form>
+${deleteDialog}`;
 };

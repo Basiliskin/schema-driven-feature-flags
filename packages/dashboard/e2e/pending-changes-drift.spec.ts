@@ -4,9 +4,9 @@ import { expandFlag, expect, SEED, test } from './support/fixtures.js';
 const REVIEW = 'Review pending changes';
 
 const stageDarkModeOn = async (page: Page): Promise<void> => {
-  const row = await expandFlag(page, 'dark-mode');
-  await row.getByLabel('Enabled').check();
-  await row.getByRole('button', { name: 'Save enabled' }).click();
+  const flagDialog = await expandFlag(page, 'dark-mode');
+  await flagDialog.getByLabel('Enabled').check();
+  await flagDialog.getByRole('button', { name: 'Save', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: REVIEW });
   await expect(dialog.locator('.flag-key', { hasText: 'dark-mode' })).toBeVisible();
   await dialog.getByRole('button', { name: 'Close' }).click();

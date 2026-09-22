@@ -1,6 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { GetObjectCommand, type S3Client } from '@aws-sdk/client-s3';
+import type { Page } from '@playwright/test';
 import { expect, test } from './support/localstack-fixtures.js';
+
+/** Clicking a flag's name moves its row's own panel into the shared overlay dialog, which this returns. */
+const openFlag = async (page: Page, key: string) => {
+  await page.locator(`[data-flag="${key}"]`).getByRole('link', { name: key, exact: true }).click();
+  return page.getByRole('dialog', { name: key, exact: true });
+};
 
 const SEED_FLAG = 'checkout';
 const SEGMENT_ATTRIBUTE = 'accountId';
@@ -46,23 +53,24 @@ test('lists a published segment and attaches it to a flag through the chooser', 
   await expect(row.locator('[data-label="Used by flags"]')).toHaveText('used by no flag');
 
   await page.goto(`${dashboard.url}/env/${environment}`);
-  const flag = page.locator(`[data-flag="${SEED_FLAG}"]`);
-  // Opened through the Expand link rather than the disclosure widget, so the row is named in the URL and the
-  // attach form carries it through the publish below.
-  await flag.getByRole('link', { name: 'Expand' }).click();
+  let flagDialog = await openFlag(page, SEED_FLAG);
 
-  const attach = flag.locator('details.segment-attach');
+  const attach = flagDialog.locator('details.segment-attach');
   await attach.locator('summary').click();
   await attach.getByLabel('Segment').selectOption(segmentKey);
   await attach.getByLabel('Value for members').fill(ATTACHED_VALUE);
-  await attach.getByRole('button', { name: 'Attach segment' }).click();
+  await flagDialog.getByRole('button', { name: 'Save', exact: true }).click();
 
+  // Attaching is staged, along with every other change on the flag, until Update publishes it.
+  await expect(page.getByText('Staged. Review your pending changes and choose Update to publish them.')).toBeVisible();
+  await page.getByRole('dialog', { name: 'Review pending changes' }).getByRole('button', { name: 'Update' }).click();
   await expect(page.getByText(`Published version 2 to ${environment}.`)).toBeVisible();
 
-  // The flag row comes back open from the URL state; the nested rollout panel is deliberately outside that
-  // contract, so it still has to be opened by hand.
-  await flag.locator('details.rollouts > summary').click();
-  await expect(flag.locator('.rule-segment').filter({ hasText: segmentKey })).toBeVisible();
+  // The write reloads the page with every flag panel collapsed again; the rollout panel nested inside it is
+  // deliberately outside its own contract too, so both have to be opened by hand.
+  flagDialog = await openFlag(page, SEED_FLAG);
+  await flagDialog.locator('details.rollouts > summary').click();
+  await expect(flagDialog.locator('.rule-segment').filter({ hasText: segmentKey })).toBeVisible();
 
   const snapshotPointer = await readJson(s3, bucket, `${environment}/current.json`);
   const snapshot = await readJson(s3, bucket, snapshotPointer.snapshotKey as string);
@@ -78,7 +86,7 @@ test('lists a published segment and attaches it to a flag through the chooser', 
   await expect(row.locator('[data-label="Used by flags"]')).toHaveText(SEED_FLAG);
 });
 
-test('detaches a segment only after the confirmation naming it is accepted', async ({
+test('detaches a segment only once Save is clicked, not by ticking the checkbox alone', async ({
   page,
   s3,
   bucket,
@@ -95,37 +103,35 @@ test('detaches a segment only after the confirmation naming it is accepted', asy
   });
 
   await page.goto(`${dashboard.url}/env/${environment}`);
-  const flag = page.locator(`[data-flag="${SEED_FLAG}"]`);
-  await flag.getByRole('link', { name: 'Expand' }).click();
+  let flagDialog = await openFlag(page, SEED_FLAG);
 
-  const attach = flag.locator('details.segment-attach');
+  const attach = flagDialog.locator('details.segment-attach');
   await attach.locator('summary').click();
   await attach.getByLabel('Segment').selectOption(segmentKey);
   await attach.getByLabel('Value for members').fill(ATTACHED_VALUE);
-  await attach.getByRole('button', { name: 'Attach segment' }).click();
+  await flagDialog.getByRole('button', { name: 'Save', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Review pending changes' }).getByRole('button', { name: 'Update' }).click();
+  await expect(page.getByText(`Published version 2 to ${environment}.`)).toBeVisible();
 
-  await flag.locator('details.rollouts > summary').click();
-  const segmentRow = flag.locator('.rule-segment').filter({ hasText: segmentKey });
-  await expect(segmentRow).toBeVisible();
+  // The write reloads the page with every panel collapsed again, so the flag has to be reopened by hand.
+  flagDialog = await openFlag(page, SEED_FLAG);
+  await flagDialog.locator('details.rollouts > summary').click();
+  const rule = flagDialog.locator('li.rule-rollout').filter({ hasText: segmentKey });
+  await expect(rule.locator('.rule-segment')).toBeVisible();
 
-  await segmentRow.getByRole('button', { name: 'Detach', exact: true }).click();
-  const confirmation = page.getByRole('dialog', { name: `Detach ${segmentKey} from ${SEED_FLAG}` });
-  await expect(confirmation).toBeVisible();
-  await expect(confirmation).toContainText(segmentKey);
-
-  // Closing the confirmation must leave the attachment alone: only the confirm button detaches.
-  await confirmation.getByRole('button', { name: 'Close' }).click();
-  await expect(confirmation).toBeHidden();
+  // Ticking Detach only stages the intent; nothing publishes until Save (and Update) run.
+  await rule.getByLabel('Detach', { exact: true }).check();
   const stillAttached = await readJson(s3, bucket, `${environment}/current.json`);
   const beforeSnapshot = await readJson(s3, bucket, stillAttached.snapshotKey as string);
   expect(JSON.stringify(beforeSnapshot)).toContain(segmentKey);
 
-  await segmentRow.getByRole('button', { name: 'Detach', exact: true }).click();
-  await confirmation.getByRole('button', { name: `Detach ${segmentKey}` }).click();
+  await flagDialog.getByRole('button', { name: 'Save', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Review pending changes' }).getByRole('button', { name: 'Update' }).click();
 
   await expect(page.getByText(`Published version 3 to ${environment}.`)).toBeVisible();
-  await flag.locator('details.rollouts > summary').click();
-  await expect(flag.locator('.rule-segment').filter({ hasText: segmentKey })).toHaveCount(0);
+  flagDialog = await openFlag(page, SEED_FLAG);
+  await flagDialog.locator('details.rollouts > summary').click();
+  await expect(flagDialog.locator('.rule-segment').filter({ hasText: segmentKey })).toHaveCount(0);
 
   const pointer = await readJson(s3, bucket, `${environment}/current.json`);
   const snapshot = await readJson(s3, bucket, pointer.snapshotKey as string);

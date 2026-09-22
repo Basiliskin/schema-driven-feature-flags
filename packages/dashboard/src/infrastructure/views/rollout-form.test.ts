@@ -2,11 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { NO_URL_STATE } from '../url-state.js';
 import type { FlagDefinitionView } from '../../application/browse-environment.js';
 import { renderFeatureEditForm, type EditContext } from './feature-edit-form.js';
-import { renderRolloutForms } from './rollout-form.js';
+import { renderRolloutFields } from './rollout-form.js';
 import { STYLESHEET } from './stylesheet.js';
 
-const ACTION = '/env/production/features/checkout';
-const BASE_VERSION_INPUT = '<input type="hidden" name="baseVersion" value="7">';
 const CONTEXT: EditContext = { environment: 'production', baseVersion: 7, urlState: NO_URL_STATE };
 
 const flagWith = (rules: readonly unknown[]): FlagDefinitionView => ({
@@ -25,10 +23,9 @@ const ROLLED_OUT_RULE = {
 };
 const PLAIN_RULE = { when: { plan: 'free' }, enabled: false };
 
-const render = (rules: readonly unknown[]): string =>
-  renderRolloutForms(flagWith(rules), { action: ACTION, baseVersionInput: BASE_VERSION_INPUT, stateInputs: '', pendingInputs: '' });
+const render = (rules: readonly unknown[]): string => renderRolloutFields(flagWith(rules));
 
-describe('renderRolloutForms', () => {
+describe('renderRolloutFields', () => {
   it('shows a badge only for the rule that has a rollout', () => {
     const html = render([ROLLED_OUT_RULE, PLAIN_RULE]);
     expect(html).toContain('25% by userId');
@@ -36,49 +33,37 @@ describe('renderRolloutForms', () => {
     expect(html).toContain('No rollout');
   });
 
-  it('renders one form per rule plus a confirmation form for the rule that has a rollout', () => {
-    const html = render([ROLLED_OUT_RULE, PLAIN_RULE]);
-    expect(html.match(/<form method="post"/g)).toHaveLength(3);
-    expect(html).toContain('<input type="hidden" name="ruleIndex" value="0">');
-    expect(html).toContain('<input type="hidden" name="ruleIndex" value="1">');
-    expect(html.match(/name="baseVersion" value="7"/g)).toHaveLength(3);
+  it('carries no form of its own, since it is nested inside the single flag-edit form', () => {
+    expect(render([ROLLED_OUT_RULE, PLAIN_RULE])).not.toContain('<form');
   });
 
-  it('labels rules from one while indexing them from zero', () => {
+  it('addresses each rule by an index suffix on its field names, from zero, with a ruleCount hint for the server', () => {
+    const html = render([ROLLED_OUT_RULE, PLAIN_RULE]);
+    expect(html).toContain('<input type="hidden" name="ruleCount" value="2">');
+    expect(html).toContain('name="percentage_0"');
+    expect(html).toContain('name="percentage_1"');
+    expect(html).toContain('name="rollout_0"');
+    expect(html).toContain('name="rollout_1"');
+  });
+
+  it('labels rules from one while indexing their fields from zero', () => {
     const html = render([PLAIN_RULE, ROLLED_OUT_RULE]);
     expect(html).toContain('Rule 2');
     const second = html.slice(html.indexOf('Rule 2'));
-    expect(second).toContain('name="ruleIndex" value="1"');
+    expect(second).toContain('name="rollout_1"');
   });
 
-  it('offers Remove only where a rollout exists, behind a confirmation naming the flag and the rule', () => {
-    const html = render([ROLLED_OUT_RULE]);
-    expect(html).toContain('<button type="button" data-open-dialog="confirm-remove-rollout_checkout_0" hidden>Remove</button>');
-    expect(html).toContain('<h2 id="confirm-remove-rollout_checkout_0-heading">Remove the rollout on rule 1 of checkout</h2>');
-    expect(html).toContain('Remove the 25% rollout on rule 1 of <code>checkout</code>?');
-    expect(html).toContain('<button type="submit" class="button-danger" name="field" value="removeRollout">Remove the rule 1 rollout</button>');
-    expect(render([PLAIN_RULE])).not.toContain('removeRollout');
+  it('checks the Rollout toggle only for the rule that already has one', () => {
+    const html = render([ROLLED_OUT_RULE, PLAIN_RULE]);
+    expect(html).toContain('name="rollout_0" checked');
+    expect(html).not.toContain('name="rollout_1" checked');
   });
 
-  it('keeps the Remove confirmation out of the rollout form, so confirming cannot also save a percentage', () => {
-    const html = render([ROLLED_OUT_RULE]);
-    const confirmForm = html.slice(html.lastIndexOf('<form method="post"', html.indexOf('value="removeRollout"')));
-    expect(confirmForm).not.toContain('name="percentage"');
-    expect(confirmForm).toContain('<input type="hidden" name="ruleIndex" value="0">');
-    expect(confirmForm).toContain('name="baseVersion" value="7"');
-  });
-
-  it('gives each rule of a flag its own remove-rollout dialog id', () => {
-    const html = render([ROLLED_OUT_RULE, { ...ROLLED_OUT_RULE, rollout: { percentage: 60, bucketBy: 'userId', salt: 's' } }]);
-    expect(html).toContain('data-open-dialog="confirm-remove-rollout_checkout_0"');
-    expect(html).toContain('data-open-dialog="confirm-remove-rollout_checkout_1"');
-  });
-
-  it('prefills the form from the existing rollout and defaults an empty rule', () => {
-    expect(render([ROLLED_OUT_RULE])).toContain('name="salt" value="launch"');
+  it('prefills the fields from the existing rollout and defaults an empty rule', () => {
+    expect(render([ROLLED_OUT_RULE])).toContain('name="salt_0" value="launch"');
     const empty = render([PLAIN_RULE]);
-    expect(empty).toContain('name="percentage" min="0" max="100" step="0.01" value="0"');
-    expect(empty).toContain('name="bucketBy" value="userId"');
+    expect(empty).toContain('name="percentage_0" min="0" max="100" step="0.01" value="0"');
+    expect(empty).toContain('name="bucketBy_0" value="userId"');
   });
 
   it('lists the segment keys a rule references, de-duplicated', () => {
@@ -139,63 +124,43 @@ describe('the attached segments of a flag', () => {
     expect(html).toContain('100% of members');
   });
 
-  it('gives each attached segment its own Detach form carrying that rule’s index', () => {
+  it('gives each attached segment its own Detach checkbox carrying that rule’s index in its name', () => {
     const html = render([SEGMENT_RULE_25, SEGMENT_RULE_FULL]);
-    const detachForms = html.split('value="detachSegment"');
-    expect(detachForms).toHaveLength(3);
-    expect(detachForms[0]).toContain('name="ruleIndex" value="0"');
-    expect(detachForms[1]).toContain('name="ruleIndex" value="1"');
+    expect(html).toContain('name="detach_0"');
+    expect(html).toContain('name="detach_1"');
   });
 
-  it('indexes a Detach against the full rules array, not the segment rules alone', () => {
+  it('indexes Detach against the full rules array, not the segment rules alone', () => {
     const html = render([PLAIN_RULE, SEGMENT_RULE_FULL]);
-    const detach = html.slice(0, html.indexOf('value="detachSegment"'));
-    expect(detach.lastIndexOf('name="ruleIndex" value="1"')).toBeGreaterThan(detach.lastIndexOf('name="ruleIndex" value="0"'));
-  });
-
-  it('keeps Detach out of the rollout form, so it cannot also save a percentage', () => {
-    const html = render([SEGMENT_RULE_25]);
-    const detachForm = html.slice(html.lastIndexOf('<form', html.indexOf('value="detachSegment"')), html.indexOf('value="detachSegment"'));
-    expect(detachForm).not.toContain('name="percentage"');
-    expect(detachForm).toContain('name="baseVersion" value="7"');
-  });
-
-  it('offers the percentage input, the Detach button and the Remove confirmation on one row under the same index', () => {
-    const row = render([PLAIN_RULE, SEGMENT_RULE_25]).split('<li class="rule-rollout">')[2] ?? '';
-    expect(row).toContain('value="detachSegment"');
-    expect(row.match(/name="ruleIndex" value="1"/g)).toHaveLength(3);
-    expect(row).not.toContain('value="0"');
-  });
-
-  it('names the exact segment and flag in the Detach confirmation, one dialog per rule', () => {
-    const html = render([SEGMENT_RULE_25, SEGMENT_RULE_FULL]);
-    expect(html).toContain('<button type="button" data-open-dialog="confirm-detach_checkout_0" hidden>Detach</button>');
-    expect(html).toContain('<h2 id="confirm-detach_checkout_0-heading">Detach beta-testers from checkout</h2>');
-    expect(html).toContain('Detach <code>beta-testers</code> from <code>checkout</code>? This publishes a new version of the flag without rule 1.');
-    expect(html).toContain('<button type="submit" class="button-danger" name="field" value="detachSegment">Detach beta-testers</button>');
-    expect(html).toContain('<h2 id="confirm-detach_checkout_1-heading">Detach vips from checkout</h2>');
-    expect(html).toContain('<button type="submit" class="button-danger" name="field" value="detachSegment">Detach vips</button>');
-  });
-
-  it('escapes a flag key into an id that is unique and safe to select on', () => {
-    const dotted = renderRolloutForms(
-      { ...flagWith([SEGMENT_RULE_FULL]), key: 'checkout.limits/v2' },
-      { action: ACTION, baseVersionInput: BASE_VERSION_INPUT, stateInputs: '', pendingInputs: '' },
-    );
-    expect(dotted).toContain('data-open-dialog="confirm-detach_checkout_002elimits_002fv2_0"');
-    expect(dotted).toContain('<dialog id="confirm-detach_checkout_002elimits_002fv2_0"');
+    expect(html).not.toContain('name="detach_0"');
+    expect(html).toContain('name="detach_1"');
   });
 
   it('offers no Detach for a rule that targets no segment', () => {
-    expect(render([PLAIN_RULE])).not.toContain('detachSegment');
+    expect(render([PLAIN_RULE])).not.toContain('detach_0');
+  });
+
+  it('names the attached segment(s) in the collapsed summary, de-duplicated across rules', () => {
+    expect(render([SEGMENT_RULE_25])).toContain('<summary>Rollout <span class="muted">· beta-testers</span></summary>');
+    expect(render([SEGMENT_RULE_25, SEGMENT_RULE_FULL])).toContain(
+      '<summary>Rollout <span class="muted">· beta-testers, vips</span></summary>',
+    );
+    expect(render([SEGMENT_RULE_25, { ...SEGMENT_RULE_25, rollout: { percentage: 50, bucketBy: 'userId', salt: 's' } }])).toContain(
+      '<summary>Rollout <span class="muted">· beta-testers</span></summary>',
+    );
+  });
+
+  it('leaves the summary plain when no rule targets a segment', () => {
+    expect(render([ROLLED_OUT_RULE, PLAIN_RULE])).toContain('<summary>Rollout</summary>');
   });
 });
 
 describe('the flag editor', () => {
-  it('places the rollout forms outside the enabled/rules form, since forms cannot nest', () => {
+  it('nests the rollout fields inside the one flag-edit form, since they stage on the same Save', () => {
     const html = renderFeatureEditForm(flagWith([ROLLED_OUT_RULE]), CONTEXT);
     const rollout = html.indexOf('<details class="rollouts">');
-    expect(rollout).toBeGreaterThan(html.indexOf('</form>'));
+    expect(rollout).toBeGreaterThan(html.indexOf('<form method="post"'));
+    expect(rollout).toBeLessThan(html.lastIndexOf('</form>'));
     expect(html.slice(rollout)).toContain('25% by userId');
   });
 });
@@ -204,20 +169,5 @@ describe('the stylesheet', () => {
   it('serves the rollout rules', () => {
     expect(STYLESHEET).toContain('.badge-rollout');
     expect(STYLESHEET).toContain('.rule-segments');
-  });
-});
-
-describe('the URL state the rollout and detach forms carry', () => {
-  const STATE_INPUTS = '<input type="hidden" name="filter" value="dark">';
-  const render = (rules: readonly unknown[]): string =>
-    renderRolloutForms(flagWith(rules), { action: ACTION, baseVersionInput: BASE_VERSION_INPUT, stateInputs: STATE_INPUTS, pendingInputs: '' });
-
-  it('puts it in the set-rollout form and in the detach form of a segment rule', () => {
-    const html = render([{ when: { plan: { inSegment: 'beta-testers' } }, rollout: { percentage: 40, bucketBy: 'userId', salt: '' } }]);
-    const forms = html.split('<form method="post"').slice(1);
-
-    expect(forms).toHaveLength(3);
-    for (const body of forms) expect(body).toContain(STATE_INPUTS);
-    expect(html).toContain('value="detachSegment"');
   });
 });

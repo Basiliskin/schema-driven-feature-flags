@@ -2,8 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { HttpError } from './http-primitives.js';
 import {
   MAX_FILTER_LENGTH,
-  MAX_OPEN_KEYS,
-  MAX_OPEN_KEY_LENGTH,
   NO_URL_STATE,
   parsePageNumber,
   parseUrlState,
@@ -17,20 +15,19 @@ const parse = (query: string): DashboardUrlState => parseUrlState(new URLSearchP
 
 describe('parsing the dashboard URL state', () => {
   it('defaults every key when the query string is empty', () => {
-    expect(parse('')).toEqual({ filter: '', openFlags: [], page: 1, pageSize: 20 });
+    expect(parse('')).toEqual({ filter: '', page: 1, pageSize: 20 });
   });
 
   it('reads each key when it is present', () => {
-    expect(parse('filter=checkout&open=a,b&page=3&pageSize=5')).toEqual({
+    expect(parse('filter=checkout&page=3&pageSize=5')).toEqual({
       filter: 'checkout',
-      openFlags: ['a', 'b'],
       page: 3,
       pageSize: 5,
     });
   });
 
   it('ignores query keys it does not own', () => {
-    expect(parse('flagPage=2&sort=name')).toEqual({ filter: '', openFlags: [], page: 1, pageSize: 20 });
+    expect(parse('flagPage=2&sort=name')).toEqual({ filter: '', page: 1, pageSize: 20 });
   });
 
   it('rejects a page number that is not a positive integer', () => {
@@ -56,9 +53,8 @@ describe('parsing the dashboard URL state', () => {
     }
   });
 
-  it('never throws on filter or open text, however malformed', () => {
-    expect(parse('filter=%00%01&open=,,,').filter).toBe('\u0000\u0001');
-    expect(parse('filter=%00%01&open=,,,').openFlags).toEqual([]);
+  it('never throws on filter text, however malformed', () => {
+    expect(parse('filter=%00%01').filter).toBe('\u0000\u0001');
   });
 
   it('trims the filter and caps its length without leaving trailing space', () => {
@@ -67,20 +63,6 @@ describe('parsing the dashboard URL state', () => {
     expect(parse(`filter=${long}`).filter).toHaveLength(MAX_FILTER_LENGTH);
     const spacedAtCap = `${'y'.repeat(MAX_FILTER_LENGTH - 1)} z`;
     expect(parse(`filter=${encodeURIComponent(spacedAtCap)}`).filter).toBe('y'.repeat(MAX_FILTER_LENGTH - 1));
-  });
-
-  it('drops empty and over-long open entries and trims the rest', () => {
-    const tooLong = 'k'.repeat(MAX_OPEN_KEY_LENGTH + 1);
-    const atCap = 'j'.repeat(MAX_OPEN_KEY_LENGTH);
-    expect(parse(`open=${[' spaced ', '', tooLong, atCap].join(',')}`).openFlags).toEqual(['spaced', atCap]);
-  });
-
-  it('deduplicates open entries before applying the count cap', () => {
-    expect(parse('open=a,a,a').openFlags).toEqual(['a']);
-    const distinct = Array.from({ length: 500 }, (_entry, index) => `flag-${String(index)}`);
-    const withRepeats = ['dup', 'dup', ...distinct];
-    expect(parse(`open=${withRepeats.join(',')}`).openFlags).toHaveLength(MAX_OPEN_KEYS);
-    expect(parse(`open=${withRepeats.join(',')}`).openFlags[1]).toBe('flag-0');
   });
 });
 
@@ -94,13 +76,12 @@ describe('parsePageNumber on its own', () => {
 describe('serialising the dashboard URL state', () => {
   it('omits every key that holds its default', () => {
     expect(serialiseUrlState({})).toBe('');
-    expect(serialiseUrlState({ filter: '', openFlags: [], page: 1, pageSize: 20 })).toBe('');
+    expect(serialiseUrlState({ filter: '', page: 1, pageSize: 20 })).toBe('');
   });
 
   it('writes only the keys that differ from their default', () => {
     expect(serialiseUrlState({ page: 2 })).toBe('page=2');
     expect(serialiseUrlState({ pageSize: 5 })).toBe('pageSize=5');
-    expect(serialiseUrlState({ openFlags: ['a', 'b'] })).toBe('open=a%2Cb');
   });
 
   it('percent-encodes filter text instead of emitting it raw', () => {
@@ -110,7 +91,6 @@ describe('serialising the dashboard URL state', () => {
   it('round-trips a state carrying every key', () => {
     const state: DashboardUrlState = {
       filter: 'a & b "c" <d>',
-      openFlags: ['checkout', 'x'.repeat(MAX_OPEN_KEY_LENGTH)],
       page: 4,
       pageSize: 5,
     };
@@ -118,7 +98,7 @@ describe('serialising the dashboard URL state', () => {
   });
 
   it('round-trips a filter sitting exactly on the length cap', () => {
-    const state = { filter: 'f'.repeat(MAX_FILTER_LENGTH), openFlags: [], page: 1, pageSize: 20 };
+    const state = { filter: 'f'.repeat(MAX_FILTER_LENGTH), page: 1, pageSize: 20 };
     expect(parse(serialiseUrlState(state))).toEqual(state);
   });
 });
@@ -137,9 +117,8 @@ describe('parseUrlStateFields', () => {
   const fields = (values: Record<string, string>): DashboardUrlState => parseUrlStateFields(new URLSearchParams(values));
 
   it('reads the same state a query string would', () => {
-    expect(fields({ filter: 'dark', open: 'a,b', page: '3', pageSize: '5' })).toEqual({
+    expect(fields({ filter: 'dark', page: '3', pageSize: '5' })).toEqual({
       filter: 'dark',
-      openFlags: ['a', 'b'],
       page: 3,
       pageSize: 5,
     });
@@ -154,13 +133,9 @@ describe('parseUrlStateFields', () => {
     expect(fields({ page: '0', pageSize: 'lots' })).toEqual(NO_URL_STATE);
   });
 
-  it('applies the same caps as the query-string path', () => {
-    const state = fields({
-      filter: 'f'.repeat(MAX_FILTER_LENGTH + 20),
-      open: Array.from({ length: MAX_OPEN_KEYS + 5 }, (_, index) => `k${String(index)}`).join(','),
-    });
+  it('applies the same cap as the query-string path', () => {
+    const state = fields({ filter: 'f'.repeat(MAX_FILTER_LENGTH + 20) });
 
     expect(state.filter).toHaveLength(MAX_FILTER_LENGTH);
-    expect(state.openFlags).toHaveLength(MAX_OPEN_KEYS);
   });
 });

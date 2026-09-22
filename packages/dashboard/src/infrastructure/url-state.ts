@@ -3,17 +3,14 @@ import { HttpError } from './http-primitives.js';
 
 /** Caps on the query-string values an operator — or an attacker crafting a link — can put in front of the renderer. */
 export const MAX_FILTER_LENGTH = 100;
-export const MAX_OPEN_KEY_LENGTH = 120;
-export const MAX_OPEN_KEYS = 20;
 
 export const DEFAULT_PAGE = 1;
 export const PAGE_MESSAGE = 'The page must be a positive integer.';
 export const PAGE_SIZE_MESSAGE = 'The page size must be a positive integer.';
 
-/** The dashboard's whole query-string vocabulary: 'filter', 'open', 'page', 'pageSize'. There is no flag-list paging key. */
+/** The dashboard's whole query-string vocabulary: 'filter', 'page', 'pageSize'. There is no flag-list paging key. */
 export interface DashboardUrlState {
   readonly filter: string;
-  readonly openFlags: readonly string[];
   readonly page: number;
   readonly pageSize: number;
 }
@@ -29,24 +26,12 @@ export const parsePageNumber = (value: string | null, fallback: number, message:
 
 const parseFilter = (value: string | null): string => (value ?? '').trim().slice(0, MAX_FILTER_LENGTH).trim();
 
-const parseOpenFlags = (value: string | null): string[] => {
-  const keys = new Set<string>();
-  for (const entry of (value ?? '').split(',')) {
-    const key = entry.trim();
-    if (key === '' || key.length > MAX_OPEN_KEY_LENGTH) continue;
-    keys.add(key);
-    if (keys.size === MAX_OPEN_KEYS) break;
-  }
-  return [...keys];
-};
-
 /** A page or size arriving in a form body rather than a URL: a tampered value falls back instead of turning a rejected write into a 400. */
 const parsePageOrDefault = (value: string | null, fallback: number): number =>
   value !== null && PAGE_PATTERN.test(value) ? Number(value) : fallback;
 
 export const parseUrlState = (params: URLSearchParams): DashboardUrlState => ({
   filter: parseFilter(params.get('filter')),
-  openFlags: parseOpenFlags(params.get('open')),
   page: parsePageNumber(params.get('page'), DEFAULT_PAGE, PAGE_MESSAGE),
   pageSize: parsePageNumber(params.get('pageSize'), DEFAULT_VERSION_PAGE_SIZE, PAGE_SIZE_MESSAGE),
 });
@@ -54,11 +39,9 @@ export const parseUrlState = (params: URLSearchParams): DashboardUrlState => ({
 export const serialiseUrlState = (state: Partial<DashboardUrlState>): string => {
   const params = new URLSearchParams();
   const filter = state.filter ?? '';
-  const openFlags = state.openFlags ?? [];
   const page = state.page ?? DEFAULT_PAGE;
   const pageSize = state.pageSize ?? DEFAULT_VERSION_PAGE_SIZE;
   if (filter !== '') params.set('filter', filter);
-  if (openFlags.length > 0) params.set('open', openFlags.join(','));
   if (page !== DEFAULT_PAGE) params.set('page', String(page));
   if (pageSize !== DEFAULT_VERSION_PAGE_SIZE) params.set('pageSize', String(pageSize));
   // URLSearchParams spells a space '+'; '%20' means the same thing in a query and reads the same in an href.
@@ -78,7 +61,6 @@ export const withUrlState = (path: string, state: Partial<DashboardUrlState>): s
  */
 export const parseUrlStateFields = (fields: URLSearchParams): DashboardUrlState => ({
   filter: parseFilter(fields.get('filter')),
-  openFlags: parseOpenFlags(fields.get('open')),
   page: parsePageOrDefault(fields.get('page'), DEFAULT_PAGE),
   pageSize: parsePageOrDefault(fields.get('pageSize'), DEFAULT_VERSION_PAGE_SIZE),
 });

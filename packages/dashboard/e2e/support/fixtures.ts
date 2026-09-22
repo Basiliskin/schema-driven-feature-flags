@@ -103,11 +103,13 @@ export const checkForUpdates = (page: Page): Promise<void> =>
   // A string runs in the page, where `window` exists; this file is typed for Node.
   page.evaluate("window.dispatchEvent(new Event('focus'))");
 
-/** Opens a flag's row and returns it; the row's own summary, not the nested rules/delete disclosures. */
+/**
+ * Opens a flag's editor: clicking its name moves the row's own panel into the shared overlay dialog rather
+ * than expanding the row in place, so callers work against the dialog this returns, not the row.
+ */
 export const expandFlag = async (page: Page, key: string) => {
-  const row = page.locator(`[data-flag="${key}"]`);
-  await row.locator('.flag-row > summary').click();
-  return row;
+  await page.locator(`[data-flag="${key}"]`).getByRole('link', { name: key, exact: true }).click();
+  return page.getByRole('dialog', { name: key, exact: true });
 };
 
 export { expect } from '@playwright/test';

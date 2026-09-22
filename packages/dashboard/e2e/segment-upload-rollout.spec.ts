@@ -1,6 +1,13 @@
 import { GetObjectCommand, type S3Client } from '@aws-sdk/client-s3';
+import type { Page } from '@playwright/test';
 import { SEED_MEMBER_ATTRIBUTE, SEED_SEGMENT_KEY } from '../test/support/seed-snapshot.js';
 import { expect, test } from './support/localstack-fixtures.js';
+
+/** Clicking a flag's name moves its row's own panel into the shared overlay dialog, which this returns. */
+const openFlag = async (page: Page, key: string) => {
+  await page.locator(`[data-flag="${key}"]`).getByRole('link', { name: key, exact: true }).click();
+  return page.getByRole('dialog', { name: key, exact: true });
+};
 
 const MEMBERS = ['u-1', 'u-2', 'u-3'];
 const CSV = [SEED_MEMBER_ATTRIBUTE, ...MEMBERS].join('\n');
@@ -41,7 +48,7 @@ test.describe.serial('segment upload and rollout edit against LocalStack', () =>
     expect(version.members).toEqual(MEMBERS);
   });
 
-  test('saves a percentage rollout on a rule and publishes it into the next snapshot', async ({
+  test('stages a percentage rollout on a rule and publishes it into the next snapshot', async ({
     page,
     s3,
     bucket,
@@ -51,14 +58,16 @@ test.describe.serial('segment upload and rollout edit against LocalStack', () =>
     await page.goto(`${dashboard.url}/env/${environment}`);
 
     const row = page.locator(`[data-flag="${SEED_FLAG}"]`);
-    await row.locator('.flag-row > summary').click();
-    await row.locator('details.rollouts > summary').click();
+    const flagDialog = await openFlag(page, SEED_FLAG);
+    await flagDialog.locator('details.rollouts > summary').click();
 
-    const rollout = row.locator('.rule-rollout');
+    const rollout = flagDialog.locator('.rule-rollout');
+    await rollout.getByLabel('Rollout', { exact: true }).check();
     await rollout.getByLabel('Percentage').fill('25');
     await rollout.getByLabel('Bucket by').fill(SEED_MEMBER_ATTRIBUTE);
     await rollout.getByLabel('Salt').fill('autumn');
-    await rollout.getByRole('button', { name: 'Save rollout' }).click();
+    await flagDialog.getByRole('button', { name: 'Save', exact: true }).click();
+    await page.getByRole('dialog', { name: 'Review pending changes' }).getByRole('button', { name: 'Update' }).click();
 
     await expect(page.getByText(`Published version 2 to ${environment}.`)).toBeVisible();
     await expect(row.locator('.badge-rollout')).toHaveText(`25% by ${SEED_MEMBER_ATTRIBUTE}`);

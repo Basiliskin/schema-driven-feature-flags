@@ -176,7 +176,7 @@ pre {
   margin: 0;
 }
 
-/* Collapsible flag rows. */
+/* Flag rows. */
 .flag-list > li.flag {
   padding: 0 1rem;
 }
@@ -185,23 +185,32 @@ pre {
   margin-top: 0.5rem;
 }
 
-.flag-row > summary {
+.flag-row-summary {
+  display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 0.5rem;
+  min-height: var(--tap);
   color: var(--text);
-  list-style: none;
 }
 
-.flag-row > summary::-webkit-details-marker {
-  display: none;
-}
-
-.flag-row > summary .flag-key {
+.flag-row-summary .flag-key {
   margin-right: auto;
 }
 
-.flag-row[open] {
+.flag-panel {
   padding-bottom: 1rem;
+}
+
+/* Save and Delete for the whole flag, pinned to the top of the panel — right under the dialog's own
+   title/Close when the panel is shown as a modal, and above the fields either way. */
+.panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
 }
 
 .flag-filter-form {

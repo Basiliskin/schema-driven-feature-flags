@@ -145,6 +145,14 @@ function editFeature(
 const hasAtMostTwoDecimals = (percentage: number): boolean =>
   Math.abs(percentage * 100 - Math.round(percentage * 100)) < 1e-9;
 
+/**
+ * An operator who leaves Salt blank gets a working rollout rather than a schema error: the salt defaults to
+ * this rule's own address, `<key>-rule-<index>`. It is per-rule (not just per-key) so two rules on the same
+ * flag that both omit salt still bucket independently instead of moving in lockstep.
+ */
+const defaultedSalt = (edit: Extract<FlagEdit, { kind: 'setRollout' }>): string =>
+  edit.salt.trim().length > 0 ? edit.salt : `${edit.key}-rule-${String(edit.ruleIndex)}`;
+
 function editRollout(
   feature: JsonObject,
   edit: Extract<FlagEdit, { kind: 'setRollout' | 'removeRollout' }>,
@@ -164,8 +172,8 @@ function editRollout(
   if (edit.kind === 'removeRollout') {
     nextRule = Object.fromEntries(Object.entries(rule).filter(([field]) => field !== 'rollout'));
   } else {
-    const { percentage, bucketBy, salt } = edit;
-    nextRule = { ...rule, rollout: { percentage, bucketBy, salt } };
+    const { percentage, bucketBy } = edit;
+    nextRule = { ...rule, rollout: { percentage, bucketBy, salt: defaultedSalt(edit) } };
   }
 
   const nextRules = [...rules];

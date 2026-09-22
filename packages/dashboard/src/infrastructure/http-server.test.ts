@@ -98,7 +98,7 @@ describe('startDashboardServer', () => {
 
     expect(page.status).toBe(200);
     expect(page.body).toContain(
-      '<span class="flag-key"><a href="/env/production/features/new-dashboard">new-dashboard</a></span><span class="badge">boolean</span>',
+      '<span class="flag-key"><a href="/env/production/features/new-dashboard" data-open-flag="new-dashboard">new-dashboard</a></span><span class="badge">boolean</span>',
     );
     expect(page.body).toContain('<code>{&quot;max&quot;:3}</code>');
     expect(page.body).not.toContain('Version history');
@@ -730,7 +730,7 @@ describe('startDashboardServer', () => {
       const dashboard = await start(ports);
 
       const reply = await call(dashboard, 'POST', '/env/production/features/new-dashboard', {
-        body: form({ baseVersion: '3', field: 'enabled' }),
+        body: form({ baseVersion: '3', field: 'save' }),
       });
 
       expect(reply.status).toBe(200);
@@ -748,7 +748,7 @@ describe('startDashboardServer', () => {
       const dashboard = await start(ports);
 
       const reply = await call(dashboard, 'POST', '/env/production/features/checkout-limits', {
-        body: form({ baseVersion: '3', field: 'enabled', enabled: 'on' }),
+        body: form({ baseVersion: '3', field: 'save', enabled: 'on' }),
       });
 
       expect(featuresOf(pendingOf(reply.body))['checkout-limits']?.enabled).toBe(true);
@@ -760,7 +760,7 @@ describe('startDashboardServer', () => {
       const dashboard = await start(ports);
 
       const reply = await call(dashboard, 'POST', '/env/production/features/checkout-limits', {
-        body: form({ baseVersion: '3', field: 'default', default: '{"max": 5}' }),
+        body: form({ baseVersion: '3', field: 'save', default: '{"max": 5}' }),
       });
 
       expect(reply.status).toBe(200);
@@ -774,7 +774,7 @@ describe('startDashboardServer', () => {
       const earlier = draftAt(2);
 
       const reply = await call(dashboard, 'POST', '/env/production/features/checkout-limits', {
-        body: form({ baseVersion: '2', field: 'default', default: '{"max": 5}', pending: carriedDraft(earlier) }),
+        body: form({ baseVersion: '2', field: 'save', default: '{"max": 5}', pending: carriedDraft(earlier) }),
       });
 
       const pending = pendingOf(reply.body);
@@ -789,7 +789,7 @@ describe('startDashboardServer', () => {
       const dashboard = await start(ports);
 
       const reply = await call(dashboard, 'POST', '/env/production/features/new-dashboard', {
-        body: form({ baseVersion: '3', field: 'enabled', pending: '%E0%A4%A' }),
+        body: form({ baseVersion: '3', field: 'save', pending: '%E0%A4%A' }),
       });
 
       expect(reply.status).toBe(200);
@@ -801,14 +801,14 @@ describe('startDashboardServer', () => {
       const dashboard = await start(ports);
 
       const reply = await call(dashboard, 'POST', '/env/production/features/a%2Fb', {
-        body: form({ baseVersion: '3', field: 'enabled', enabled: 'on' }),
+        body: form({ baseVersion: '3', field: 'save', enabled: 'on' }),
       });
 
       expect(reply.status).toBe(422);
       expect(reply.body).toContain('The snapshot has no feature named &quot;a/b&quot;.');
     });
 
-    it.each([{ field: 'enabled' }, { baseVersion: 'abc', field: 'enabled' }, { baseVersion: '0', field: 'enabled' }])(
+    it.each([{ field: 'save' }, { baseVersion: 'abc', field: 'save' }, { baseVersion: '0', field: 'save' }])(
       'answers 422 asking for a reload for base version in %o without opening a writer',
       async (fields) => {
         const { ports, openWriter } = fakes();
@@ -831,9 +831,7 @@ describe('startDashboardServer', () => {
       });
 
       expect(reply.status).toBe(422);
-      expect(reply.body).toContain(
-        'Choose one of these actions: setRollout, removeRollout, enabled, default, rules, delete, attachSegment, detachSegment.',
-      );
+      expect(reply.body).toContain('Choose one of these actions: save, delete.');
       expect(openWriter).not.toHaveBeenCalled();
     });
 
@@ -842,7 +840,7 @@ describe('startDashboardServer', () => {
       const dashboard = await start(ports);
 
       const reply = await call(dashboard, 'POST', '/env/production/features/missing', {
-        body: form({ baseVersion: '3', field: 'enabled', enabled: 'on' }),
+        body: form({ baseVersion: '3', field: 'save', enabled: 'on' }),
       });
 
       expect(reply.status).toBe(422);
@@ -855,7 +853,7 @@ describe('startDashboardServer', () => {
       const dashboard = await start(ports);
 
       const reply = await call(dashboard, 'POST', '/env/production/features/checkout-limits', {
-        body: form({ baseVersion: '3', field: 'default', default: '</textarea><script>x' }),
+        body: form({ baseVersion: '3', field: 'save', default: '</textarea><script>x' }),
       });
 
       expect(reply.status).toBe(422);
@@ -865,17 +863,31 @@ describe('startDashboardServer', () => {
       expect(openWriter).not.toHaveBeenCalled();
     });
 
-    it('treats a missing default as empty, invalid JSON', async () => {
+    it('treats an emptied default textarea as invalid JSON, not as leaving the default alone', async () => {
       const { ports, openWriter } = fakes();
       const dashboard = await start(ports);
 
       const reply = await call(dashboard, 'POST', '/env/production/features/checkout-limits', {
-        body: form({ baseVersion: '3', field: 'default' }),
+        body: form({ baseVersion: '3', field: 'save', default: '' }),
       });
 
       expect(reply.status).toBe(422);
       expect(reply.body).toContain('The default value is not valid JSON.');
       expect(openWriter).not.toHaveBeenCalled();
+    });
+
+    // A boolean flag's form never renders a `default` field at all (see feature-edit-form.ts), so its
+    // absence from the POST body is what tells Save to leave the default untouched, not an error.
+    it('leaves a boolean flag alone when the request carries no default field, since its form never renders one', async () => {
+      const { ports, writer } = fakes();
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'POST', '/env/production/features/new-dashboard', {
+        body: form({ baseVersion: '3', field: 'save' }),
+      });
+
+      expect(reply.status).toBe(200);
+      expect(writer.publish).not.toHaveBeenCalled();
     });
 
     it('keeps the checked box in the draft when a staged enabled edit is rejected, and hands the earlier draft back', async () => {
@@ -884,7 +896,7 @@ describe('startDashboardServer', () => {
       const earlier = draftAt(2, { 'new-dashboard': { type: 'boolean', enabled: false } });
 
       const reply = await call(dashboard, 'POST', '/env/production/features/checkout-limits', {
-        body: form({ baseVersion: '2', field: 'enabled', enabled: 'on', pending: carriedDraft(earlier) }),
+        body: form({ baseVersion: '2', field: 'save', enabled: 'on', pending: carriedDraft(earlier) }),
       });
 
       expect(reply.status).toBe(422);
@@ -929,7 +941,7 @@ describe('startDashboardServer', () => {
     it('does not offer a review for failures that are not conflicts', async () => {
       const dashboard = await start(fakes().ports);
       const reply = await call(dashboard, 'POST', '/env/production/features/new-dashboard', {
-        body: form({ baseVersion: '3', field: 'default', default: '{' }),
+        body: form({ baseVersion: '3', field: 'save', default: '{' }),
       });
       expect(reply.body).not.toContain('data-review-since');
       expect(reply.body).toContain('<div id="update-banner" class="update-banner" role="status" hidden>');
@@ -962,49 +974,10 @@ describe('startDashboardServer', () => {
       expect(Object.keys(snapshot.features)).toEqual(['checkout-limits']);
     });
 
-    it('stages edited rules', async () => {
-      const { ports, writer } = fakes();
-      const dashboard = await start(ports);
-      const rules = [{ when: { plan: 'pro' }, value: { max: 9 } }];
-
-      const reply = await call(dashboard, 'POST', '/env/production/features/checkout-limits', {
-        body: form({ baseVersion: '3', field: 'rules', rules: JSON.stringify(rules) }),
-      });
-
-      expect(reply.status).toBe(200);
-      expect(featuresOf(pendingOf(reply.body))['checkout-limits']?.rules).toEqual(rules);
-      expect(writer.publish).not.toHaveBeenCalled();
-    });
-
-    it.each([
-      ['malformed rules JSON', '[{"when"', 'The rules are not valid JSON.'],
-      ['rules that break the schema', '[{"when":{"plan":"pro"},"enabled":true}]', 'The edited snapshot is not valid.'],
-    ])('answers 422 for %s, keeping the escaped draft and writing nothing', async (_, rules, message) => {
-      const { ports, openWriter } = fakes();
-      const dashboard = await start(ports);
-
-      const reply = await call(dashboard, 'POST', '/env/production/features/checkout-limits', {
-        body: form({ baseVersion: '3', field: 'rules', rules }),
-      });
-
-      expect(reply.status).toBe(422);
-      expect(reply.body).toContain(message);
-      expect(reply.body).toContain(`<textarea name="rules" rows="4">${rules.replaceAll('"', '&quot;')}</textarea>`);
-      expect(openWriter).not.toHaveBeenCalled();
-    });
-
-    it('treats missing rules as empty, invalid JSON', async () => {
-      const { ports, openWriter } = fakes();
-      const dashboard = await start(ports);
-
-      const reply = await call(dashboard, 'POST', '/env/production/features/checkout-limits', {
-        body: form({ baseVersion: '3', field: 'rules' }),
-      });
-
-      expect(reply.status).toBe(422);
-      expect(reply.body).toContain('The rules are not valid JSON.');
-      expect(openWriter).not.toHaveBeenCalled();
-    });
+    // Raw rules-JSON editing is no longer exposed through the dashboard's one Save button; a rule's
+    // rollout, its segment and its detach are staged instead through the structured rollout fields
+    // (see "rollout edits on POST /env/:env/features/:key" below). applyFlagEdit's own `setRules` kind
+    // and its validation stay covered at the domain layer (flag-edit.test.ts).
 
     it('reports a stale base version on delete as a conflict, not an overwrite', async () => {
       const { ports } = fakes(
@@ -1024,7 +997,7 @@ describe('startDashboardServer', () => {
     it('rejects a foreign Origin, or a missing Origin, before opening a writer', async () => {
       const { ports, openWriter } = fakes();
       const dashboard = await start(ports);
-      const body = form({ baseVersion: '3', field: 'enabled', enabled: 'on' });
+      const body = form({ baseVersion: '3', field: 'save', enabled: 'on' });
 
       const foreign = await call(dashboard, 'POST', '/env/production/features/new-dashboard', {
         body,
@@ -1156,7 +1129,7 @@ describe('startDashboardServer', () => {
       const dashboard = await start(ports);
 
       const reply = await call(dashboard, 'POST', '/env/production/features/new-dashboard', {
-        body: form({ baseVersion: '3', field: 'enabled' }),
+        body: form({ baseVersion: '3', field: 'save' }),
       });
 
       const dialog = reviewDialogOf(reply.body);
@@ -1592,67 +1565,70 @@ describe('rollout edits on POST /env/:env/features/:key', () => {
   const rolloutFakes = (overrides: Partial<DashboardPorts> = {}, writer: Partial<SnapshotWriter> = {}) =>
     fakes({ fetchSnapshotText: () => Promise.resolve(ROLLOUT_SNAPSHOT), ...overrides }, writer);
 
-  const publishedRules = (writer: Fakes['writer']): Record<string, unknown>[] => {
-    const [, snapshot] = writer.publish.mock.calls[0] as [string, { features: { checkout: { rules: Record<string, unknown>[] } } }];
-    return snapshot.features.checkout.rules;
-  };
 
-  it('saves the posted rollout onto the rule the form names', async () => {
+  const featuresOf = (body: string): Record<string, Record<string, unknown>> =>
+    (pendingOf(body)?.snapshot['features'] ?? {}) as Record<string, Record<string, unknown>>;
+  const rulesOf = (body: string): Record<string, unknown>[] => featuresOf(body)['checkout']?.['rules'] as Record<string, unknown>[];
+
+  it('saves the posted rollout onto the rule the form names, staged rather than published', async () => {
     const { ports, writer } = rolloutFakes();
     const dashboard = await start(ports);
 
     const reply = await call(dashboard, 'POST', '/env/production/features/checkout', {
-      body: form({ baseVersion: '3', field: 'setRollout', ruleIndex: '1', percentage: '30', bucketBy: 'accountId', salt: 's' }),
+      body: form({ baseVersion: '3', field: 'save', ruleCount: '2', rollout_1: 'on', percentage_1: '30', bucketBy_1: 'accountId', salt_1: 's' }),
     });
 
     expect(reply.status).toBe(200);
-    expect(publishedRules(writer)[1]?.rollout).toEqual({ percentage: 30, bucketBy: 'accountId', salt: 's' });
-    expect(publishedRules(writer)[0]).not.toHaveProperty('rollout');
+    expect(rulesOf(reply.body)[1]?.rollout).toEqual({ percentage: 30, bucketBy: 'accountId', salt: 's' });
+    expect(rulesOf(reply.body)[0]).not.toHaveProperty('rollout');
+    expect(writer.publish).not.toHaveBeenCalled();
   });
 
-  it('removes the rollout from the named rule and leaves the rest of it alone', async () => {
+  it('removes the rollout from the named rule and leaves the rest of it alone, staged rather than published', async () => {
     const { ports, writer } = rolloutFakes();
     const dashboard = await start(ports);
 
     const reply = await call(dashboard, 'POST', '/env/production/features/checkout', {
-      body: form({ baseVersion: '3', field: 'removeRollout', ruleIndex: '1' }),
+      body: form({ baseVersion: '3', field: 'save', ruleCount: '2' }),
     });
 
     expect(reply.status).toBe(200);
-    expect(publishedRules(writer)[1]).not.toHaveProperty('rollout');
-    expect(publishedRules(writer)[1]?.when).toEqual({ plan: { inSegment: 'beta-testers' } });
+    expect(rulesOf(reply.body)[1]).not.toHaveProperty('rollout');
+    expect(rulesOf(reply.body)[1]?.when).toEqual({ plan: { inSegment: 'beta-testers' } });
+    expect(writer.publish).not.toHaveBeenCalled();
   });
 
   it.each([
-    ['a percentage above 100', { percentage: '130' }],
-    ['a percentage that is not a number', { percentage: 'half' }],
-    ['more than two decimal places', { percentage: '30.123' }],
-  ])('answers 400 for %s and publishes nothing', async (_, fields) => {
+    ['a percentage above 100', { percentage_1: '130' }],
+    ['a percentage that is not a number', { percentage_1: 'half' }],
+    ['more than two decimal places', { percentage_1: '30.123' }],
+    ['an empty percentage', { percentage_1: '' }],
+    ['a missing percentage field', {}],
+  ])('answers 400 for %s and stages nothing', async (_, fields) => {
     const { ports, writer } = rolloutFakes();
     const dashboard = await start(ports);
 
     const reply = await call(dashboard, 'POST', '/env/production/features/checkout', {
-      body: form({ baseVersion: '3', field: 'setRollout', ruleIndex: '1', bucketBy: 'userId', salt: 's', ...fields }),
+      body: form({ baseVersion: '3', field: 'save', ruleCount: '2', rollout_1: 'on', bucketBy_1: 'userId', salt_1: 's', ...fields }),
     });
 
     expect(reply.status).toBe(400);
     expect(reply.body).toContain('percentage');
     expect(writer.publish).not.toHaveBeenCalled();
+    expect(pendingOf(reply.body)).toBeUndefined();
   });
 
-  it.each([
-    ['a rule index past the end', '9'],
-    ['a missing rule index', ''],
-  ])('answers 400 for %s and publishes nothing', async (_, ruleIndex) => {
+  it('answers 400 for a ruleCount past the rules the flag actually has, and stages nothing', async () => {
     const { ports, writer } = rolloutFakes();
     const dashboard = await start(ports);
 
     const reply = await call(dashboard, 'POST', '/env/production/features/checkout', {
-      body: form({ baseVersion: '3', field: 'removeRollout', ruleIndex }),
+      body: form({ baseVersion: '3', field: 'save', ruleCount: '9' }),
     });
 
     expect(reply.status).toBe(400);
     expect(writer.publish).not.toHaveBeenCalled();
+    expect(pendingOf(reply.body)).toBeUndefined();
   });
 
   it('treats a rollout posted without a bucket attribute or salt as invalid input, not as empty strings', async () => {
@@ -1660,10 +1636,10 @@ describe('rollout edits on POST /env/:env/features/:key', () => {
     const dashboard = await start(ports);
 
     const reply = await call(dashboard, 'POST', '/env/production/features/checkout', {
-      body: form({ baseVersion: '3', field: 'setRollout', ruleIndex: '1', percentage: '30' }),
+      body: form({ baseVersion: '3', field: 'save', ruleCount: '2', rollout_1: 'on', percentage_1: '30' }),
     });
 
-    // parseSnapshot rejects the empty bucketBy/salt, so this is an invalid snapshot (422), not a malformed field (400).
+    // parseSnapshot rejects the empty bucketBy, so this is an invalid snapshot (422), not a malformed field (400).
     expect(reply.status).toBe(422);
     expect(reply.body).toContain('not valid');
     expect(writer.publish).not.toHaveBeenCalled();
@@ -1674,7 +1650,7 @@ describe('rollout edits on POST /env/:env/features/:key', () => {
     const dashboard = await start(ports);
 
     const reply = await call(dashboard, 'POST', '/env/production/features/checkout', {
-      body: form({ baseVersion: '3', field: 'setRollout', ruleIndex: '1', percentage: '30', bucketBy: 'userId', salt: 's' }),
+      body: form({ baseVersion: '3', field: 'save', ruleCount: '2', rollout_1: 'on', percentage_1: '30', bucketBy_1: 'userId', salt_1: 's' }),
       sameOrigin: false,
     });
 
@@ -1682,49 +1658,8 @@ describe('rollout edits on POST /env/:env/features/:key', () => {
     expect(openWriter).not.toHaveBeenCalled();
   });
 
-  const ROLLOUT_FORM = { baseVersion: '3', field: 'setRollout', ruleIndex: '1', percentage: '30', bucketBy: 'userId', salt: 's' };
-
-  // The base and the latest snapshot are told apart by version, so replay sees what really changed meanwhile.
-  const racingPorts = (latest: string) => {
-    let publishes = 0;
-    return rolloutFakes(
-      {
-        readCurrentVersion: () => Promise.resolve(5),
-        fetchSnapshotText: (_environment: string, version: number) =>
-          Promise.resolve(version === 5 ? latest : ROLLOUT_SNAPSHOT),
-      },
-      {
-        publish: () => {
-          publishes += 1;
-          return publishes === 1 ? Promise.reject(publishError('CONFLICT')) : Promise.resolve(6);
-        },
-      },
-    );
-  };
-
-  it('answers 422 when the same flag changed under a stale rollout edit', async () => {
-    const { ports, writer } = racingPorts(rolloutSnapshot({ checkoutSalt: 'someone-else' }));
-    const dashboard = await start(ports);
-
-    const reply = await call(dashboard, 'POST', '/env/production/features/checkout', { body: form(ROLLOUT_FORM) });
-
-    expect(reply.status).toBe(422);
-    expect(reply.body).toContain('Someone else published version 5 meanwhile');
-    expect(writer.publish).toHaveBeenCalledTimes(1);
-  });
-
-  it('replays the rollout onto the latest version when a different flag changed meanwhile', async () => {
-    const { ports, writer } = racingPorts(rolloutSnapshot({ otherEnabled: true }));
-    const dashboard = await start(ports);
-
-    const reply = await call(dashboard, 'POST', '/env/production/features/checkout', { body: form(ROLLOUT_FORM) });
-
-    expect(reply.status).toBe(200);
-    expect(writer.publish).toHaveBeenCalledTimes(2);
-    const [, replayed] = writer.publish.mock.calls[1] as [string, { features: { checkout: { rules: Record<string, unknown>[] }; other: { enabled: boolean } } }];
-    expect(replayed.features.checkout.rules[1]?.rollout).toEqual({ percentage: 30, bucketBy: 'userId', salt: 's' });
-    expect(replayed.features.other.enabled).toBe(true);
-  });
+  // Rollout is staged, not published immediately, so drift is surfaced by the Review Dialog at Publish
+  // time (see "reviewing a pending change set"), not by a per-field replay-on-latest here.
 });
 
 describe('decodeAttachValue', () => {
@@ -1789,28 +1724,29 @@ describe('attaching and detaching segments', () => {
       writer,
     );
 
-  const publishedRules = (writer: Fakes['writer'], key: string): Record<string, unknown>[] => {
-    const [, snapshot] = writer.publish.mock.calls[0] as [string, { features: Record<string, { rules: Record<string, unknown>[] }> }];
-    return (snapshot.features[key] as { rules: Record<string, unknown>[] }).rules;
-  };
+  const featuresOf = (body: string): Record<string, Record<string, unknown>> =>
+    (pendingOf(body)?.snapshot['features'] ?? {}) as Record<string, Record<string, unknown>>;
+  const rulesOf = (body: string, key: string): Record<string, unknown>[] =>
+    (featuresOf(body)[key] as { rules: Record<string, unknown>[] } | undefined)?.rules ?? [];
 
   const ATTACH_FORM = {
     baseVersion: '3',
-    field: 'attachSegment',
+    field: 'save',
     segmentKey: 'beta-testers',
   };
 
-  it('appends a segment rule to a boolean flag, keeping the rules already there', async () => {
+  it('appends a segment rule to a boolean flag, keeping the rules already there — staged, not published', async () => {
     const { ports, writer } = attachFakes();
     const dashboard = await start(ports);
 
     const reply = await call(dashboard, 'POST', '/env/production/features/checkout', { body: form(ATTACH_FORM) });
 
     expect(reply.status).toBe(200);
-    expect(publishedRules(writer, 'checkout')).toEqual([
+    expect(rulesOf(reply.body, 'checkout')).toEqual([
       { when: { plan: 'free' }, enabled: false },
       { when: { userId: { inSegment: 'beta-testers' } }, enabled: true },
     ]);
+    expect(writer.publish).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -1827,10 +1763,11 @@ describe('attaching and detaching segments', () => {
     });
 
     expect(reply.status).toBe(200);
-    expect(publishedRules(writer, 'theme')[1]).toEqual({ when: { userId: { inSegment: 'beta-testers' } }, value: expected });
+    expect(rulesOf(reply.body, 'theme')[1]).toEqual({ when: { userId: { inSegment: 'beta-testers' } }, value: expected });
+    expect(writer.publish).not.toHaveBeenCalled();
   });
 
-  it('answers 400 and publishes nothing when the value looks like JSON but does not parse', async () => {
+  it('answers 400 and stages nothing when the value looks like JSON but does not parse', async () => {
     const { ports, writer } = attachFakes();
     const dashboard = await start(ports);
 
@@ -1852,30 +1789,43 @@ describe('attaching and detaching segments', () => {
     });
 
     expect(reply.status).toBe(200);
-    expect(publishedRules(writer, 'checkout')[1]).toEqual({
+    expect(rulesOf(reply.body, 'checkout')[1]).toEqual({
       when: { userId: { inSegment: 'beta-testers' } },
       enabled: true,
     });
+    expect(writer.publish).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ['a key that is not published', { segmentKey: '-nope' }],
-    ['an empty key', { segmentKey: '' }],
-    ['no key at all', {}],
-  ])('answers 400 for %s, publishes nothing and says to choose from the list', async (_, chosen) => {
+  it('stages nothing when Segment is left on its placeholder', async () => {
     const { ports, writer } = attachFakes();
     const dashboard = await start(ports);
 
     const reply = await call(dashboard, 'POST', '/env/production/features/checkout', {
-      body: form({ baseVersion: '3', field: 'attachSegment', ...chosen }),
+      body: form({ baseVersion: '3', field: 'save' }),
     });
 
-    expect(reply.status).toBe(400);
-    expect(reply.body).toContain('not published in this environment');
+    expect(reply.status).toBe(200);
+    expect(rulesOf(reply.body, 'checkout')).toEqual([{ when: { plan: 'free' }, enabled: false }]);
     expect(writer.publish).not.toHaveBeenCalled();
   });
 
-  it('answers 400 and publishes nothing for a segment whose member attribute was never recorded', async () => {
+  it.each([['a key that is not published', { segmentKey: '-nope' }]])(
+    'answers 400 for %s, stages nothing and says to choose from the list',
+    async (_, chosen) => {
+      const { ports, writer } = attachFakes();
+      const dashboard = await start(ports);
+
+      const reply = await call(dashboard, 'POST', '/env/production/features/checkout', {
+        body: form({ baseVersion: '3', field: 'save', ...chosen }),
+      });
+
+      expect(reply.status).toBe(400);
+      expect(reply.body).toContain('not published in this environment');
+      expect(writer.publish).not.toHaveBeenCalled();
+    },
+  );
+
+  it('answers 400 and stages nothing for a segment whose member attribute was never recorded', async () => {
     const { ports, writer } = attachFakes();
     const dashboard = await start(ports);
 
@@ -1888,7 +1838,7 @@ describe('attaching and detaching segments', () => {
     expect(writer.publish).not.toHaveBeenCalled();
   });
 
-  it('answers 400 and publishes nothing when the published segment list cannot be read', async () => {
+  it('answers 400 and stages nothing when the published segment list cannot be read', async () => {
     const { ports, writer } = fakes({
       fetchSnapshotText: () => Promise.resolve(ATTACH_SNAPSHOT),
       listPublishedSegments: () => Promise.resolve({ status: 'unavailable' }),
@@ -1908,44 +1858,48 @@ describe('attaching and detaching segments', () => {
 
     const reply = await call(dashboard, 'GET', '/env/production');
 
-    expect(reply.body).toContain('<select name="segmentKey" required>');
+    expect(reply.body).toContain('<select name="segmentKey">');
     expect(reply.body).toContain('<option value="beta-testers">beta-testers · userId</option>');
     expect(reply.body).toContain('<option value="legacy" disabled>legacy · attribute unknown</option>');
   });
 
-  it('detaches the rule at index 0', async () => {
+  it('detaches the rule at index 0, staged rather than published', async () => {
     const { ports, writer } = attachFakes();
     const dashboard = await start(ports);
 
     const reply = await call(dashboard, 'POST', '/env/production/features/checkout', {
-      body: form({ baseVersion: '3', field: 'detachSegment', ruleIndex: '0' }),
+      body: form({ baseVersion: '3', field: 'save', ruleCount: '1', detach_0: 'on' }),
     });
 
     expect(reply.status).toBe(200);
-    expect(publishedRules(writer, 'checkout')).toEqual([]);
+    expect(rulesOf(reply.body, 'checkout')).toEqual([]);
+    expect(writer.publish).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ['an empty index', ''],
-    ['a non-numeric index', 'abc'],
-    ['a trailing-text index', '2abc'],
-    ['a negative index', '-1'],
-    ['a fractional index', '1.5'],
-    ['a leading-zero index', '01'],
-    ['exponent notation', '1e0'],
-    ['a padded index', ' 0 '],
-    ['a signed index', '+0'],
-    ['an index past the last rule', '9'],
-  ])('answers 400 for %s and publishes nothing', async (_, ruleIndex) => {
+  it('treats a ruleCount that does not parse as a plain non-negative integer as zero rules, staging nothing', async () => {
     const { ports, writer } = attachFakes();
     const dashboard = await start(ports);
 
     const reply = await call(dashboard, 'POST', '/env/production/features/checkout', {
-      body: form({ baseVersion: '3', field: 'detachSegment', ruleIndex }),
+      body: form({ baseVersion: '3', field: 'save', ruleCount: '-1', detach_0: 'on' }),
+    });
+
+    expect(reply.status).toBe(200);
+    expect(rulesOf(reply.body, 'checkout')).toEqual([{ when: { plan: 'free' }, enabled: false }]);
+    expect(writer.publish).not.toHaveBeenCalled();
+  });
+
+  it('answers 400 for a Detach past the last rule and stages nothing', async () => {
+    const { ports, writer } = attachFakes();
+    const dashboard = await start(ports);
+
+    const reply = await call(dashboard, 'POST', '/env/production/features/checkout', {
+      body: form({ baseVersion: '3', field: 'save', ruleCount: '9', detach_8: 'on' }),
     });
 
     expect(reply.status).toBe(400);
     expect(writer.publish).not.toHaveBeenCalled();
+    expect(pendingOf(reply.body)).toBeUndefined();
   });
 
   it('rejects a segment edit whose base version is missing, before reading anything', async () => {
@@ -1953,7 +1907,7 @@ describe('attaching and detaching segments', () => {
     const dashboard = await start(ports);
 
     const reply = await call(dashboard, 'POST', '/env/production/features/checkout', {
-      body: form({ field: 'attachSegment', segmentKey: 'beta-testers' }),
+      body: form({ field: 'save', segmentKey: 'beta-testers' }),
     });
 
     expect(reply.status).toBe(422);
@@ -2017,10 +1971,9 @@ describe('the server-side flag filter', () => {
   it('submits through a GET form that echoes the filter and carries the rest of the query state', async () => {
     const dashboard = await start(fakes().ports);
 
-    const reply = await call(dashboard, 'GET', '/env/production?filter=checkout&page=3&pageSize=25&open=new-dashboard');
+    const reply = await call(dashboard, 'GET', '/env/production?filter=checkout&page=3&pageSize=25');
 
     expect(reply.body).toContain('<form class="flag-filter-form" method="get" action="/env/production">');
-    expect(reply.body).toContain('<input type="hidden" name="open" value="new-dashboard">');
     expect(reply.body).toContain('<input type="hidden" name="page" value="3">');
     expect(reply.body).toContain('<input type="hidden" name="pageSize" value="25">');
     expect(reply.body).toContain('name="filter" value="checkout"');

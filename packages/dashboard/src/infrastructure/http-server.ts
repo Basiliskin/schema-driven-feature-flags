@@ -138,9 +138,6 @@ const writeStatus = (outcome: Reported): number => {
   return outcome.invalidInput === true ? 400 : 422;
 };
 
-// The main edit form's three controls; every other form that reaches the edit route still publishes at once.
-const STAGED_EDIT_KINDS: ReadonlySet<FlagEdit['kind']> = new Set(['enabled', 'default', 'setRules']);
-
 const pendingOf = (fields: URLSearchParams) => parsePendingChangeSet(fields.get(PENDING_FIELD));
 
 const NO_PENDING_MESSAGE = 'There are no pending changes to review; stage an edit first.';
@@ -162,7 +159,7 @@ const ATTACH_VALUE_MESSAGE =
   'The value starts like JSON but is not valid JSON; correct it, or remove the leading quote or bracket to save it as plain text.';
 
 type EditRequest =
-  | { readonly ok: true; readonly baseVersion: number; readonly edit: FlagEdit }
+  | { readonly ok: true; readonly baseVersion: number; readonly edit: FlagEdit | readonly FlagEdit[] }
   | { readonly ok: false; readonly message: string; readonly invalidInput?: boolean };
 
 const parseBaseVersion = (fields: URLSearchParams): number | undefined => {
@@ -173,13 +170,9 @@ const parseBaseVersion = (fields: URLSearchParams): number | undefined => {
 // NaN for a missing, empty or non-numeric field, so applyFlagEdit rejects it instead of Number('') silently meaning rule 0.
 const parseNumber = (value: string | null): number => (value === null || value === '' ? Number.NaN : Number(value));
 
-const parseRuleIndex = (fields: URLSearchParams): number => parseNumber(fields.get('ruleIndex'));
-
-// A rule position comes from a hidden field, so anything Number() would stretch into an index -- '01', '1e0', ' 2 ', '+1' -- is a tampered form, not a choice.
+// A rule position (and a rule count) comes from a hidden field, so anything Number() would stretch into
+// one -- '01', '1e0', ' 2 ', '+1' -- is a tampered form, not a choice.
 const PLAIN_INDEX_PATTERN = /^(?:0|[1-9]\d*)$/;
-
-const parseDetachIndex = (value: string | null): number =>
-  value !== null && PLAIN_INDEX_PATTERN.test(value) ? Number(value) : Number.NaN;
 
 /** JSON's own number grammar, so a version like 1.2.3 and an id like 007 stay text while 1e3 is a number. */
 const JSON_NUMBER_PATTERN = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
@@ -210,9 +203,15 @@ export const decodeAttachValue = (raw: string): DecodedValue => {
   }
 };
 
-type EditParse = { readonly ok: true; readonly edit: FlagEdit } | { readonly ok: false; readonly message: string };
+type EditParse =
+  | { readonly ok: true; readonly edit: FlagEdit | readonly FlagEdit[] }
+  | { readonly ok: false; readonly message: string };
 
-const okEdit = (edit: FlagEdit): EditParse => ({ ok: true, edit });
+const okEdit = (edit: FlagEdit | readonly FlagEdit[]): EditParse => ({ ok: true, edit });
+
+// A plain `Array.isArray` guard does not narrow a `readonly T[]` branch of a union in its negative case, so
+// this names the check once, correctly, rather than repeating the cast at every call site.
+const isEditList = (edit: FlagEdit | readonly FlagEdit[]): edit is readonly FlagEdit[] => Array.isArray(edit);
 
 const UNLISTED_SEGMENT_MESSAGE =
   'Choose a segment from the list — that one is not published in this environment.';
@@ -221,44 +220,73 @@ const UNKNOWN_ATTRIBUTE_MESSAGE =
 const SEGMENTS_UNAVAILABLE_MESSAGE =
   'The list of published segments could not be read, so no segment can be attached right now.';
 
+type SingleEditParse = { readonly ok: true; readonly edit: FlagEdit } | { readonly ok: false; readonly message: string };
+
 // The attribute always comes from the chosen segment's own pointer, so nothing the form submits can decide it.
-const parseAttach = (key: string, fields: URLSearchParams, segments: PublishedSegmentsView): EditParse => {
+// Returns `undefined` when the operator left Segment on its placeholder — attaching is opt-in, not implied
+// by every Save.
+const parseAttach = (key: string, fields: URLSearchParams, segments: PublishedSegmentsView): SingleEditParse | undefined => {
+  const segmentKey = fields.get('segmentKey') ?? '';
+  if (segmentKey === '') return undefined;
   const value = decodeAttachValue(fields.get('value') ?? '');
   if (!value.ok) return { ok: false, message: ATTACH_VALUE_MESSAGE };
   if (segments.status === 'unavailable') return { ok: false, message: SEGMENTS_UNAVAILABLE_MESSAGE };
-  const segmentKey = fields.get('segmentKey') ?? '';
   const chosen = segments.rows.find((row) => row.segmentKey === segmentKey);
   if (chosen === undefined) return { ok: false, message: UNLISTED_SEGMENT_MESSAGE };
   if (chosen.attribute.status === 'unknown') return { ok: false, message: UNKNOWN_ATTRIBUTE_MESSAGE };
-  return okEdit({
-    kind: 'attachSegment',
-    key,
-    segmentKey,
-    memberAttribute: chosen.attribute.memberAttribute,
-    value: value.value,
-  });
+  return {
+    ok: true,
+    edit: { kind: 'attachSegment', key, segmentKey, memberAttribute: chosen.attribute.memberAttribute, value: value.value },
+  };
+};
+
+/**
+ * Every field of the single flag-edit form, folded into the sequence of edits one Save click stages:
+ * Enabled, Default (if present — a boolean flag's form never renders it), each rule's rollout (always
+ * applied — `setRollout`/`removeRollout` are idempotent, so re-sending an unrelated rule's unchanged
+ * fields is harmless) addressed by its ORIGINAL index, then every checked Detach in descending index
+ * order (so detaching a lower rule cannot shift the index a later detach or rollout edit already used),
+ * then Attach a segment last, since it appends a new rule after every other position is settled.
+ */
+const parseSave = (key: string, fields: URLSearchParams, segments: PublishedSegmentsView): EditParse => {
+  const edits: FlagEdit[] = [{ kind: 'enabled', key, enabled: fields.has('enabled') }];
+  const defaultJson = fields.get('default');
+  if (defaultJson !== null) edits.push({ kind: 'default', key, defaultJson });
+
+  const ruleCountRaw = fields.get('ruleCount');
+  const ruleCount = ruleCountRaw !== null && PLAIN_INDEX_PATTERN.test(ruleCountRaw) ? Number(ruleCountRaw) : 0;
+  for (let ruleIndex = 0; ruleIndex < ruleCount; ruleIndex++) {
+    if (fields.has(`rollout_${String(ruleIndex)}`)) {
+      edits.push({
+        kind: 'setRollout',
+        key,
+        ruleIndex,
+        percentage: parseNumber(fields.get(`percentage_${String(ruleIndex)}`)),
+        bucketBy: fields.get(`bucketBy_${String(ruleIndex)}`) ?? '',
+        salt: fields.get(`salt_${String(ruleIndex)}`) ?? '',
+      });
+    } else {
+      edits.push({ kind: 'removeRollout', key, ruleIndex });
+    }
+  }
+  for (let ruleIndex = ruleCount - 1; ruleIndex >= 0; ruleIndex--) {
+    if (fields.has(`detach_${String(ruleIndex)}`)) edits.push({ kind: 'detachSegment', key, ruleIndex });
+  }
+
+  const attach = parseAttach(key, fields, segments);
+  if (attach !== undefined) {
+    if (!attach.ok) return { ok: false, message: attach.message };
+    edits.push(attach.edit);
+  }
+  return okEdit(edits);
 };
 
 const EDIT_PARSERS: Record<
   string,
   (key: string, fields: URLSearchParams, segments: PublishedSegmentsView) => EditParse
 > = {
-  setRollout: (key, fields) =>
-    okEdit({
-      kind: 'setRollout',
-      key,
-      ruleIndex: parseRuleIndex(fields),
-      percentage: parseNumber(fields.get('percentage')),
-      bucketBy: fields.get('bucketBy') ?? '',
-      salt: fields.get('salt') ?? '',
-    }),
-  removeRollout: (key, fields) => okEdit({ kind: 'removeRollout', key, ruleIndex: parseRuleIndex(fields) }),
-  enabled: (key, fields) => okEdit({ kind: 'enabled', key, enabled: fields.has('enabled') }),
-  default: (key, fields) => okEdit({ kind: 'default', key, defaultJson: fields.get('default') ?? '' }),
-  rules: (key, fields) => okEdit({ kind: 'setRules', key, rulesJson: fields.get('rules') ?? '' }),
+  save: parseSave,
   delete: (key) => okEdit({ kind: 'delete', key }),
-  attachSegment: parseAttach,
-  detachSegment: (key, fields) => okEdit({ kind: 'detachSegment', key, ruleIndex: parseDetachIndex(fields.get('ruleIndex')) }),
 };
 
 const FIELD_MESSAGE = `Choose one of these actions: ${Object.keys(EDIT_PARSERS).join(', ')}.`;
@@ -302,14 +330,12 @@ const createDraftOf = (fields: URLSearchParams, message: string, issues: readonl
 
 const editDraftOf = (key: string, fields: URLSearchParams, message: string, issues: readonly string[]): EditDraft => {
   const defaultJson = fields.get('default');
-  const rulesJson = fields.get('rules');
   const segmentKey = fields.get('segmentKey');
   const segmentValue = fields.get('value');
   return {
     key,
     enabled: fields.has('enabled'),
     ...(defaultJson === null ? {} : { defaultJson }),
-    ...(rulesJson === null ? {} : { rulesJson }),
     ...(segmentKey === null ? {} : { segmentKey }),
     ...(segmentValue === null ? {} : { segmentValue }),
     message,
@@ -326,6 +352,9 @@ function createDashboardRequestHandler(
   const isSameOrigin = (request: IncomingMessage): boolean =>
     request.headers.origin === `http://${LOOPBACK_HOST}:${String(listeningPort())}`;
 
+  // A single edit (create, delete) is self-contained and publishes immediately; the combined save always
+  // stages every edit it carries, atomically — either all of them land in the draft, or (on the first
+  // failure) none do, so a rejected Save never leaves part of what was clicked silently applied.
   const runEdit = async (
     environment: string,
     parsed: EditRequest,
@@ -335,15 +364,19 @@ function createDashboardRequestHandler(
       const invalidInput = parsed.invalidInput === true ? { invalidInput: true } : {};
       return { outcome: { kind: 'failure', message: parsed.message, issues: [], ...invalidInput }, pending, staged: false };
     }
-    if (!STAGED_EDIT_KINDS.has(parsed.edit.kind)) {
-      return { outcome: await editFeature(ports, environment, parsed.baseVersion, parsed.edit), pending, staged: false };
+    const edits = parsed.edit;
+    if (!isEditList(edits)) {
+      return { outcome: await editFeature(ports, environment, parsed.baseVersion, edits), pending, staged: false };
     }
-    const staged = await stageFlagEdit(ports, environment, parsed.edit, pending);
-    return {
-      outcome: staged,
-      pending: staged.kind === 'success' ? staged.pending : pending,
-      staged: staged.kind === 'success',
-    };
+    let current = pending;
+    // parseSave always pushes at least the `enabled` edit, so the loop runs at least once and assigns this.
+    let outcome!: Awaited<ReturnType<typeof stageFlagEdit>>;
+    for (const edit of edits) {
+      outcome = await stageFlagEdit(ports, environment, edit, current);
+      if (outcome.kind !== 'success') return { outcome, pending, staged: false };
+      current = outcome.pending;
+    }
+    return { outcome, pending: current, staged: true };
   };
 
   // The draft is only cleared by a publish that succeeded or by Discard; a failed publish hands it back untouched.
@@ -399,7 +432,9 @@ function createDashboardRequestHandler(
         urlState: parseUrlStateFields(fields),
         ...(await pendingState(environment, pending, staged)),
         ...(outcome.kind === 'failure' ? draftState(fields, outcome.message, outcome.issues) : {}),
-        ...(parsed.ok && outcome.kind === 'failure' && outcome.conflict !== undefined
+        // A CONFLICT can only come from an immediate publish (create, delete): staging never calls the
+        // writer, so `parsed.edit` is never the array form here.
+        ...(parsed.ok && !isEditList(parsed.edit) && outcome.kind === 'failure' && outcome.conflict !== undefined
           ? { conflict: { since: outcome.conflict.since, key: parsed.edit.key } }
           : {}),
       };
