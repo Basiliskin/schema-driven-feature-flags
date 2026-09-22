@@ -223,10 +223,29 @@ and a stale `IfMatch`; the LocalStack integration suite asserts exactly this sha
 answer `409 ConditionalRequestConflict` while a competing write is in flight, and the publisher
 treats it the same way: `VERSION_EXISTS` on the snapshot write, `CONFLICT` on the pointer write.
 
+### Orphaned snapshots
+
 If the snapshot write succeeds but the pointer write fails, `snapshots/<n>.json` is left orphaned:
-readers never see it, but the next publish computes the same `<n>` and fails with
-`VERSION_EXISTS`. Recover by hand — delete the orphaned snapshot, or point `current.json` at it —
-and publish again.
+readers never see it, but the next publish computes the same `<n>` and finds it occupied.
+
+The publisher recovers on its own. When probing forward for a free version it skips an occupied
+version whose `LastModified` is either older than the pointer's (a leftover from an old-style
+rollback) or older than the **orphan grace period** — `orphanGraceMs`, 5 minutes by default. Inside
+that window the object may still belong to a publish in flight, so the publish fails with
+`VERSION_EXISTS` and the error says how long is left; past it, the publish that wrote the object is
+taken to have died and the version is stepped over. The orphan itself is never rewritten or deleted,
+so it stays as inert garbage that no pointer references.
+
+Skipping is safe whether or not the writer really is gone. The skipping publish takes a *higher*
+version and still moves the pointer with `IfMatch` on the ETag it read, so a publish that was
+genuinely still in flight loses its own pointer write with `CONFLICT` instead of overwriting
+anything. The worst case is a hole in the version sequence, which `previousVersion` already allows.
+
+Because `LastModified` comes from S3's clock and the grace period is measured against the
+publisher's, `orphanGraceMs` must comfortably exceed any expected skew. Skew in the safe direction
+(publisher clock behind S3) only delays recovery. An occupied version that carries no `LastModified`
+at all cannot be judged, so it is never skipped and still needs the manual fix: delete the orphaned
+snapshot, or point `current.json` at it, and publish again.
 
 ## Change detection
 

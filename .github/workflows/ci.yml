@@ -30,6 +30,8 @@ jobs:
       AWS_REGION: us-east-1
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
+      # Every `docker compose` call interpolates this (see docker/docker-compose.yml), including `logs` and `down`.
+      LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_AUTH_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - name: Require LOCALSTACK_AUTH_TOKEN
@@ -47,8 +49,6 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Start LocalStack
-        env:
-          LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_AUTH_TOKEN }}
         run: docker compose -f docker/docker-compose.yml up -d --wait
       - run: pnpm test:integration
       - name: Install Chromium for the browser proof
@@ -63,6 +63,4 @@ jobs:
         run: docker compose -f docker/docker-compose.yml logs localstack
       - name: Stop LocalStack
         if: always()
-        env:
-          LOCALSTACK_AUTH_TOKEN: unused
         run: docker compose -f docker/docker-compose.yml down -v

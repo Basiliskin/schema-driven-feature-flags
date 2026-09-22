@@ -8,8 +8,10 @@ import {
   S3PublishError,
   type NotifyErrorHandler,
   type S3PublishErrorReason,
+  type S3SnapshotPublisherOptions,
   type SnapshotValidation,
 } from '../../src/infrastructure/s3-snapshot-publisher.js';
+import { DEFAULT_ORPHAN_GRACE_MS } from '../../src/domain/publishing.js';
 import { current, pointer, s3Error, type StoredObject } from './fake-s3.js';
 
 const { constructedWith } = vi.hoisted(() => ({
@@ -84,15 +86,24 @@ const LATER = new Date('2026-09-02T00:00:00.000Z');
 /** A pointer last moved at LATER, as an old-style rollback would leave it. */
 const movedPointer = (version: number, etag?: string): StoredObject => ({ ...current(version, etag), lastModified: LATER });
 const leftover = (body = '{}'): StoredObject => ({ body, lastModified: EARLIER });
+/** Written 30s before NOW: well inside the default orphan grace period, so a publish may still own it. */
+const RECENT = new Date(NOW.getTime() - 30_000);
 
 const publisherOver = (
   objects: Record<string, StoredObject>,
   putErrors: Record<string, Error> = {},
   validate: (snapshot: unknown) => SnapshotValidation = accept,
   headErrors: Record<string, Error> = {},
+  overrides: Partial<S3SnapshotPublisherOptions> = {},
 ) => {
   const fake = fakeWritableS3(objects, putErrors, headErrors);
-  const publisher = createS3SnapshotPublisher({ bucket: 'flags', client: fake.client, validate, now: () => NOW });
+  const publisher = createS3SnapshotPublisher({
+    bucket: 'flags',
+    client: fake.client,
+    validate,
+    now: () => NOW,
+    ...overrides,
+  });
   return { ...fake, publisher };
 };
 
@@ -367,34 +378,90 @@ describe('createS3SnapshotPublisher', () => {
         expect(puts()).toEqual([]);
       });
 
-      it.each<[string, Record<string, StoredObject>]>([
-        ['written after the pointer moved', { 'production/snapshots/2.json': { lastModified: NOW } }],
-        ['written in the same instant', { 'production/snapshots/2.json': { lastModified: LATER } }],
-        ['without a LastModified', { 'production/snapshots/2.json': {} }],
-      ])('does not skip a snapshot %s, since a concurrent publish may own it', async (_label, objects) => {
+      it.each<[string, Record<string, StoredObject>, string]>([
+        [
+          'written moments ago',
+          { 'production/snapshots/2.json': { lastModified: RECENT } },
+          'Written 30s ago by a publish that may still be in flight; it is stepped over as an orphan once it is 300s old',
+        ],
+        [
+          'without a LastModified',
+          { 'production/snapshots/2.json': {} },
+          'Exists with no LastModified, so a publish in flight cannot be ruled out',
+        ],
+      ])('does not skip a snapshot %s, since a concurrent publish may own it', async (_label, objects, message) => {
         const { publisher, puts } = publisherOver({ 'production/current.json': movedPointer(1), ...objects });
 
         const error = await expectReason(publisher.publish('production', snapshot), 'VERSION_EXISTS', 'production/snapshots/2.json');
 
-        expect((error.cause as Error).message).toBe('Written after the current pointer by another publish');
+        expect((error.cause as Error).message).toBe(message);
         expect(puts()).toEqual([]);
       });
 
-      it('does not skip anything when the pointer has no LastModified', async () => {
+      it('waits the whole grace period out before treating a snapshot as an orphan', async () => {
+        const onTheEdge = new Date(NOW.getTime() - (DEFAULT_ORPHAN_GRACE_MS - 1));
         const { publisher, puts } = publisherOver({
-          'production/current.json': current(1),
-          'production/snapshots/2.json': leftover(),
+          'production/current.json': movedPointer(1),
+          'production/snapshots/2.json': { lastModified: onTheEdge },
         });
 
         await expectReason(publisher.publish('production', snapshot), 'VERSION_EXISTS', 'production/snapshots/2.json');
         expect(puts()).toEqual([]);
       });
 
-      it('never skips version 1 when there is no pointer', async () => {
-        const { publisher, puts } = publisherOver({ 'production/snapshots/1.json': leftover() });
+      // The wedge this recovers from: a publish wrote its snapshot, then died before moving the pointer.
+      it('steps over an orphan the grace period old, so a half-finished publish cannot wedge the environment', async () => {
+        const orphaned = new Date(NOW.getTime() - DEFAULT_ORPHAN_GRACE_MS);
+        const { publisher, sent } = publisherOver({
+          'production/current.json': { ...current(1, '"etag-1"'), lastModified: EARLIER },
+          'production/snapshots/2.json': { lastModified: orphaned },
+        });
 
-        await expectReason(publisher.publish('production', snapshot), 'VERSION_EXISTS', 'production/snapshots/1.json');
-        expect(puts()).toEqual([]);
+        await expect(publisher.publish('production', snapshot)).resolves.toBe(3);
+
+        expect(sent.map(({ command, key }) => `${command} ${key}`)).toEqual([
+          'GetObject production/current.json',
+          'HeadObject production/snapshots/2.json',
+          'HeadObject production/snapshots/3.json',
+          'PutObject production/snapshots/3.json',
+          'PutObject production/current.json',
+        ]);
+        // The orphan is stepped over, never rewritten, and the pointer swap stays conditional on the etag read.
+        expect(sent[4]?.input).toMatchObject({ IfMatch: '"etag-1"' });
+        expect(pointerBody(sent[4]?.input ?? {})).toEqual(pointer(3));
+      });
+
+      it('steps over a stale orphan when the pointer has no LastModified', async () => {
+        const { publisher } = publisherOver({
+          'production/current.json': current(1),
+          'production/snapshots/2.json': leftover(),
+        });
+
+        await expect(publisher.publish('production', snapshot)).resolves.toBe(3);
+      });
+
+      it('recovers version 1 when the first publish ever died before writing the pointer', async () => {
+        const { publisher, sent } = publisherOver({ 'production/snapshots/1.json': leftover() });
+
+        await expect(publisher.publish('production', snapshot)).resolves.toBe(2);
+
+        // With no pointer to match on, the recovering pointer write must still be create-only.
+        expect(sent.at(-1)?.input).toMatchObject({ IfNoneMatch: '*' });
+      });
+
+      it('honours a custom orphan grace period', async () => {
+        const { publisher } = publisherOver(
+          {
+            'production/current.json': movedPointer(1),
+            'production/snapshots/2.json': { lastModified: RECENT },
+          },
+          {},
+          accept,
+          {},
+          { orphanGraceMs: 10_000 },
+        );
+
+        await expect(publisher.publish('production', snapshot)).resolves.toBe(3);
       });
 
       it('fails without writing when a probe is refused for a reason other than not found', async () => {

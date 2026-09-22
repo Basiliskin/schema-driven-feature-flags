@@ -5,6 +5,8 @@ import {
   buildCurrentPointer,
   buildRollbackSnapshot,
   checkRollbackTarget,
+  classifyOccupiedVersion,
+  DEFAULT_ORPHAN_GRACE_MS,
   nextSnapshotVersion,
   stampSnapshot,
   validateEnvironmentName,
@@ -63,6 +65,12 @@ export interface S3SnapshotPublisherOptions {
   readonly onNotifyError?: NotifyErrorHandler;
   /** Clock for the `createdAt` every published version is stamped with. Defaults to the system clock. */
   readonly now?: () => Date;
+  /**
+   * How long a snapshot written above the Current Pointer is left alone as a possible publish in flight.
+   * Past it, publishing steps over it as an orphan, so a publish that died between its snapshot write and
+   * its pointer write cannot wedge the environment. Defaults to {@link DEFAULT_ORPHAN_GRACE_MS}.
+   */
+  readonly orphanGraceMs?: number;
 }
 
 /** Options for {@link S3SnapshotPublisher.publish}. */
@@ -124,6 +132,7 @@ export function createS3SnapshotPublisher(options: S3SnapshotPublisherOptions): 
       : createSnsChangeNotifier({ topicArn: options.topicArn, client: options.snsClient });
   const onNotifyError = options.onNotifyError ?? warnNotifyFailure;
   const now = options.now ?? (() => new Date());
+  const orphanGraceMs = options.orphanGraceMs ?? DEFAULT_ORPHAN_GRACE_MS;
 
   const notify = async (environment: string, version: number): Promise<void> => {
     if (notifier === undefined) return;
@@ -225,13 +234,6 @@ export function createS3SnapshotPublisher(options: S3SnapshotPublisherOptions): 
     }
   };
 
-  // A snapshot written before the pointer was last moved is a leftover from an old-style rollback. One written
-  // at the same time or later belongs to a publish still in flight, so it must not be skipped.
-  const isLeftover = (snapshotModified: Date | null, current: ReadPointer | undefined): boolean =>
-    snapshotModified !== null &&
-    current?.lastModified !== undefined &&
-    snapshotModified.getTime() < current.lastModified.getTime();
-
   // Probes forward with HeadObject rather than listing, so the publisher needs no bucket-wide ListBucket.
   const resolveNextVersion = async (env: string, current: ReadPointer | undefined): Promise<number> => {
     const first = nextSnapshotVersion(current?.pointer);
@@ -239,9 +241,13 @@ export function createS3SnapshotPublisher(options: S3SnapshotPublisherOptions): 
       const key = snapshotKeyFor(env, version);
       const modified = await headSnapshot(key);
       if (modified === undefined) return version;
-      if (!isLeftover(modified, current)) {
-        throw new S3PublishError('VERSION_EXISTS', key, new Error('Written after the current pointer by another publish'));
-      }
+      const occupied = classifyOccupiedVersion({
+        snapshotModified: modified,
+        pointerModified: current?.lastModified,
+        now: now(),
+        graceMs: orphanGraceMs,
+      });
+      if (occupied.verdict === 'KEEP') throw new S3PublishError('VERSION_EXISTS', key, new Error(occupied.message));
     }
     throw new S3PublishError(
       'VERSION_PROBE_LIMIT',

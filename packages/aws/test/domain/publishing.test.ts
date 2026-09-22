@@ -4,6 +4,8 @@ import {
   buildCurrentPointer,
   buildRollbackSnapshot,
   checkRollbackTarget,
+  classifyOccupiedVersion,
+  DEFAULT_ORPHAN_GRACE_MS,
   nextSnapshotVersion,
   stampSnapshot,
   validateEnvironmentName,
@@ -145,5 +147,57 @@ describe('buildRollbackSnapshot', () => {
     const copy = structuredClone(source);
     buildRollbackSnapshot(source, meta);
     expect(source).toEqual(copy);
+  });
+});
+
+describe('classifyOccupiedVersion', () => {
+  const NOW = new Date('2026-09-19T12:00:00.000Z');
+  const at = (msBeforeNow: number) => new Date(NOW.getTime() - msBeforeNow);
+  const classify = (input: {
+    snapshotModified: Date | null;
+    pointerModified?: Date;
+    graceMs?: number;
+  }) =>
+    classifyOccupiedVersion({
+      snapshotModified: input.snapshotModified,
+      pointerModified: input.pointerModified,
+      now: NOW,
+      graceMs: input.graceMs ?? DEFAULT_ORPHAN_GRACE_MS,
+    });
+
+  it('skips a snapshot older than the pointer, whatever its age, as an old-style rollback leftover', () => {
+    // Younger than the grace period, so only the pointer comparison can explain the skip.
+    expect(classify({ snapshotModified: at(2_000), pointerModified: at(1_000) })).toEqual({ verdict: 'SKIP' });
+  });
+
+  it('skips a snapshot exactly as old as the grace period', () => {
+    expect(classify({ snapshotModified: at(DEFAULT_ORPHAN_GRACE_MS) })).toEqual({ verdict: 'SKIP' });
+  });
+
+  it('keeps a snapshot one millisecond short of the grace period', () => {
+    expect(classify({ snapshotModified: at(DEFAULT_ORPHAN_GRACE_MS - 1) }).verdict).toBe('KEEP');
+  });
+
+  it('tells the operator how old the snapshot is and when it becomes skippable', () => {
+    const kept = classify({ snapshotModified: at(30_000) });
+
+    expect(kept).toEqual({
+      verdict: 'KEEP',
+      message: 'Written 30s ago by a publish that may still be in flight; it is stepped over as an orphan once it is 300s old',
+    });
+  });
+
+  it('never skips a snapshot S3 reported without a LastModified', () => {
+    expect(classify({ snapshotModified: null, graceMs: 0 })).toEqual({
+      verdict: 'KEEP',
+      message: 'Exists with no LastModified, so a publish in flight cannot be ruled out',
+    });
+  });
+
+  it('reports no negative age when the publisher clock lags S3', () => {
+    const fromTheFuture = new Date(NOW.getTime() + 5_000);
+
+    expect(classify({ snapshotModified: fromTheFuture }).verdict).toBe('KEEP');
+    expect((classify({ snapshotModified: fromTheFuture }) as { message: string }).message).toContain('Written 0s ago');
   });
 });
