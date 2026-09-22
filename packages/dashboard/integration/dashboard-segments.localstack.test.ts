@@ -99,8 +99,30 @@ describe('featuresync-dashboard segments and rollout against LocalStack', () => 
       expectedCurrentVersion: '',
     });
 
-  const editRollout = (form: Record<string, string>) =>
-    post(`/env/${ENVIRONMENT}/features/checkout`, { baseVersion: '1', ruleIndex: '0', ...form });
+  // The draft an edit stages rides back in this hidden field, URI-encoded, so it needs no unescaping here.
+  const stagedDraft = (html: string): string => {
+    const match = /name="pending" value="([^"]*)"/.exec(html);
+    if (match?.[1] === undefined) throw new Error('The reply carries no staged draft');
+    return match[1];
+  };
+
+  /**
+   * One Save of the seeded checkout flag: `enabled` keeps it on, `ruleCount` names how many rules the
+   * form rendered, and a rule's rollout fields are sent only while its Rollout box is checked — omitting
+   * them is how the form removes that rule's rollout. Saving stages; `/pending` publishes the draft.
+   */
+  const saveCheckout = async (baseVersion: number, form: Record<string, string>) => {
+    const staged = await post(`/env/${ENVIRONMENT}/features/checkout`, {
+      baseVersion: String(baseVersion),
+      field: 'save',
+      enabled: 'on',
+      ruleCount: '1',
+      ...form,
+    });
+    const html = await staged.text();
+    expect(staged.status).toBe(200);
+    return post(`/env/${ENVIRONMENT}/pending`, { field: 'update', pending: stagedDraft(html) });
+  };
 
   beforeEach(async () => {
     bucket = `featuresync-it-${randomUUID()}`;
@@ -169,18 +191,19 @@ describe('featuresync-dashboard segments and rollout against LocalStack', () => 
   });
 
   it('adds a Percentage Rollout to a rule and then removes it across snapshot versions', async () => {
-    const added = await editRollout({ field: 'setRollout', percentage: '25', bucketBy: MEMBER_ATTRIBUTE, salt: 'autumn' });
+    const added = await saveCheckout(1, {
+      rollout_0: 'on',
+      percentage_0: '25',
+      bucketBy_0: MEMBER_ATTRIBUTE,
+      salt_0: 'autumn',
+    });
     expect(added.status).toBe(200);
 
     const withRollout = await snapshotVersion(2);
     expect(checkoutRule(withRollout).rollout).toEqual({ percentage: 25, bucketBy: MEMBER_ATTRIBUTE, salt: 'autumn' });
     expect(withRollout.version).toBe(2);
 
-    const removed = await post(`/env/${ENVIRONMENT}/features/checkout`, {
-      baseVersion: '2',
-      ruleIndex: '0',
-      field: 'removeRollout',
-    });
+    const removed = await saveCheckout(2, {});
     expect(removed.status).toBe(200);
 
     const withoutRollout = await snapshotVersion(3);

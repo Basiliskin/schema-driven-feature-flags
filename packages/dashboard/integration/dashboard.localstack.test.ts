@@ -9,7 +9,8 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { EDIT_CONFLICT, EDIT_REPLAYED } from '../src/application/error-messages.js';
+import { EDIT_CONFLICT } from '../src/application/error-messages.js';
+import { STAGED_MESSAGE } from '../src/application/stage-flag-edit.js';
 import type { RunningDashboard } from '../src/infrastructure/http-server.js';
 import { EXIT_OK, main, nodeIo } from '../src/main.js';
 
@@ -138,11 +139,33 @@ describe('featuresync-dashboard against LocalStack', () => {
     expect(published.status).toBe(200);
   };
 
-  const disableNewDashboard = (baseVersion: number) =>
-    post(`/env/${ENVIRONMENT}/features/new-dashboard`, { baseVersion: String(baseVersion), field: 'enabled' });
+  // A flag edit stages a draft rather than publishing it; the draft rides back in this hidden field,
+  // URI-encoded by serializePendingChangeSet, so nothing in it needs HTML-unescaping here.
+  const stagedDraft = (html: string): string => {
+    const match = /name="pending" value="([^"]*)"/.exec(html);
+    if (match?.[1] === undefined) throw new Error('The reply carries no staged draft');
+    return match[1];
+  };
 
-  const disableCheckout = (baseVersion: number) =>
-    post(`/env/${ENVIRONMENT}/features/checkout`, { baseVersion: String(baseVersion), field: 'enabled' });
+  // The one Save button posts every field of the flag's form at once. Omitting `enabled` is how the
+  // form says "unchecked"; omitting `default` and `ruleCount` leaves the default and the rules alone.
+  const stageDisable = async (key: string, baseVersion: number) => {
+    const reply = await post(`/env/${ENVIRONMENT}/features/${key}`, {
+      baseVersion: String(baseVersion),
+      field: 'save',
+    });
+    const html = await reply.text();
+    expect(reply.status).toBe(200);
+    expect(html).toContain(STAGED_MESSAGE);
+    return stagedDraft(html);
+  };
+
+  const publishPending = (pending: string, action: 'update' | 'publishAnyway' = 'update') =>
+    post(`/env/${ENVIRONMENT}/pending`, { field: action, pending });
+
+  /** Stages the disable and publishes that draft, which is what one Save followed by one Update does. */
+  const disableNewDashboard = async (baseVersion: number) =>
+    publishPending(await stageDisable('new-dashboard', baseVersion));
 
   afterAll(() => {
     s3.destroy();
@@ -151,7 +174,7 @@ describe('featuresync-dashboard against LocalStack', () => {
   it('shows an empty environment, publishes, browses versions and rolls back', async () => {
     const empty = await page(`/env/${ENVIRONMENT}`);
     expect(empty.status).toBe(200);
-    expect(empty.html).not.toContain('Current snapshot');
+    expect(empty.html).toContain('Nothing has been published to this environment yet.');
 
     for (const [version, enabled] of [
       [1, false],
@@ -163,11 +186,15 @@ describe('featuresync-dashboard against LocalStack', () => {
       expect(published.status).toBe(200);
     }
 
+    // The flag list names the version it was rendered from; the history itself lives on its own page.
     const current = await page(`/env/${ENVIRONMENT}`);
-    expect(current.html).toContain('Current snapshot · v2');
-    expect(current.html).toContain('Version 1');
-    expect(current.html).toContain('Version 2</a><span class="badge badge-accent">current</span>');
+    expect(current.html).toContain('data-watch-version="2"');
     expect(current.html).toContain('new-dashboard');
+
+    const versions = await page(`/env/${ENVIRONMENT}/versions`);
+    expect(versions.status).toBe(200);
+    expect(versions.html).toContain('Version 1');
+    expect(versions.html).toContain('Version 2</a><span class="badge badge-accent">current</span>');
 
     const first = await page(`/env/${ENVIRONMENT}/versions/1`);
     expect(first.status).toBe(200);
@@ -177,9 +204,10 @@ describe('featuresync-dashboard against LocalStack', () => {
     expect(rolledBack.status).toBe(200);
     const afterRollback = await rolledBack.text();
     expect(afterRollback).toContain('Restored version 1 of');
-    expect(afterRollback).toContain('Current snapshot · v3');
-    expect(afterRollback).toContain('Version 2</a>');
-    expect(afterRollback).toContain('Version 3</a><span class="badge badge-accent">current</span>');
+    expect(afterRollback).toContain('data-watch-version="3"');
+    const afterRollbackVersions = await page(`/env/${ENVIRONMENT}/versions`);
+    expect(afterRollbackVersions.html).toContain('Version 2</a>');
+    expect(afterRollbackVersions.html).toContain('Version 3</a><span class="badge badge-accent">current</span>');
     expect(await listKeys(bucket)).toContain(`${ENVIRONMENT}/snapshots/3.json`);
   });
 
@@ -215,11 +243,14 @@ describe('featuresync-dashboard against LocalStack', () => {
   it('publishes a config default edit and leaves the other features unchanged', async () => {
     await seed(editableSnapshot);
 
-    const edited = await post(`/env/${ENVIRONMENT}/features/checkout`, {
+    const staged = await post(`/env/${ENVIRONMENT}/features/checkout`, {
       baseVersion: '1',
-      field: 'default',
+      field: 'save',
+      enabled: 'on',
       default: '{"provider":"paypal"}',
     });
+    expect(staged.status).toBe(200);
+    const edited = await publishPending(stagedDraft(await staged.text()));
 
     expect(edited.status).toBe(200);
     const before = JSON.parse(await snapshotText(1)) as typeof editableSnapshot;
@@ -230,69 +261,43 @@ describe('featuresync-dashboard against LocalStack', () => {
     expect(after.features.checkout.rules).toEqual(before.features.checkout.rules);
   });
 
-  it('replays a second sequential edit of a different flag on the same base as the next version', async () => {
+  it('refuses a draft the environment moved past, and publishes it anyway on demand', async () => {
     await seed(editableSnapshot);
 
-    const first = await disableNewDashboard(1);
-    const second = await disableCheckout(1);
+    // Both drafts are staged from version 1 before either is published; staging writes nothing.
+    const firstDraft = await stageDisable('new-dashboard', 1);
+    const secondDraft = await stageDisable('checkout', 1);
 
-    expect(first.status).toBe(200);
-    expect(second.status).toBe(200);
-    expect(await second.text()).toContain(EDIT_REPLAYED(2));
-    expect(JSON.parse(await currentPointerText())).toMatchObject({ version: 3 });
-    const published = JSON.parse(await snapshotText(3)) as typeof editableSnapshot;
-    expect(published).toMatchObject({ version: 3, previousVersion: 2 });
-    expect(published.features['new-dashboard'].enabled).toBe(false);
-    expect(published.features.checkout.enabled).toBe(false);
-  });
+    expect((await publishPending(firstDraft)).status).toBe(200);
+    const refused = await publishPending(secondDraft);
 
-  it('never loses a published version when two edits of different flags race on the same base', async () => {
-    await seed(editableSnapshot);
-
-    const responses = await Promise.all([disableNewDashboard(1), disableCheckout(1)]);
-    const statuses = responses.map(({ status }) => status);
-
-    // Do NOT narrow this to [200, 200]. The loser of the race re-reads the Current Pointer and replays:
-    // a fresh read already sees the winner and republishes (200), a stale read still sees the base, replays
-    // onto stale text and loses again (422). Which one happens is genuinely timing-dependent, and this suite
-    // runs with retries: 0, so a strict assertion would flake. Both endings hold every invariant asserted
-    // below — no published version is lost, no snapshot sits above the pointer, and the disabled-flag count
-    // equals the number of successful requests. Both branches are pinned deterministically in
-    // packages/dashboard/test/application/edit-feature.test.ts.
-    expect(statuses).toContain(200);
-    expect(statuses.every((status) => status === 200 || status === 422)).toBe(true);
-    const succeeded = statuses.filter((status) => status === 200).length;
-    const pointer = JSON.parse(await currentPointerText()) as { version: number };
-    expect(pointer.version).toBe(1 + succeeded);
-    expect(await snapshotExists(pointer.version + 1)).toBe(false);
-    const published = JSON.parse(await snapshotText(pointer.version)) as typeof editableSnapshot;
-    const disabled = [published.features['new-dashboard'].enabled, published.features.checkout.enabled].filter(
-      (enabled) => !enabled,
-    );
-    expect(disabled).toHaveLength(succeeded);
-  });
-
-  it('refuses a second sequential edit of the same flag on the same base', async () => {
-    await seed(editableSnapshot);
-
-    const first = await disableNewDashboard(1);
-    const second = await disableNewDashboard(1);
-
-    expect(first.status).toBe(200);
-    expect(second.status).toBe(422);
-    expect(await second.text()).toContain(EDIT_CONFLICT(2));
+    expect(refused.status).toBe(422);
+    expect(await refused.text()).toContain(EDIT_CONFLICT(2));
     expect(await snapshotExists(3)).toBe(false);
     expect(JSON.parse(await currentPointerText())).toMatchObject({ version: 2 });
+
+    // Publish anyway skips the version expectation: the draft lands whole, so the change it never saw is
+    // overwritten. Nothing is replayed onto the newer version — that is what the Review Dialog warns about.
+    const forced = await publishPending(secondDraft, 'publishAnyway');
+
+    expect(forced.status).toBe(200);
+    expect(await forced.text()).toContain('Published version 3 to integration.');
+    const published = JSON.parse(await snapshotText(3)) as typeof editableSnapshot;
+    expect(published.features.checkout.enabled).toBe(false);
+    expect(published.features['new-dashboard'].enabled).toBe(true);
   });
 
-  it('publishes exactly one of two concurrent edits of the same flag on the same base', async () => {
+  it('publishes exactly one of two drafts staged on the same version when they race', async () => {
     await seed(editableSnapshot);
 
-    const responses = await Promise.all([disableNewDashboard(1), disableNewDashboard(1)]);
+    const drafts = [await stageDisable('new-dashboard', 1), await stageDisable('new-dashboard', 1)];
+    const responses = await Promise.all(drafts.map((draft) => publishPending(draft)));
     const replies = await Promise.all(
       responses.map(async (response) => ({ status: response.status, html: await response.text() })),
     );
 
+    // Both publishes expect version 1, so the loser is refused whichever way it lost the race: CONFLICT on
+    // the pointer, or VERSION_EXISTS on the snapshot key. Both are reported as the same edit conflict.
     expect(replies.map(({ status }) => status).sort()).toEqual([200, 422]);
     expect(replies.find(({ status }) => status === 422)?.html).toContain(EDIT_CONFLICT_SUFFIX);
     expect(await snapshotExists(3)).toBe(false);
@@ -326,13 +331,10 @@ describe('featuresync-dashboard against LocalStack', () => {
       { key: 'beta', type: 'config', enabled: 'on', default: '{"tier":1}' },
       ['features.beta'],
     ],
-    [
-      'edits the rules of a flag',
-      '/features/new-dashboard',
-      { field: 'rules', rules: '[{"when":{"plan":"pro"},"enabled":false}]' },
-      ['features.new-dashboard.rules'],
-    ],
     ['deletes a flag', '/features/checkout', { field: 'delete' }, ['features.checkout']],
+    // Create and delete are the two surfaces that still publish at once; every other flag edit stages a
+    // draft first, and raw rules-JSON editing is no longer exposed at all (rules change through a rule's
+    // rollout, its segment attach and its detach — covered in dashboard-segments.localstack.test.ts).
   ])('%s as exactly one new version that differs only in that flag and the metadata', async (_, path, form, paths) => {
     await seed(editableSnapshot);
 
